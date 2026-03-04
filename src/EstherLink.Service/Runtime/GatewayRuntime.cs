@@ -219,8 +219,6 @@ public sealed class GatewayRuntime
         return new ServiceConfig
         {
             SchemaVersion = config.SchemaVersion,
-            VpsHost = config.VpsHost,
-            VpsPort = config.VpsPort,
             LocalProxyListenPort = config.LocalProxyListenPort,
             WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
             DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,

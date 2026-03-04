@@ -17,12 +17,6 @@ public partial class GatewayStateStore : ObservableObject
     private AdapterChoiceModel? outgoingAdapter;
 
     [ObservableProperty]
-    private string vpsHost = "vps.example.com";
-
-    [ObservableProperty]
-    private string vpsPortText = "443";
-
-    [ObservableProperty]
     private string proxyPortText = "19080";
 
     [ObservableProperty]

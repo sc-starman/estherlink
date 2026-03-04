@@ -247,11 +247,6 @@ public sealed class GatewayOrchestratorService
 
     private ServiceConfig BuildConfig()
     {
-        if (!int.TryParse(_state.VpsPortText.Trim(), out var vpsPort) || vpsPort <= 0)
-        {
-            throw new InvalidOperationException("VPS port must be a positive integer.");
-        }
-
         if (!int.TryParse(_state.ProxyPortText.Trim(), out var proxyPort) || proxyPort <= 0)
         {
             throw new InvalidOperationException("Proxy listen port must be a positive integer.");
@@ -280,8 +275,6 @@ public sealed class GatewayOrchestratorService
 
         return new ServiceConfig
         {
-            VpsHost = _state.VpsHost.Trim(),
-            VpsPort = vpsPort,
             LocalProxyListenPort = proxyPort,
             WhitelistAdapterIfIndex = _state.VpsAdapter?.IfIndex ?? -1,
             DefaultAdapterIfIndex = _state.OutgoingAdapter?.IfIndex ?? -1,

@@ -3,8 +3,6 @@ namespace EstherLink.Core.Configuration;
 public sealed class ServiceConfig
 {
     public int SchemaVersion { get; set; } = 3;
-    public string VpsHost { get; set; } = string.Empty;
-    public int VpsPort { get; set; } = 443;
     public int LocalProxyListenPort { get; set; } = 19080;
     public int WhitelistAdapterIfIndex { get; set; } = -1;
     public int DefaultAdapterIfIndex { get; set; } = -1;

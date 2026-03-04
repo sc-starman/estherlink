@@ -39,6 +39,18 @@ public partial class LicenseViewModel : ObservableObject
     private bool licenseActive;
 
     [ObservableProperty]
+    private string bannerTitle = "No Active License";
+
+    [ObservableProperty]
+    private string bannerDescription = "Enter a valid license key and activate it to unlock professional features.";
+
+    [ObservableProperty]
+    private string bannerActionText = "Activation Required";
+
+    [ObservableProperty]
+    private bool bannerActionEnabled;
+
+    [ObservableProperty]
     private bool isBusy;
 
     private bool CanActivate() => !IsBusy;
@@ -91,6 +103,21 @@ public partial class LicenseViewModel : ObservableObject
         ExpirationDate = status?.LicenseExpiresAtUtc is null
             ? "--"
             : status.LicenseExpiresAtUtc.Value.LocalDateTime.ToString("MMM dd, yyyy");
+
+        if (LicenseActive)
+        {
+            BannerTitle = "Professional License is Active";
+            BannerDescription = "You have access to 256-bit AES encryption, unlimited network configurations, and dedicated 24/7 technical support.";
+            BannerActionText = "View Feature Log";
+            BannerActionEnabled = true;
+        }
+        else
+        {
+            BannerTitle = "No Active License";
+            BannerDescription = "Activate a valid license to unlock professional routing, security features, and support.";
+            BannerActionText = "Activation Required";
+            BannerActionEnabled = false;
+        }
     }
 
     private static string CreateFingerprint()

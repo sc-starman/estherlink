@@ -13,7 +13,7 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="28" MaxWidth="980">
             <TextBlock Text="Network Configuration" Style="{StaticResource SectionTitleTextStyle}"/>
-            <TextBlock Text="Configure VPS connectivity, adapter routing, tunnel parameters, and service/license endpoints." Style="{StaticResource MutedTextStyle}" Margin="0,0,0,16"/>
+            <TextBlock Text="Configure adapter routing, proxy listener, and SSH reverse tunnel parameters." Style="{StaticResource MutedTextStyle}" Margin="0,0,0,16"/>
 
             <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
                 <Grid>
@@ -25,28 +25,20 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="VPS Host/IP" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding State.VpsHost, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                    <TextBlock Grid.Row="0" Text="Proxy Listen Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding State.ProxyPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
 
-                    <TextBlock Grid.Row="1" Text="VPS Port" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding State.VpsPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
-
-                    <TextBlock Grid.Row="2" Text="Proxy Listen Port" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding State.ProxyPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
-
-                    <TextBlock Grid.Row="3" Text="VPS Network (IC1)" Style="{StaticResource FormLabelStyle}"/>
-                    <ComboBox Grid.Row="3" Grid.Column="1"
+                    <TextBlock Grid.Row="1" Text="VPS Network (IC1)" Style="{StaticResource FormLabelStyle}"/>
+                    <ComboBox Grid.Row="1" Grid.Column="1"
                               ItemsSource="{Binding State.Adapters}"
                               SelectedItem="{Binding State.VpsAdapter}"
                               DisplayMemberPath="Display"
                               Style="{StaticResource FormComboBoxStyle}"/>
 
-                    <TextBlock Grid.Row="4" Text="Outgoing Network (IC2)" Style="{StaticResource FormLabelStyle}"/>
-                    <ComboBox Grid.Row="4" Grid.Column="1"
+                    <TextBlock Grid.Row="2" Text="Outgoing Network (IC2)" Style="{StaticResource FormLabelStyle}"/>
+                    <ComboBox Grid.Row="2" Grid.Column="1"
                               ItemsSource="{Binding State.Adapters}"
                               SelectedItem="{Binding State.OutgoingAdapter}"
                               DisplayMemberPath="Display"
@@ -111,21 +103,41 @@
                                Text="Key Passphrase"
                                Style="{StaticResource FormLabelStyle}"
                                Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                    <TextBox Grid.Row="6"
-                             Grid.Column="1"
-                             Text="{Binding State.TunnelKeyPassphrase, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource FormTextBoxStyle}"
-                             Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    <StackPanel Grid.Row="6"
+                                Grid.Column="1"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock Text="{Binding KeyPassphraseState}" Style="{StaticResource ValueTextStyle}" Width="130"/>
+                        <Button Content="Set Passphrase"
+                                Command="{Binding SetKeyPassphraseCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="0,6,0,6"/>
+                        <Button Content="Clear"
+                                Command="{Binding ClearKeyPassphraseCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="10,6,0,6"/>
+                    </StackPanel>
 
                     <TextBlock Grid.Row="7"
                                Text="Tunnel Password"
                                Style="{StaticResource FormLabelStyle}"
                                Visibility="{Binding IsPasswordAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                    <TextBox Grid.Row="7"
-                             Grid.Column="1"
-                             Text="{Binding State.TunnelPassword, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource FormTextBoxStyle}"
-                             Visibility="{Binding IsPasswordAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    <StackPanel Grid.Row="7"
+                                Grid.Column="1"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Visibility="{Binding IsPasswordAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock Text="{Binding PasswordState}" Style="{StaticResource ValueTextStyle}" Width="130"/>
+                        <Button Content="Set Password"
+                                Command="{Binding SetTunnelPasswordCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="0,6,0,6"/>
+                        <Button Content="Clear"
+                                Command="{Binding ClearTunnelPasswordCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="10,6,0,6"/>
+                    </StackPanel>
                 </Grid>
             </Border>
 

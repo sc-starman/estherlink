@@ -64,8 +64,6 @@ public sealed class ConfigStore
                 new ServiceConfig
                 {
                     SchemaVersion = CurrentSchemaVersion,
-                    VpsHost = stored.VpsHost ?? string.Empty,
-                    VpsPort = stored.VpsPort,
                     LocalProxyListenPort = stored.LocalProxyListenPort,
                     WhitelistAdapterIfIndex = stored.WhitelistAdapterIfIndex,
                     DefaultAdapterIfIndex = stored.DefaultAdapterIfIndex,
@@ -104,8 +102,6 @@ public sealed class ConfigStore
             var stored = new PersistedConfig
             {
                 SchemaVersion = CurrentSchemaVersion,
-                VpsHost = config.VpsHost,
-                VpsPort = config.VpsPort,
                 LocalProxyListenPort = config.LocalProxyListenPort,
                 WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
                 DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
@@ -160,8 +156,6 @@ public sealed class ConfigStore
     private sealed class PersistedConfig
     {
         public int SchemaVersion { get; set; }
-        public string? VpsHost { get; set; }
-        public int VpsPort { get; set; } = 443;
         public int LocalProxyListenPort { get; set; } = 19080;
         public int WhitelistAdapterIfIndex { get; set; } = -1;
         public int DefaultAdapterIfIndex { get; set; } = -1;

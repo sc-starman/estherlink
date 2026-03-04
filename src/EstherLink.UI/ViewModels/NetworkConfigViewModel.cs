@@ -2,8 +2,10 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EstherLink.Core.Configuration;
 using EstherLink.UI.Services;
+using EstherLink.UI.Views.Dialogs;
 using Microsoft.Win32;
 using System.ComponentModel;
+using System.Windows;
 
 namespace EstherLink.UI.ViewModels;
 
@@ -26,6 +28,12 @@ public partial class NetworkConfigViewModel : ObservableObject
     public bool IsPasswordAuthSelected =>
         string.Equals(TunnelAuthMethods.Normalize(State.TunnelAuthMethod), TunnelAuthMethods.Password, StringComparison.Ordinal);
 
+    public string KeyPassphraseState =>
+        string.IsNullOrWhiteSpace(State.TunnelKeyPassphrase) ? "Not set" : "Configured";
+
+    public string PasswordState =>
+        string.IsNullOrWhiteSpace(State.TunnelPassword) ? "Not set" : "Configured";
+
     [ObservableProperty]
     private string feedback = string.Empty;
 
@@ -39,6 +47,10 @@ public partial class NetworkConfigViewModel : ObservableObject
         ApplyConfigCommand.NotifyCanExecuteChanged();
         TestTunnelConnectionCommand.NotifyCanExecuteChanged();
         BrowseTunnelKeyCommand.NotifyCanExecuteChanged();
+        SetKeyPassphraseCommand.NotifyCanExecuteChanged();
+        ClearKeyPassphraseCommand.NotifyCanExecuteChanged();
+        SetTunnelPasswordCommand.NotifyCanExecuteChanged();
+        ClearTunnelPasswordCommand.NotifyCanExecuteChanged();
     }
 
     [RelayCommand(CanExecute = nameof(CanApplyConfig))]
@@ -99,12 +111,64 @@ public partial class NetworkConfigViewModel : ObservableObject
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanApplyConfig))]
+    private void SetKeyPassphrase()
+    {
+        var dialog = new SecretInputDialog(
+            "Key Passphrase",
+            "Enter the SSH private key passphrase used for tunnel authentication.",
+            State.TunnelKeyPassphrase)
+        {
+            Owner = Application.Current?.MainWindow
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            State.TunnelKeyPassphrase = dialog.SecretValue;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanApplyConfig))]
+    private void ClearKeyPassphrase()
+    {
+        State.TunnelKeyPassphrase = string.Empty;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanApplyConfig))]
+    private void SetTunnelPassword()
+    {
+        var dialog = new SecretInputDialog(
+            "Tunnel Password",
+            "Enter the SSH account password used for tunnel authentication.",
+            State.TunnelPassword)
+        {
+            Owner = Application.Current?.MainWindow
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            State.TunnelPassword = dialog.SecretValue;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanApplyConfig))]
+    private void ClearTunnelPassword()
+    {
+        State.TunnelPassword = string.Empty;
+    }
+
     private void OnStatePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(GatewayStateStore.TunnelAuthMethod))
         {
             OnPropertyChanged(nameof(IsHostKeyAuthSelected));
             OnPropertyChanged(nameof(IsPasswordAuthSelected));
+        }
+
+        if (e.PropertyName is nameof(GatewayStateStore.TunnelKeyPassphrase) or nameof(GatewayStateStore.TunnelPassword))
+        {
+            OnPropertyChanged(nameof(KeyPassphraseState));
+            OnPropertyChanged(nameof(PasswordState));
         }
     }
 }
