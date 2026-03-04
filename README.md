@@ -1,91 +1,150 @@
-# EstherLink
+# EstherLink Backend (.NET 8 Minimal API)
 
-EstherLink is a Windows **HTTP CONNECT egress router** behind a static-IP VPS ingress.
+Production-oriented backend for EstherLink desktop clients.
 
-- VPS accepts client TCP connections.
-- VPS forwards those TCP streams to the Windows proxy listener through your tunnel.
-- Windows service parses CONNECT and chooses egress adapter:
-  - Whitelisted destination/source -> IC1 (`VPS Network` adapter).
-  - Non-whitelisted -> IC2 (`Outgoing Network` adapter).
+## Features
 
-## Projects
+1. Licensing
+- Online license verification (`POST /api/license/verify`)
+- Device activation tracking and max-device enforcement
+- Signed server response (HMAC-SHA256) for offline cache verification on client
 
-- `src/EstherLink.Core`
-  - Shared models: config, whitelist CIDR/IP parsing, status, adapter enumeration.
-- `src/EstherLink.Ipc`
-  - Named pipe protocol + JSON client/server helpers.
-- `src/EstherLink.Service`
-  - Windows Service host + CONNECT proxy engine + licensing + persistence.
-- `src/EstherLink.UI`
-  - WPF control panel for configuration, whitelist, license verify, service control.
+2. Whitelist updates
+- Country/category grouped whitelist sets
+- Versioned snapshots with SHA-256
+- Latest set fetch and CIDR diff endpoint
 
-## Implemented MVP
+3. App update metadata
+- Latest release check by channel + current version
+- Semver-aware comparison
 
-- Windows service host (`UseWindowsService`) with named-pipe IPC commands:
-  - `set_config`, `update_whitelist`, `get_status`, `start_proxy`, `stop_proxy`, `verify_license`
-- HTTP CONNECT proxy listener on localhost (configurable port).
-- Outbound bind-to-adapter logic:
-  - Adapter selected by IfIndex.
-  - Service picks adapter primary IPv4.
-  - Outbound socket `Bind(localIPv4, 0)` before `Connect(target)`.
-- Whitelist modes:
-  - Destination mode (works without source identity).
-  - Source mode (requires PROXY protocol v2 enabled).
-- CIDR/IP whitelist parser with `# comment` support.
-- License validation:
-  - POST to configurable endpoint.
-  - Encrypted DPAPI cache fallback if online check fails and cached license is still valid.
-- Persistent config at `C:\ProgramData\EstherLink\config.json` with encrypted license key.
-- Service log file at `C:\ProgramData\EstherLink\logs\service.log`.
+4. Security/ops
+- Admin API key protection (`X-ADMIN-API-KEY`)
+- Public endpoint rate limiting
+- Swagger/OpenAPI
+- Health probes (`/health/live`, `/health/ready`)
+- EF Core migrations (PostgreSQL)
+- Docker compose (backend + Postgres + Redis)
 
-## Build
+## Repository Structure
 
-```powershell
-dotnet restore EstherLink.sln
-dotnet build EstherLink.sln -c Debug
+- `src/EstherLink.Backend`
+  - .NET 8 Minimal API
+  - EF Core (Npgsql)
+  - Endpoints, services, auth filter, health checks, migrations
+- `src/EstherLink.Backend.Contracts`
+  - DTO contracts shared by backend endpoints
+- `docker-compose.yml`
+  - `postgres`, `redis`, `backend`
+
+## Data Model
+
+Implemented entities/tables:
+- `licenses`
+- `license_activations`
+- `whitelist_sets` (includes `set_group_id` for stable logical set identity across versions)
+- `whitelist_entries`
+- `app_releases`
+
+## Run with Docker Compose
+
+```bash
+docker compose up --build
 ```
 
-## Run (Developer)
+Backend: `http://localhost:8080`
+Swagger: `http://localhost:8080/swagger`
 
-Terminal 1:
+## Run Locally (without Docker)
 
-```powershell
-dotnet run --project src/EstherLink.Service
+1. Start PostgreSQL and create database/user matching `appsettings.json`.
+2. Run backend:
+
+```bash
+dotnet run --project src/EstherLink.Backend
 ```
 
-Terminal 2:
+App auto-applies migrations on startup (`Database:ApplyMigrationsOnStartup=true`).
 
-```powershell
-dotnet run --project src/EstherLink.UI
+## EF Migrations
+
+Local tool manifest includes `dotnet-ef`.
+
+Create migration:
+
+```bash
+dotnet tool run dotnet-ef migrations add <Name> \
+  --project src/EstherLink.Backend \
+  --startup-project src/EstherLink.Backend
 ```
 
-In UI:
-1. Select `VPS Network (IC1)` and `Outgoing Network (IC2)` adapters.
-2. Enter VPS host/port, proxy listen port, license endpoint/key.
-3. Update whitelist.
-4. Verify license.
-5. Install/Start service (or just start proxy when running service in console mode).
+Apply migration:
 
-## Publish Service
-
-```powershell
-dotnet publish src/EstherLink.Service -c Release -r win-x64 --self-contained false -o .\out\service
+```bash
+dotnet tool run dotnet-ef database update \
+  --project src/EstherLink.Backend \
+  --startup-project src/EstherLink.Backend
 ```
 
-Set UI `Service EXE Path` to:
+## Configuration
 
-```text
-<repo>\out\service\EstherLink.Service.exe
+`src/EstherLink.Backend/appsettings.json` keys:
+
+- `ConnectionStrings:Postgres`
+- `ConnectionStrings:Redis` (optional)
+- `Admin:ApiKeys` (one or more keys)
+- `Licensing:SigningSecret` (required for response signature)
+- `Licensing:OfflineCacheTtlHours` (default 24)
+- `Database:ApplyMigrationsOnStartup`
+
+## API Summary
+
+Public endpoints (rate limited):
+- `POST /api/license/verify`
+- `GET /api/whitelist/sets?country=IR&category=...`
+- `GET /api/whitelist/{setId}/latest`
+- `GET /api/whitelist/{setId}/diff?fromVersion=12`
+- `GET /api/app/latest?channel=stable&current=1.2.3`
+
+Admin endpoints (`X-ADMIN-API-KEY` required):
+- `POST /api/admin/licenses`
+- `POST /api/admin/licenses/{id}/revoke`
+- `GET /api/admin/licenses/{id}`
+- `POST /api/admin/whitelist/sets` (helper endpoint to create initial logical set)
+- `POST /api/admin/whitelist/{setId}/publish`
+- `POST /api/admin/app/releases`
+
+## Example cURL
+
+Verify license:
+
+```bash
+curl -X POST http://localhost:8080/api/license/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "licenseKey":"ABC-123",
+    "fingerprint":{"machineGuid":"m1","nicMac":"aa-bb","osVersion":"win11"},
+    "appVersion":"1.2.3",
+    "nonce":"random-nonce-1"
+  }'
 ```
 
-Then click `Install/Start Service` in UI (UAC prompt appears).
+Create license (admin):
 
-## VPS Note
+```bash
+curl -X POST http://localhost:8080/api/admin/licenses \
+  -H "Content-Type: application/json" \
+  -H "X-ADMIN-API-KEY: dev-admin-key" \
+  -d '{
+    "licenseKey":"ABC-123",
+    "status":"active",
+    "plan":"pro",
+    "maxDevices":2
+  }'
+```
 
-VPS must forward incoming client TCP streams to the Windows proxy listener endpoint over your tunnel.
+## Notes
 
-Example concept:
-- HAProxy on VPS listens on public port.
-- Backend points to tunnel endpoint that reaches `127.0.0.1:<proxy-listen-port>` on Windows.
-
-If whitelist-by-source is required, ensure your forwarding path provides client source identity to Windows (PROXY protocol v2 for this MVP).
+- All timestamps are stored and returned in UTC (`DateTimeOffset.UtcNow`).
+- License response signature includes: `valid, reason, plan, licenseExpiresAt, cacheExpiresAt, serverTime, nonce`.
+- Redis is optional in this MVP; included for production caching extension.

@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: estherlink-postgres
+    environment:
+      POSTGRES_DB: estherlink
+      POSTGRES_USER: estherlink
+      POSTGRES_PASSWORD: estherlink_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - estherlink_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U estherlink -d estherlink" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: estherlink-redis
+    ports:
+      - "6379:6379"
+    command: [ "redis-server", "--appendonly", "yes" ]
+    volumes:
+      - estherlink_redisdata:/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: src/EstherLink.Backend/Dockerfile
+    container_name: estherlink-backend
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=estherlink;Username=estherlink;Password=estherlink_dev_password
+      ConnectionStrings__Redis: redis:6379
+      Admin__ApiKeys__0: dev-admin-key
+      Licensing__SigningSecret: dev-license-signing-secret
+      Licensing__OfflineCacheTtlHours: 24
+      Database__ApplyMigrationsOnStartup: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  estherlink_pgdata:
+  estherlink_redisdata:
