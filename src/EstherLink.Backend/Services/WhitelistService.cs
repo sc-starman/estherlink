@@ -9,10 +9,12 @@ namespace EstherLink.Backend.Services;
 public sealed class WhitelistService
 {
     private readonly AppDbContext _dbContext;
+    private readonly ILogger<WhitelistService> _logger;
 
-    public WhitelistService(AppDbContext dbContext)
+    public WhitelistService(AppDbContext dbContext, ILogger<WhitelistService> logger)
     {
         _dbContext = dbContext;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<WhitelistSetSummaryResponse>> GetLatestSummariesAsync(
@@ -174,6 +176,11 @@ public sealed class WhitelistService
         }));
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Whitelist published setId={SetId} version={Version} entries={EntryCount}",
+            setId,
+            newVersion.Version,
+            normalized.Count);
         return await GetLatestAsync(setId, cancellationToken);
     }
 
@@ -209,6 +216,10 @@ public sealed class WhitelistService
         }));
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Whitelist set created setId={SetId} version=1 entries={EntryCount}",
+            setId,
+            normalizedEntries.Count);
 
         return new WhitelistLatestResponse
         {

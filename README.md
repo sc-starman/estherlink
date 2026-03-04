@@ -6,7 +6,7 @@ Traffic flow:
 - External client connects to VPS public TCP port (for example `443`).
 - VPS forwards TCP stream through reverse tunnel to Windows local proxy listener.
 - Windows service parses CONNECT and chooses egress adapter:
-  - Whitelisted destination/source -> IC1 (`VPS Network` adapter).
+  - Whitelisted destination -> IC1 (`VPS Network` adapter).
   - Non-whitelisted -> IC2 (`Outgoing Network` adapter).
 
 ## Projects
@@ -36,34 +36,39 @@ Implemented:
   - Adapter selected by `IfIndex`
   - Service picks adapter primary IPv4
   - Outbound socket `Bind(localIPv4, 0)` before `Connect(target)`
-- Whitelist modes:
-  - Destination mode (works without source identity)
-  - Source mode (requires PROXY protocol v2 enabled)
+- Destination-only whitelist routing (source mode removed).
 - CIDR/IP whitelist parser with `# comment` support.
 - License validation:
-  - POST to configurable endpoint
-  - Encrypted DPAPI cache fallback if online check fails and cached license is still valid
+  - `POST /api/license/verify` with nonce and Ed25519 signature verification
+  - `GET /api/license/public-keys` cache for offline signature validation
+  - Encrypted DPAPI cache fallback if online check fails and cached signed license is still valid
+- Config schema migration (`SchemaVersion=1`) for persisted config upgrades.
+- Optional tunnel supervisor worker (`ssh -NT -R ...`) with reconnect/backoff and tunnel health status.
 - Persistent config at `C:\ProgramData\EstherLink\config.json` with encrypted license key.
 - Service log at `C:\ProgramData\EstherLink\logs\service.log`.
 
 ## Backend API
 
 Capabilities:
-- Licensing verify + activation tracking + signed cacheable responses
+- Licensing verify + activation tracking + Ed25519-signed cacheable responses
 - Whitelist set publish/latest/diff APIs (CIDR/IP only)
 - App release latest-version API
-- Admin protection via `X-ADMIN-API-KEY`
+- Admin protection via `X-ADMIN-API-KEY` (hashed keys in DB)
+- Admin audit trail for `/api/admin/*` writes
 - Public rate limiting
 - Swagger/OpenAPI
 - Health checks: `/health/live`, `/health/ready`
+- Metrics endpoint: `/metrics`
 - EF Core migrations on PostgreSQL (Redis optional)
 
 Public endpoints:
 - `POST /api/license/verify`
+- `GET /api/license/public-keys`
 - `GET /api/whitelist/sets?country=IR&category=core`
 - `GET /api/whitelist/{setId}/latest`
 - `GET /api/whitelist/{setId}/diff?fromVersion=1`
 - `GET /api/app/latest?channel=stable&current=1.2.3`
+- `GET /metrics`
 
 Admin endpoints (`X-ADMIN-API-KEY` required):
 - `POST /api/admin/licenses`
@@ -166,8 +171,16 @@ Runs:
 - `dotnet restore`
 - `dotnet build`
 - `dotnet test`
+- `dotnet list package --vulnerable --include-transitive`
 - `dotnet-ef migrations script --idempotent` validation
 - `docker compose config` validation
+- Trivy filesystem scan (`HIGH,CRITICAL`)
+
+## Operations Docs
+
+- Production runbook: `docs/production-runbook.md`
+- VPS checklist: `docs/vps-self-hosted-checklist.md`
+- Backup/recovery: `docs/backup-recovery.md`
 
 ## VPS Note
 
@@ -177,8 +190,6 @@ Example concept:
 - HAProxy on VPS listens on public port.
 - Backend points to tunnel endpoint that reaches `127.0.0.1:<proxy-listen-port>` on Windows.
 
-If whitelist-by-source is required, ensure forwarding path provides client source identity to Windows (PROXY protocol v2 for this MVP).
-
 Helper setup script:
 - `scripts/setup_estherlink_vps.sh`
 
@@ -186,4 +197,4 @@ Helper setup script:
 
 - UTC timestamps are used end-to-end (`DateTimeOffset.UtcNow`).
 - License verify response signature input includes:
-  - `valid`, `reason`, `plan`, `licenseExpiresAt`, `cacheExpiresAt`, `serverTime`, `nonce`
+  - `valid`, `reason`, `plan`, `licenseExpiresAt`, `cacheExpiresAt`, `serverTime`, `requestId`, `signatureAlg`, `keyId`, `nonce`

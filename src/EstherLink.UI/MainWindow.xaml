@@ -71,6 +71,10 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
@@ -78,7 +82,7 @@
             <TextBlock Grid.Row="0" Grid.Column="1" FontWeight="SemiBold" Margin="12,0,0,0" Text="Whitelist (CIDR/IP per line, # comments allowed)"/>
 
             <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,8,0,0" Text="License Endpoint"/>
-            <TextBox Grid.Row="1" Grid.Column="0" x:Name="LicenseEndpointTextBox" Margin="130,8,12,0" Text="https://license.vendor.example/validate"/>
+            <TextBox Grid.Row="1" Grid.Column="0" x:Name="LicenseEndpointTextBox" Margin="130,8,12,0" Text="https://backend.example.com/api/license/verify"/>
 
             <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,8,0,0" Text="License Key"/>
             <TextBox Grid.Row="2" Grid.Column="0" x:Name="LicenseKeyTextBox" Margin="130,8,12,0"/>
@@ -86,7 +90,24 @@
             <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,8,0,0" Text="Service EXE Path"/>
             <TextBox Grid.Row="3" Grid.Column="0" x:Name="ServiceExePathTextBox" Margin="130,8,12,0"/>
 
-            <TextBox Grid.Row="1" Grid.Column="1" Grid.RowSpan="5" x:Name="WhitelistTextBox" Margin="12,8,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" MinHeight="220" FontFamily="Consolas"/>
+            <CheckBox Grid.Row="4" Grid.Column="0" x:Name="TunnelEnabledCheckBox" Margin="130,8,12,0" Content="Enable reverse SSH tunnel supervision"/>
+
+            <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,8,0,0" Text="Tunnel Host"/>
+            <TextBox Grid.Row="5" Grid.Column="0" x:Name="TunnelHostTextBox" Margin="130,8,12,0" Text="vps.example.com"/>
+
+            <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,8,0,0" Text="Tunnel SSH Port"/>
+            <TextBox Grid.Row="6" Grid.Column="0" x:Name="TunnelSshPortTextBox" Margin="130,8,12,0" Text="22"/>
+
+            <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,8,0,0" Text="Tunnel Remote Port"/>
+            <TextBox Grid.Row="7" Grid.Column="0" x:Name="TunnelRemotePortTextBox" Margin="130,8,12,0" Text="15000"/>
+
+            <TextBlock Grid.Row="8" Grid.Column="0" Margin="0,8,0,0" Text="Tunnel User / Key"/>
+            <StackPanel Grid.Row="8" Grid.Column="0" Margin="130,8,12,0" Orientation="Horizontal">
+                <TextBox x:Name="TunnelUserTextBox" Width="140" Text="estherlink"/>
+                <TextBox x:Name="TunnelKeyPathTextBox" Width="220" Margin="8,0,0,0"/>
+            </StackPanel>
+
+            <TextBox Grid.Row="1" Grid.Column="1" Grid.RowSpan="9" x:Name="WhitelistTextBox" Margin="12,8,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" MinHeight="220" FontFamily="Consolas"/>
         </Grid>
 
         <StackPanel Grid.Row="6" Grid.ColumnSpan="4" Margin="0,14,0,0">

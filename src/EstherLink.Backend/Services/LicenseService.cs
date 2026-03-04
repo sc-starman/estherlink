@@ -16,26 +16,35 @@ public sealed class LicenseService
     private readonly AppDbContext _dbContext;
     private readonly LicenseResponseSigner _signer;
     private readonly IOptions<LicensingOptions> _options;
+    private readonly ILogger<LicenseService> _logger;
 
     public LicenseService(
         AppDbContext dbContext,
         LicenseResponseSigner signer,
-        IOptions<LicensingOptions> options)
+        IOptions<LicensingOptions> options,
+        ILogger<LicenseService> logger)
     {
         _dbContext = dbContext;
         _signer = signer;
         _options = options;
+        _logger = logger;
     }
 
-    public async Task<LicenseVerifyResponse> VerifyAsync(LicenseVerifyRequest request, CancellationToken cancellationToken)
+    public async Task<LicenseVerifyResponse> VerifyAsync(
+        LicenseVerifyRequest request,
+        string requestId,
+        CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
+        var licenseKeyHash = Sha256Util.HashHex(request.LicenseKey);
         var response = new LicenseVerifyResponse
         {
             Valid = false,
             Reason = "INVALID_KEY",
             CacheExpiresAt = now.AddHours(_options.Value.OfflineCacheTtlHours),
-            ServerTime = now
+            ServerTime = now,
+            SignatureAlg = SigningKeyService.SignatureAlgorithm,
+            RequestId = requestId
         };
 
         var license = await _dbContext.Licenses
@@ -44,7 +53,7 @@ public sealed class LicenseService
 
         if (license is null)
         {
-            response.Signature = _signer.Sign(response, request.Nonce);
+            await SignResponseAsync(response, request.Nonce, cancellationToken);
             return response;
         }
 
@@ -54,21 +63,21 @@ public sealed class LicenseService
         if (license.Status == LicenseStatus.Revoked)
         {
             response.Reason = "REVOKED";
-            response.Signature = _signer.Sign(response, request.Nonce);
+            await SignResponseAsync(response, request.Nonce, cancellationToken);
             return response;
         }
 
         if (license.Status == LicenseStatus.Suspended)
         {
             response.Reason = "SUSPENDED";
-            response.Signature = _signer.Sign(response, request.Nonce);
+            await SignResponseAsync(response, request.Nonce, cancellationToken);
             return response;
         }
 
         if (license.ExpiresAt.HasValue && license.ExpiresAt.Value < now)
         {
             response.Reason = "EXPIRED";
-            response.Signature = _signer.Sign(response, request.Nonce);
+            await SignResponseAsync(response, request.Nonce, cancellationToken);
             return response;
         }
 
@@ -87,7 +96,7 @@ public sealed class LicenseService
             if (activation.IsBlocked)
             {
                 response.Reason = "DEVICE_LIMIT";
-                response.Signature = _signer.Sign(response, request.Nonce);
+                await SignResponseAsync(response, request.Nonce, cancellationToken);
                 await _dbContext.SaveChangesAsync(cancellationToken);
                 return response;
             }
@@ -98,7 +107,7 @@ public sealed class LicenseService
             if (activeDeviceCount >= license.MaxDevices)
             {
                 response.Reason = "DEVICE_LIMIT";
-                response.Signature = _signer.Sign(response, request.Nonce);
+                await SignResponseAsync(response, request.Nonce, cancellationToken);
                 return response;
             }
 
@@ -128,7 +137,24 @@ public sealed class LicenseService
 
         license.UpdatedAt = now;
         await _dbContext.SaveChangesAsync(cancellationToken);
-        response.Signature = _signer.Sign(response, request.Nonce);
+        await SignResponseAsync(response, request.Nonce, cancellationToken);
+        _logger.LogInformation(
+            "License verify requestId={RequestId} licenseKeyHash={LicenseKeyHash} reason={Reason} valid={Valid} plan={Plan}",
+            requestId,
+            licenseKeyHash,
+            response.Reason,
+            response.Valid,
+            response.Plan);
         return response;
+    }
+
+    private async Task SignResponseAsync(
+        LicenseVerifyResponse response,
+        string nonce,
+        CancellationToken cancellationToken)
+    {
+        var signed = await _signer.SignAsync(response, nonce, cancellationToken);
+        response.KeyId = signed.KeyId;
+        response.Signature = signed.Signature;
     }
 }

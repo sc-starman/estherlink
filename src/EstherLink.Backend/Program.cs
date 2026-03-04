@@ -49,7 +49,9 @@ builder.Services.AddScoped<LicenseService>();
 builder.Services.AddScoped<WhitelistService>();
 builder.Services.AddScoped<AppReleaseService>();
 builder.Services.AddScoped<SampleDataSeeder>();
-builder.Services.AddSingleton<LicenseResponseSigner>();
+builder.Services.AddScoped<SigningKeyService>();
+builder.Services.AddScoped<SecurityBootstrapper>();
+builder.Services.AddScoped<LicenseResponseSigner>();
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -91,11 +93,16 @@ app.UseSwagger();
 app.UseSwaggerUI();
 app.UseRateLimiter();
 
-if (builder.Configuration.GetValue("Database:ApplyMigrationsOnStartup", true))
+using (var scope = app.Services.CreateScope())
 {
-    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
+    if (builder.Configuration.GetValue("Database:ApplyMigrationsOnStartup", true))
+    {
+        await db.Database.MigrateAsync();
+    }
+
+    var bootstrapper = scope.ServiceProvider.GetRequiredService<SecurityBootstrapper>();
+    await bootstrapper.EnsureInitializedAsync(CancellationToken.None);
 }
 
 app.MapGet("/", () => Results.Ok(new
@@ -109,6 +116,28 @@ app.MapGet("/health/live", () => Results.Ok(new
     status = "live",
     utc = DateTimeOffset.UtcNow
 }));
+
+app.MapGet("/metrics", async (AppDbContext dbContext, CancellationToken cancellationToken) =>
+{
+    var licenses = await dbContext.Licenses.CountAsync(cancellationToken);
+    var activations = await dbContext.LicenseActivations.CountAsync(cancellationToken);
+    var whitelistSets = await dbContext.WhitelistSets.CountAsync(cancellationToken);
+    var releases = await dbContext.AppReleases.CountAsync(cancellationToken);
+
+    var lines = new[]
+    {
+        "# TYPE estherlink_licenses_total gauge",
+        $"estherlink_licenses_total {licenses}",
+        "# TYPE estherlink_license_activations_total gauge",
+        $"estherlink_license_activations_total {activations}",
+        "# TYPE estherlink_whitelist_sets_total gauge",
+        $"estherlink_whitelist_sets_total {whitelistSets}",
+        "# TYPE estherlink_app_releases_total gauge",
+        $"estherlink_app_releases_total {releases}"
+    };
+
+    return Results.Text(string.Join('\n', lines) + "\n", "text/plain; version=0.0.4");
+});
 
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
@@ -134,6 +163,7 @@ var api = app.MapGroup("/api");
 
 api.MapPost("/license/verify", async (
         LicenseVerifyRequest request,
+        HttpContext httpContext,
         LicenseService licenseService,
         CancellationToken cancellationToken) =>
     {
@@ -143,8 +173,22 @@ api.MapPost("/license/verify", async (
             return Results.ValidationProblem(errors);
         }
 
-        var response = await licenseService.VerifyAsync(request, cancellationToken);
+        var response = await licenseService.VerifyAsync(request, httpContext.TraceIdentifier, cancellationToken);
         return Results.Ok(response);
+    })
+    .RequireRateLimiting("public")
+    ;
+
+api.MapGet("/license/public-keys", async (
+        SigningKeyService signingKeyService,
+        CancellationToken cancellationToken) =>
+    {
+        var keys = await signingKeyService.GetPublicKeysAsync(cancellationToken);
+        return Results.Ok(new LicensePublicKeysResponse
+        {
+            ServerTime = DateTimeOffset.UtcNow,
+            Keys = keys
+        });
     })
     .RequireRateLimiting("public")
     ;
@@ -211,7 +255,8 @@ api.MapGet("/app/latest", async (
 
 var admin = api.MapGroup("/admin")
     .WithMetadata(new AdminEndpointMetadata())
-    .AddEndpointFilter<AdminApiKeyEndpointFilter>();
+    .AddEndpointFilter<AdminApiKeyEndpointFilter>()
+    .AddEndpointFilter<AdminAuditEndpointFilter>();
 
 admin.MapPost("/licenses", async (
         AdminCreateLicenseRequest request,

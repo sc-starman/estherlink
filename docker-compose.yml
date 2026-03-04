@@ -35,7 +35,8 @@ services:
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=estherlink;Username=estherlink;Password=estherlink_dev_password
       ConnectionStrings__Redis: redis:6379
       Admin__ApiKeys__0: dev-admin-key
-      Licensing__SigningSecret: dev-license-signing-secret
+      Admin__ApiKeyPepper: dev-admin-pepper
+      Licensing__SigningKeyRotationDays: 90
       Licensing__OfflineCacheTtlHours: 24
       Database__ApplyMigrationsOnStartup: "true"
     ports:

@@ -61,18 +61,12 @@ public sealed class WhitelistSet
         return true;
     }
 
-    public bool Matches(IPAddress? sourceAddress, IPAddress? destinationAddress, RoutingPolicyMode mode)
+    public bool MatchesDestination(IPAddress? destinationAddress)
     {
-        return mode switch
-        {
-            RoutingPolicyMode.SourceOnly => Matches(sourceAddress),
-            RoutingPolicyMode.DestinationOnly => Matches(destinationAddress),
-            RoutingPolicyMode.SourceOrDestination => Matches(sourceAddress) || Matches(destinationAddress),
-            _ => false
-        };
+        return MatchesAddress(destinationAddress);
     }
 
-    private bool Matches(IPAddress? address)
+    private bool MatchesAddress(IPAddress? address)
     {
         if (address is null)
         {

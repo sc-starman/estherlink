@@ -25,6 +25,9 @@ jobs:
       - name: Restore solution
         run: dotnet restore EstherLink.sln
 
+      - name: Dependency vulnerability scan
+        run: dotnet list EstherLink.sln package --vulnerable --include-transitive
+
       - name: Build solution
         run: dotnet build EstherLink.sln -c Release --no-restore
 
@@ -42,3 +45,12 @@ jobs:
 
       - name: Validate docker compose
         run: docker compose config
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

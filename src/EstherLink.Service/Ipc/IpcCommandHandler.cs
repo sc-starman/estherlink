@@ -61,12 +61,6 @@ public sealed class IpcCommandHandler
             return new IpcResponse(false, "Invalid set-config payload.");
         }
 
-        if (payload.Config.WhitelistMode == EstherLink.Core.Policy.RoutingPolicyMode.SourceOnly &&
-            !payload.Config.ExpectProxyProtocolV2)
-        {
-            return new IpcResponse(false, "Source whitelist mode requires PROXY protocol v2 to be enabled.");
-        }
-
         _runtime.SetConfig(payload.Config);
         _fileLog.Info("Configuration updated via IPC.");
         return new IpcResponse(true);

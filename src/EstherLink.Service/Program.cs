@@ -16,6 +16,7 @@ builder.Services.AddSingleton<IpcCommandHandler>();
 builder.Services.AddSingleton<HttpConnectProxyEngine>();
 builder.Services.AddHostedService<ProxyCoordinatorWorker>();
 builder.Services.AddHostedService<IpcServerWorker>();
+builder.Services.AddHostedService<TunnelSupervisorWorker>();
 
 var host = builder.Build();
 await host.RunAsync();

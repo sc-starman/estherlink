@@ -39,8 +39,7 @@ public sealed class GatewayRuntime
             ServiceRunning = true,
             ProxyRunning = false,
             ProxyListenPort = _config.LocalProxyListenPort,
-            WhitelistCount = _whitelist.Rules.Count,
-            WhitelistMode = _config.WhitelistMode.ToString()
+            WhitelistCount = _whitelist.Rules.Count
         };
     }
 
@@ -74,7 +73,6 @@ public sealed class GatewayRuntime
         {
             _config = CloneConfig(config);
             _status.ProxyListenPort = _config.LocalProxyListenPort;
-            _status.WhitelistMode = _config.WhitelistMode.ToString();
             PersistLocked();
         }
     }
@@ -104,11 +102,11 @@ public sealed class GatewayRuntime
         return true;
     }
 
-    public bool ShouldUseWhitelistAdapter(IPAddress? sourceAddress, IPAddress? destinationAddress)
+    public bool ShouldUseWhitelistAdapter(IPAddress? destinationAddress)
     {
         lock (_sync)
         {
-            return _whitelist.Matches(sourceAddress, destinationAddress, _config.WhitelistMode);
+            return _whitelist.MatchesDestination(destinationAddress);
         }
     }
 
@@ -155,6 +153,17 @@ public sealed class GatewayRuntime
         }
     }
 
+    public void SetTunnelStatus(bool connected, DateTimeOffset? connectedAtUtc, int reconnectCount, string? error)
+    {
+        lock (_sync)
+        {
+            _status.TunnelConnected = connected;
+            _status.TunnelLastConnectedAtUtc = connectedAtUtc;
+            _status.TunnelReconnectCount = reconnectCount;
+            _status.TunnelLastError = error;
+        }
+    }
+
     public void SetLicenseStatus(LicenseValidationResult result)
     {
         lock (_sync)
@@ -184,6 +193,10 @@ public sealed class GatewayRuntime
                 ServiceRunning = _status.ServiceRunning,
                 ProxyRunning = _status.ProxyRunning,
                 ProxyListenPort = _status.ProxyListenPort,
+                TunnelConnected = _status.TunnelConnected,
+                TunnelLastConnectedAtUtc = _status.TunnelLastConnectedAtUtc,
+                TunnelReconnectCount = _status.TunnelReconnectCount,
+                TunnelLastError = _status.TunnelLastError,
                 LicenseValid = _status.LicenseValid,
                 LicenseFromCache = _status.LicenseFromCache,
                 LicenseCheckedAtUtc = _status.LicenseCheckedAtUtc,
@@ -191,7 +204,6 @@ public sealed class GatewayRuntime
                 WhitelistAdapterIp = _status.WhitelistAdapterIp,
                 DefaultAdapterIp = _status.DefaultAdapterIp,
                 WhitelistCount = _status.WhitelistCount,
-                WhitelistMode = _status.WhitelistMode,
                 LastError = _status.LastError
             };
         }
@@ -206,13 +218,18 @@ public sealed class GatewayRuntime
     {
         return new ServiceConfig
         {
+            SchemaVersion = config.SchemaVersion,
             VpsHost = config.VpsHost,
             VpsPort = config.VpsPort,
             LocalProxyListenPort = config.LocalProxyListenPort,
             WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
             DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
-            WhitelistMode = config.WhitelistMode,
-            ExpectProxyProtocolV2 = config.ExpectProxyProtocolV2,
+            TunnelEnabled = config.TunnelEnabled,
+            TunnelHost = config.TunnelHost,
+            TunnelSshPort = config.TunnelSshPort,
+            TunnelRemotePort = config.TunnelRemotePort,
+            TunnelUser = config.TunnelUser,
+            TunnelPrivateKeyPath = config.TunnelPrivateKeyPath,
             LicenseServerUrl = config.LicenseServerUrl,
             LicenseKey = config.LicenseKey
         };

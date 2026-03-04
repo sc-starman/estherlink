@@ -8,6 +8,7 @@ public static class ServicePaths
 
     public static string ConfigPath { get; } = Path.Combine(RootDirectory, "config.json");
     public static string LicenseCachePath { get; } = Path.Combine(RootDirectory, "license.cache");
+    public static string LicensePublicKeysCachePath { get; } = Path.Combine(RootDirectory, "license_public_keys.cache");
     public static string LogsDirectory { get; } = Path.Combine(RootDirectory, "logs");
     public static string ServiceLogPath { get; } = Path.Combine(LogsDirectory, "service.log");
 

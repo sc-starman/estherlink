@@ -50,6 +50,9 @@ public sealed class LicenseVerifyTests : IClassFixture<IntegrationTestWebApplica
         Assert.NotNull(firstBody);
         Assert.True(firstBody.Valid);
         Assert.Equal("OK", firstBody.Reason);
+        Assert.Equal("Ed25519", firstBody.SignatureAlg);
+        Assert.False(string.IsNullOrWhiteSpace(firstBody.KeyId));
+        Assert.False(string.IsNullOrWhiteSpace(firstBody.RequestId));
         Assert.False(string.IsNullOrWhiteSpace(firstBody.Signature));
 
         var secondRequest = new LicenseVerifyRequest
@@ -67,7 +70,14 @@ public sealed class LicenseVerifyTests : IClassFixture<IntegrationTestWebApplica
         Assert.NotNull(secondBody);
         Assert.False(secondBody.Valid);
         Assert.Equal("DEVICE_LIMIT", secondBody.Reason);
+        Assert.Equal("Ed25519", secondBody.SignatureAlg);
+        Assert.False(string.IsNullOrWhiteSpace(secondBody.KeyId));
         Assert.False(string.IsNullOrWhiteSpace(secondBody.Signature));
+
+        var keys = await client.GetFromJsonAsync<LicensePublicKeysResponse>("/api/license/public-keys");
+        Assert.NotNull(keys);
+        Assert.NotEmpty(keys.Keys);
+        Assert.Contains(keys.Keys, x => x.KeyId == firstBody.KeyId);
     }
 
     private static System.Text.Json.JsonElement ParseJson(string json)

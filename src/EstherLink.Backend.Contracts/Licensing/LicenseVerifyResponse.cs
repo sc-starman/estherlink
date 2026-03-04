@@ -8,6 +8,9 @@ public sealed class LicenseVerifyResponse
     public DateTimeOffset? LicenseExpiresAt { get; set; }
     public DateTimeOffset CacheExpiresAt { get; set; }
     public DateTimeOffset ServerTime { get; set; }
+    public string SignatureAlg { get; set; } = "Ed25519";
+    public string KeyId { get; set; } = string.Empty;
+    public string RequestId { get; set; } = string.Empty;
     public string Signature { get; set; } = string.Empty;
     public Dictionary<string, string>? Features { get; set; }
 }

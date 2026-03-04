@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -8,8 +7,6 @@ namespace EstherLink.Service.Runtime;
 
 public sealed class HttpConnectProxyEngine
 {
-    private static readonly byte[] ProxySignature = [0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A];
-
     private readonly GatewayRuntime _runtime;
     private readonly ILogger<HttpConnectProxyEngine> _logger;
     private readonly FileLogWriter _fileLog;
@@ -133,14 +130,9 @@ public sealed class HttpConnectProxyEngine
 
         try
         {
-            if (config.ExpectProxyProtocolV2)
-            {
-                sourceAddress = await ReadProxyV2SourceAsync(stream, connectionCts.Token);
-            }
-
             var request = await ReadConnectRequestAsync(stream, connectionCts.Token);
             var destinationIp = await ResolveDestinationIpv4Async(request.Host, connectionCts.Token);
-            var shouldUseWhitelist = _runtime.ShouldUseWhitelistAdapter(sourceAddress, destinationIp);
+            var shouldUseWhitelist = _runtime.ShouldUseWhitelistAdapter(destinationIp);
             var adapterIndex = shouldUseWhitelist ? config.WhitelistAdapterIfIndex : config.DefaultAdapterIfIndex;
 
             if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(adapterIndex, out var bindIp) || bindIp is null)
@@ -313,60 +305,6 @@ public sealed class HttpConnectProxyEngine
         }
 
         return ipv4;
-    }
-
-    private static async Task<IPAddress?> ReadProxyV2SourceAsync(Stream stream, CancellationToken cancellationToken)
-    {
-        var prefix = await ReadExactAsync(stream, 16, cancellationToken);
-        if (!prefix.AsSpan(0, 12).SequenceEqual(ProxySignature))
-        {
-            throw new InvalidOperationException("Expected PROXY protocol v2 header.");
-        }
-
-        var versionCommand = prefix[12];
-        var version = versionCommand >> 4;
-        var command = versionCommand & 0x0F;
-        if (version != 0x2)
-        {
-            throw new InvalidOperationException("Unsupported PROXY protocol version.");
-        }
-
-        var familyProtocol = prefix[13];
-        var length = BinaryPrimitives.ReadUInt16BigEndian(prefix.AsSpan(14, 2));
-        var payload = await ReadExactAsync(stream, length, cancellationToken);
-
-        if (command == 0x0)
-        {
-            return null;
-        }
-
-        var family = familyProtocol >> 4;
-        var transport = familyProtocol & 0x0F;
-        if (family == 0x1 && transport == 0x1 && payload.Length >= 12)
-        {
-            return new IPAddress(payload.AsSpan(0, 4));
-        }
-
-        return null;
-    }
-
-    private static async Task<byte[]> ReadExactAsync(Stream stream, int count, CancellationToken cancellationToken)
-    {
-        var buffer = new byte[count];
-        var offset = 0;
-
-        while (offset < count)
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset, count - offset), cancellationToken);
-            if (read <= 0)
-            {
-                throw new InvalidOperationException("Unexpected EOF while reading stream.");
-            }
-
-            offset += read;
-        }
-
-        return buffer;
     }
 
     private sealed record ConnectRequest(string Host, int Port);

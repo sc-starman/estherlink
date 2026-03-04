@@ -22,7 +22,8 @@ public sealed class IntegrationTestWebApplicationFactory : WebApplicationFactory
                 ["ConnectionStrings:Redis"] = string.Empty,
                 ["Database:ApplyMigrationsOnStartup"] = "false",
                 ["Admin:ApiKeys:0"] = "dev-admin-key",
-                ["Licensing:SigningSecret"] = "test-signing-secret",
+                ["Admin:ApiKeyPepper"] = "test-admin-pepper",
+                ["Licensing:SigningKeyRotationDays"] = "90",
                 ["Licensing:OfflineCacheTtlHours"] = "24"
             });
         });
@@ -49,6 +50,7 @@ public sealed class IntegrationTestWebApplicationFactory : WebApplicationFactory
         dbContext.WhitelistEntries.RemoveRange(dbContext.WhitelistEntries);
         dbContext.WhitelistSets.RemoveRange(dbContext.WhitelistSets);
         dbContext.AppReleases.RemoveRange(dbContext.AppReleases);
+        dbContext.AuditEvents.RemoveRange(dbContext.AuditEvents);
         await dbContext.SaveChangesAsync();
     }
 

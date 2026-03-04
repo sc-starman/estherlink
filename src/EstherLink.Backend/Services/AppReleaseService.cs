@@ -9,10 +9,12 @@ namespace EstherLink.Backend.Services;
 public sealed class AppReleaseService
 {
     private readonly AppDbContext _dbContext;
+    private readonly ILogger<AppReleaseService> _logger;
 
-    public AppReleaseService(AppDbContext dbContext)
+    public AppReleaseService(AppDbContext dbContext, ILogger<AppReleaseService> logger)
     {
         _dbContext = dbContext;
+        _logger = logger;
     }
 
     public async Task<AppLatestResponse?> GetLatestAsync(string channel, string? currentVersion, CancellationToken cancellationToken)
@@ -81,6 +83,10 @@ public sealed class AppReleaseService
 
         _dbContext.AppReleases.Add(release);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "App release created channel={Channel} version={Version}",
+            release.Channel,
+            release.Version);
         return release;
     }
 

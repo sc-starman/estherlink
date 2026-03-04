@@ -1,40 +1,48 @@
-using System.Security.Cryptography;
 using System.Text;
-using EstherLink.Backend.Configuration;
 using EstherLink.Backend.Contracts.Licensing;
-using Microsoft.Extensions.Options;
+using EstherLink.Backend.Services;
 
 namespace EstherLink.Backend.Security;
 
 public sealed class LicenseResponseSigner
 {
-    private readonly IOptions<LicensingOptions> _options;
+    private readonly SigningKeyService _signingKeyService;
 
-    public LicenseResponseSigner(IOptions<LicensingOptions> options)
+    public LicenseResponseSigner(SigningKeyService signingKeyService)
     {
-        _options = options;
+        _signingKeyService = signingKeyService;
     }
 
-    public string Sign(LicenseVerifyResponse response, string nonce)
+    public async Task<(string Signature, string KeyId)> SignAsync(
+        LicenseVerifyResponse response,
+        string nonce,
+        CancellationToken cancellationToken)
     {
-        var secret = _options.Value.SigningSecret;
-        if (string.IsNullOrWhiteSpace(secret))
+        var key = await _signingKeyService.GetActiveSigningKeyAsync(cancellationToken);
+        if (key is null)
         {
-            throw new InvalidOperationException("Licensing:SigningSecret is required.");
+            throw new InvalidOperationException("No active signing key is available.");
         }
 
-        var payload =
+        response.KeyId = key.KeyId;
+        var payload = BuildPayload(response, nonce);
+        var signature = _signingKeyService.Sign(payload, key);
+        return (signature, key.KeyId);
+    }
+
+    public static string BuildPayload(LicenseVerifyResponse response, string nonce)
+    {
+        return
             $"valid={response.Valid};" +
             $"reason={response.Reason};" +
             $"plan={response.Plan ?? string.Empty};" +
             $"licenseExpiresAt={Format(response.LicenseExpiresAt)};" +
             $"cacheExpiresAt={Format(response.CacheExpiresAt)};" +
             $"serverTime={Format(response.ServerTime)};" +
+            $"requestId={response.RequestId};" +
+            $"signatureAlg={response.SignatureAlg};" +
+            $"keyId={response.KeyId};" +
             $"nonce={nonce}";
-
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var signatureBytes = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
-        return Convert.ToBase64String(signatureBytes);
     }
 
     private static string Format(DateTimeOffset? value)

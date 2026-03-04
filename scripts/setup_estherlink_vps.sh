@@ -299,6 +299,21 @@ Useful logs/status:
   - Fail2ban:  journalctl -u fail2ban -f
   - Bans:      fail2ban-client status sshd
 
+Validation checklist:
+  1) Listener checks:
+     - ss -lnt | grep -E ':${PUBLIC_PORT}\\b|:${SSH_PORT}\\b|:${BACKEND_PORT}\\b'
+  2) HAProxy config:
+     - haproxy -c -f /etc/haproxy/haproxy.cfg
+  3) SSH config:
+     - sshd -t
+  4) Fail2ban jail:
+     - fail2ban-client status sshd
+  5) Firewall:
+     - ufw status numbered
+
+Runtime backend reachability probe (expected CLOSED until Windows tunnel is up):
+  - timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/${BACKEND_PORT}' && echo "OPEN" || echo "CLOSED"
+
 Config files written:
   - /etc/haproxy/haproxy.cfg
   - /etc/ssh/sshd_config.d/99-estherlink.conf

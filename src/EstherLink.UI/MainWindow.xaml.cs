@@ -6,7 +6,6 @@ using System.Windows;
 using System.Windows.Threading;
 using EstherLink.Core.Configuration;
 using EstherLink.Core.Networking;
-using EstherLink.Core.Policy;
 using EstherLink.Ipc;
 
 namespace EstherLink.UI;
@@ -222,10 +221,13 @@ public partial class MainWindow : Window
                 var status = payload.Status;
                 lines.Add($"ProxyRunning: {status.ProxyRunning}");
                 lines.Add($"ProxyListenPort: {status.ProxyListenPort}");
-                lines.Add($"WhitelistMode: {status.WhitelistMode}");
                 lines.Add($"WhitelistCount: {status.WhitelistCount}");
                 lines.Add($"WhitelistAdapterIP: {status.WhitelistAdapterIp ?? "(none)"}");
                 lines.Add($"DefaultAdapterIP: {status.DefaultAdapterIp ?? "(none)"}");
+                lines.Add($"TunnelConnected: {status.TunnelConnected}");
+                lines.Add($"TunnelLastConnectedAtUtc: {status.TunnelLastConnectedAtUtc:O}");
+                lines.Add($"TunnelReconnectCount: {status.TunnelReconnectCount}");
+                lines.Add($"TunnelLastError: {status.TunnelLastError ?? "(none)"}");
                 lines.Add($"LicenseValid: {status.LicenseValid}");
                 lines.Add($"LicenseFromCache: {status.LicenseFromCache}");
                 lines.Add($"LicenseCheckedAtUtc: {status.LicenseCheckedAtUtc:O}");
@@ -283,6 +285,16 @@ public partial class MainWindow : Window
             throw new InvalidOperationException("Proxy listen port must be a positive integer.");
         }
 
+        if (!int.TryParse(TunnelSshPortTextBox.Text.Trim(), out var tunnelSshPort) || tunnelSshPort <= 0)
+        {
+            throw new InvalidOperationException("Tunnel SSH port must be a positive integer.");
+        }
+
+        if (!int.TryParse(TunnelRemotePortTextBox.Text.Trim(), out var tunnelRemotePort) || tunnelRemotePort <= 0)
+        {
+            throw new InvalidOperationException("Tunnel remote port must be a positive integer.");
+        }
+
         var vpsAdapter = VpsNetworkComboBox.SelectedItem as AdapterChoice;
         var outgoingAdapter = OutgoingNetworkComboBox.SelectedItem as AdapterChoice;
         return new ServiceConfig
@@ -292,8 +304,12 @@ public partial class MainWindow : Window
             LocalProxyListenPort = proxyPort,
             WhitelistAdapterIfIndex = vpsAdapter?.IfIndex ?? -1,
             DefaultAdapterIfIndex = outgoingAdapter?.IfIndex ?? -1,
-            WhitelistMode = RoutingPolicyMode.DestinationOnly,
-            ExpectProxyProtocolV2 = false,
+            TunnelEnabled = TunnelEnabledCheckBox.IsChecked == true,
+            TunnelHost = TunnelHostTextBox.Text.Trim(),
+            TunnelSshPort = tunnelSshPort,
+            TunnelRemotePort = tunnelRemotePort,
+            TunnelUser = TunnelUserTextBox.Text.Trim(),
+            TunnelPrivateKeyPath = TunnelKeyPathTextBox.Text.Trim(),
             LicenseServerUrl = LicenseEndpointTextBox.Text.Trim(),
             LicenseKey = LicenseKeyTextBox.Text.Trim()
         };

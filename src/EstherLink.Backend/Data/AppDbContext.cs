@@ -15,6 +15,9 @@ public sealed class AppDbContext : DbContext
     public DbSet<WhitelistSetEntity> WhitelistSets => Set<WhitelistSetEntity>();
     public DbSet<WhitelistEntryEntity> WhitelistEntries => Set<WhitelistEntryEntity>();
     public DbSet<AppReleaseEntity> AppReleases => Set<AppReleaseEntity>();
+    public DbSet<SigningKeyEntity> SigningKeys => Set<SigningKeyEntity>();
+    public DbSet<AdminApiKeyEntity> AdminApiKeys => Set<AdminApiKeyEntity>();
+    public DbSet<AuditEventEntity> AuditEvents => Set<AuditEventEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -103,6 +106,49 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64).IsRequired();
             entity.Property(x => x.MinSupportedVersion).HasColumnName("min_supported_version").HasMaxLength(64).IsRequired();
             entity.HasIndex(x => new { x.Channel, x.Version }).IsUnique();
+        });
+
+        modelBuilder.Entity<SigningKeyEntity>(entity =>
+        {
+            entity.ToTable("signing_keys");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.KeyId).HasColumnName("key_id").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.PublicKey).HasColumnName("public_key").HasColumnType("text").IsRequired();
+            entity.Property(x => x.PrivateKey).HasColumnName("private_key").HasColumnType("text").IsRequired();
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            entity.Property(x => x.RevokedAt).HasColumnName("revoked_at");
+            entity.HasIndex(x => x.KeyId).IsUnique();
+        });
+
+        modelBuilder.Entity<AdminApiKeyEntity>(entity =>
+        {
+            entity.ToTable("admin_api_keys");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(128).IsRequired();
+            entity.Property(x => x.KeyHash).HasColumnName("key_hash").HasMaxLength(128).IsRequired();
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            entity.Property(x => x.RevokedAt).HasColumnName("revoked_at");
+            entity.HasIndex(x => x.KeyHash).IsUnique();
+        });
+
+        modelBuilder.Entity<AuditEventEntity>(entity =>
+        {
+            entity.ToTable("audit_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.Actor).HasColumnName("actor").HasMaxLength(128).IsRequired();
+            entity.Property(x => x.Method).HasColumnName("method").HasMaxLength(16).IsRequired();
+            entity.Property(x => x.Path).HasColumnName("path").HasMaxLength(512).IsRequired();
+            entity.Property(x => x.PayloadHash).HasColumnName("payload_hash").HasMaxLength(128).IsRequired();
+            entity.Property(x => x.StatusCode).HasColumnName("status_code").IsRequired();
+            entity.Property(x => x.RequestId).HasColumnName("request_id").HasMaxLength(128).IsRequired();
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.HasIndex(x => x.CreatedAt);
+            entity.HasIndex(x => x.Actor);
         });
     }
 }
