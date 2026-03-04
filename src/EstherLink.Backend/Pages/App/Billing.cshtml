@@ -1,0 +1,51 @@
+@page "/app/billing"
+@model EstherLink.Backend.Pages.App.BillingModel
+@{
+    ViewData["Title"] = "Billing";
+    ViewData["DocumentationUrl"] = Model.DocumentationUrl;
+}
+
+<div class="max-w-7xl mx-auto px-4 py-10 space-y-8">
+    <div>
+        <h1 class="text-3xl font-bold mb-2">Billing</h1>
+        <p class="text-slate-400">Buy a one-time OmniRelay license and track payment completion.</p>
+    </div>
+
+    <section class="rounded-xl border border-cyan-600/40 bg-cyan-500/10 p-6">
+        <h2 class="text-2xl font-bold">One-Time License</h2>
+        <p class="text-4xl font-bold mt-2">$@Model.PriceUsd.ToString("0.00")</p>
+        <p class="text-slate-300 mt-2">Perpetual usage + 1 year software updates.</p>
+        <button type="button" data-action="create-intent" class="mt-4 px-5 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">Create Payment Intent</button>
+        <div id="checkout-result" class="mt-4 text-sm text-slate-100"></div>
+    </section>
+
+    <section>
+        <h2 class="text-xl font-semibold mb-3">Recent Orders</h2>
+        @if (Model.Orders.Count == 0)
+        {
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4 text-slate-300">No orders yet.</div>
+        }
+        else
+        {
+            <div class="space-y-3">
+                @foreach (var order in Model.Orders)
+                {
+                    <article class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <p class="text-sm text-slate-400">Order</p>
+                                <p class="font-mono">@order.OrderId</p>
+                            </div>
+                            <span class="px-2 py-1 rounded bg-slate-800 text-sm">@order.Status</span>
+                        </div>
+                        <div class="mt-2 text-sm text-slate-300">
+                            Intent: <span class="font-mono">@order.IntentId</span>
+                            <button class="poll-order ml-3 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700" data-order-id="@order.OrderId">Refresh</button>
+                        </div>
+                        <div id="order-@order.OrderId" class="mt-2 text-xs text-slate-400">@(order.LicenseKey is null ? "License pending." : $"Issued license: {order.LicenseKey}")</div>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+</div>

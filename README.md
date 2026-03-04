@@ -81,6 +81,41 @@ Capabilities:
 - Metrics endpoint: `/metrics`
 - EF Core migrations on PostgreSQL (Redis optional)
 
+## OmniRelay Web (Landing + Dashboard)
+
+`src/EstherLink.Backend` now hosts:
+- Public landing page at `/` (OmniRelay marketing copy).
+- Account auth pages:
+  - `GET|POST /account/register`
+  - `GET|POST /account/login`
+  - `POST /account/logout`
+- Protected dashboard pages:
+  - `GET /app/dashboard`
+  - `GET /app/licenses`
+  - `GET /app/billing`
+  - `GET /app/downloads`
+  - `GET /app/account`
+- Internal dashboard APIs:
+  - `POST /app/api/trial/request`
+  - `POST /app/api/checkout/create-intent`
+  - `GET /app/api/checkout/{orderId}/status?refresh=true|false`
+  - `POST /webhooks/paykrypt`
+
+Behavior:
+- Trial: one per account, 2-day TTL, `max_devices=1`.
+- Paid: one-time purchase, perpetual license (`expires_at=null`) + 1 year update entitlement.
+- Payment flow: PayKrypt webhook + polling reconciliation, idempotent license issuance.
+
+New DB objects:
+- Identity tables (`app_users`, `app_roles`, etc.)
+- `user_licenses`
+- `commerce_orders`
+- `paykrypt_intents`
+- `paykrypt_webhook_events`
+
+Migration:
+- `20260304131959_AddWebDashboardAndCommerce`
+
 Public endpoints:
 - `POST /api/license/verify`
 - `GET /api/license/public-keys`
@@ -157,6 +192,14 @@ docker compose up --build
 dotnet run --project src/EstherLink.Backend
 ```
 
+For Tailwind CSS during web development:
+
+```powershell
+cd src/EstherLink.Backend
+npm install
+npm run watch:css
+```
+
 ## Backend Seed Data
 
 Admin endpoint:
@@ -224,3 +267,7 @@ Helper setup script:
 - UTC timestamps are used end-to-end (`DateTimeOffset.UtcNow`).
 - License verify response signature input includes:
   - `valid`, `reason`, `plan`, `licenseExpiresAt`, `cacheExpiresAt`, `serverTime`, `requestId`, `signatureAlg`, `keyId`, `nonce`
+- Web config sections used by dashboard:
+  - `PayKrypt`
+  - `Commerce`
+  - `Web`

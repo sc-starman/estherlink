@@ -180,6 +180,9 @@ ClientBin/
 ~$*
 *~
 *~.*
+node_modules/
+npm-debug.log*
+package-lock.json.*
 *.dbmdl
 *.dbproj.schemaview
 *.jfm

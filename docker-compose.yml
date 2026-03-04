@@ -38,6 +38,16 @@ services:
       Admin__ApiKeyPepper: dev-admin-pepper
       Licensing__SigningKeyRotationDays: 90
       Licensing__OfflineCacheTtlHours: 24
+      PayKrypt__BaseUrl: https://api-sandbox.paykrypt.io
+      PayKrypt__SecretApiKey: sk_test_change_me
+      PayKrypt__PriceUsd: 149
+      PayKrypt__ExpiresInMinutes: 45
+      Commerce__PaidLicensePlan: professional
+      Commerce__PaidMaxDevices: 3
+      Commerce__TrialDays: 2
+      Commerce__UpdateEntitlementMonths: 12
+      Web__DocumentationUrl: https://docs.omnirelay.example
+      Web__DownloadChannel: stable
       Database__ApplyMigrationsOnStartup: "true"
     ports:
       - "8080:8080"

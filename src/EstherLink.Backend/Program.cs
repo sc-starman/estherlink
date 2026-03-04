@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Threading.RateLimiting;
 using EstherLink.Backend.Configuration;
 using EstherLink.Backend.Contracts.App;
@@ -7,14 +8,16 @@ using EstherLink.Backend.Data;
 using EstherLink.Backend.Data.Entities;
 using EstherLink.Backend.Data.Enums;
 using EstherLink.Backend.Health;
+using EstherLink.Backend.Models;
 using EstherLink.Backend.Security;
 using EstherLink.Backend.Services;
+using EstherLink.Backend.Services.Commerce;
 using EstherLink.Backend.Swagger;
 using EstherLink.Backend.Utilities;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -24,6 +27,9 @@ builder.Logging.AddJsonConsole();
 
 builder.Services.Configure<AdminSecurityOptions>(builder.Configuration.GetSection("Admin"));
 builder.Services.Configure<LicensingOptions>(builder.Configuration.GetSection("Licensing"));
+builder.Services.Configure<PayKryptOptions>(builder.Configuration.GetSection("PayKrypt"));
+builder.Services.Configure<CommerceOptions>(builder.Configuration.GetSection("Commerce"));
+builder.Services.Configure<WebOptions>(builder.Configuration.GetSection("Web"));
 
 var postgresConnection =
     builder.Configuration.GetConnectionString("Postgres") ??
@@ -45,6 +51,44 @@ else
     builder.Services.AddDistributedMemoryCache();
 }
 
+builder.Services
+    .AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>
+    {
+        options.Password.RequireDigit = true;
+        options.Password.RequiredLength = 8;
+        options.Password.RequireUppercase = true;
+        options.Password.RequireLowercase = true;
+        options.Password.RequireNonAlphanumeric = false;
+
+        options.User.RequireUniqueEmail = true;
+
+        options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+        options.Lockout.AllowedForNewUsers = true;
+    })
+    .AddEntityFrameworkStores<AppDbContext>()
+    .AddDefaultTokenProviders();
+
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.Cookie.Name = "omnirelay.auth";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.SlidingExpiration = true;
+    options.LoginPath = "/account/login";
+    options.LogoutPath = "/account/logout";
+    options.AccessDeniedPath = "/account/login";
+});
+
+builder.Services.AddHttpClient(nameof(PayKryptClient));
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddRazorPages(options =>
+{
+    options.Conventions.AuthorizeFolder("/App");
+    options.Conventions.AllowAnonymousToFolder("/Account");
+    options.Conventions.AllowAnonymousToPage("/Index");
+});
+
 builder.Services.AddScoped<LicenseService>();
 builder.Services.AddScoped<WhitelistService>();
 builder.Services.AddScoped<AppReleaseService>();
@@ -52,13 +96,35 @@ builder.Services.AddScoped<SampleDataSeeder>();
 builder.Services.AddScoped<SigningKeyService>();
 builder.Services.AddScoped<SecurityBootstrapper>();
 builder.Services.AddScoped<LicenseResponseSigner>();
+builder.Services.AddScoped<IPayKryptClient, PayKryptClient>();
+builder.Services.AddScoped<ICommerceService, CommerceService>();
+builder.Services.AddScoped<ILicenseIssuanceService, LicenseIssuanceService>();
+builder.Services.AddScoped<ITrialPolicyService, TrialPolicyService>();
+builder.Services.AddScoped<IDownloadCatalogService, DownloadCatalogService>();
 
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
     options.AddFixedWindowLimiter("public", limiter =>
     {
         limiter.PermitLimit = 120;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+        limiter.AutoReplenishment = true;
+    });
+
+    options.AddFixedWindowLimiter("auth", limiter =>
+    {
+        limiter.PermitLimit = 20;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+        limiter.AutoReplenishment = true;
+    });
+
+    options.AddFixedWindowLimiter("checkout", limiter =>
+    {
+        limiter.PermitLimit = 20;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
         limiter.AutoReplenishment = true;
@@ -89,8 +155,12 @@ builder.Services.AddSwaggerGen(options =>
 
 var app = builder.Build();
 
+app.UseStaticFiles();
 app.UseSwagger();
 app.UseSwaggerUI();
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseRateLimiter();
 
 using (var scope = app.Services.CreateScope())
@@ -105,17 +175,18 @@ using (var scope = app.Services.CreateScope())
     await bootstrapper.EnsureInitializedAsync(CancellationToken.None);
 }
 
-app.MapGet("/", () => Results.Ok(new
+app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
-    service = "EstherLink.Backend",
-    utc = DateTimeOffset.UtcNow
-}));
-
-app.MapGet("/health/live", () => Results.Ok(new
-{
-    status = "live",
-    utc = DateTimeOffset.UtcNow
-}));
+    Predicate = _ => false,
+    ResponseWriter = async (context, _) =>
+    {
+        await context.Response.WriteAsJsonAsync(new
+        {
+            status = "live",
+            utc = DateTimeOffset.UtcNow
+        });
+    }
+});
 
 app.MapGet("/metrics", async (AppDbContext dbContext, CancellationToken cancellationToken) =>
 {
@@ -158,6 +229,91 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
         await context.Response.WriteAsJsonAsync(payload);
     }
 });
+
+app.MapRazorPages();
+
+var appApi = app.MapGroup("/app/api")
+    .RequireAuthorization()
+    .RequireRateLimiting("checkout");
+
+appApi.MapPost("/trial/request", async (
+    HttpContext httpContext,
+    ICommerceService commerceService,
+    CancellationToken cancellationToken) =>
+{
+    var userId = GetUserId(httpContext.User);
+    if (userId is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var email = httpContext.User.FindFirstValue(ClaimTypes.Email) ?? "unknown@example.com";
+    var result = await commerceService.StartTrialAsync(userId.Value, email, cancellationToken);
+
+    return result.Success
+        ? Results.Ok(result)
+        : Results.BadRequest(result);
+});
+
+appApi.MapPost("/checkout/create-intent", async (
+    HttpContext httpContext,
+    ICommerceService commerceService,
+    CancellationToken cancellationToken) =>
+{
+    var userId = GetUserId(httpContext.User);
+    if (userId is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var email = httpContext.User.FindFirstValue(ClaimTypes.Email) ?? "unknown@example.com";
+
+    try
+    {
+        var result = await commerceService.CreateCheckoutIntentAsync(userId.Value, email, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
+appApi.MapGet("/checkout/{orderId:guid}/status", async (
+    Guid orderId,
+    bool refresh,
+    HttpContext httpContext,
+    ICommerceService commerceService,
+    CancellationToken cancellationToken) =>
+{
+    var userId = GetUserId(httpContext.User);
+    if (userId is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var result = await commerceService.GetOrderStatusAsync(userId.Value, orderId, refresh, cancellationToken);
+    return result is null ? Results.NotFound() : Results.Ok(result);
+});
+
+app.MapPost("/webhooks/paykrypt", async (
+    HttpContext httpContext,
+    ICommerceService commerceService,
+    CancellationToken cancellationToken) =>
+{
+    using var reader = new StreamReader(httpContext.Request.Body);
+    var payload = await reader.ReadToEndAsync(cancellationToken);
+
+    if (string.IsNullOrWhiteSpace(payload))
+    {
+        return Results.BadRequest(new { message = "Payload is required." });
+    }
+
+    var eventId = httpContext.Request.Headers["X-PayKrypt-Event-Id"].FirstOrDefault();
+    var result = await commerceService.ProcessWebhookAsync(payload, eventId, cancellationToken);
+    return Results.Ok(result);
+})
+.RequireRateLimiting("public");
 
 var api = app.MapGroup("/api");
 
@@ -448,5 +604,10 @@ static AdminLicenseResponse ToAdminResponse(LicenseEntity entity, int activation
     };
 }
 
-public partial class Program;
+static Guid? GetUserId(ClaimsPrincipal principal)
+{
+    var value = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+    return Guid.TryParse(value, out var parsed) ? parsed : null;
+}
 
+public partial class Program;

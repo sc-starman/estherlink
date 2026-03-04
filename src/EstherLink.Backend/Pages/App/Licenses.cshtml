@@ -1,0 +1,40 @@
+@page "/app/licenses"
+@model EstherLink.Backend.Pages.App.LicensesModel
+@{
+    ViewData["Title"] = "License Keys";
+    ViewData["DocumentationUrl"] = Model.DocumentationUrl;
+}
+
+<div class="max-w-7xl mx-auto px-4 py-10">
+    <h1 class="text-3xl font-bold mb-2">License Keys</h1>
+    <p class="text-slate-400 mb-6">Manage trial and purchased keys linked to your account.</p>
+
+    @if (Model.Items.Count == 0)
+    {
+        <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">No license keys yet. Start a trial or purchase a license.</div>
+    }
+    else
+    {
+        <div class="space-y-4">
+            @foreach (var item in Model.Items)
+            {
+                <article class="rounded-xl border border-slate-800 bg-slate-900 p-5">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <p class="text-xs text-slate-400 uppercase">@item.Source</p>
+                            <p class="text-xl font-mono font-semibold">@item.LicenseKey</p>
+                        </div>
+                        <button class="copy-license px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-sm" data-key="@item.LicenseKey">Copy</button>
+                    </div>
+                    <dl class="mt-4 grid md:grid-cols-4 gap-3 text-sm">
+                        <div><dt class="text-slate-400">Plan</dt><dd>@item.Plan</dd></div>
+                        <div><dt class="text-slate-400">Status</dt><dd>@item.Status</dd></div>
+                        <div><dt class="text-slate-400">Max Devices</dt><dd>@item.MaxDevices</dd></div>
+                        <div><dt class="text-slate-400">Expires</dt><dd>@(item.ExpiresAt?.ToString("u") ?? "Perpetual")</dd></div>
+                        <div class="md:col-span-2"><dt class="text-slate-400">Update Entitlement</dt><dd>@(item.UpdatesEntitledUntil?.ToString("u") ?? "n/a")</dd></div>
+                    </dl>
+                </article>
+            }
+        </div>
+    }
+</div>

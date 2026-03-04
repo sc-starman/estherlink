@@ -14,4 +14,6 @@ public sealed class LicenseEntity
     public DateTimeOffset UpdatedAt { get; set; }
 
     public ICollection<LicenseActivationEntity> Activations { get; set; } = [];
+    public ICollection<UserLicenseEntity> UserLicenses { get; set; } = [];
+    public ICollection<CommerceOrderEntity> IssuedByOrders { get; set; } = [];
 }
