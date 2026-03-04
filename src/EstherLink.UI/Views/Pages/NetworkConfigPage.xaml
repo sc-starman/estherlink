@@ -1,0 +1,116 @@
+<Page x:Class="EstherLink.UI.Views.Pages.NetworkConfigPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Title="Network Configuration"
+      Background="{DynamicResource Brush.Background}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="28" MaxWidth="980">
+            <TextBlock Text="Network Configuration" Style="{StaticResource SectionTitleTextStyle}"/>
+            <TextBlock Text="Configure VPS connectivity, adapter routing, tunnel parameters, and service/license endpoints." Style="{StaticResource MutedTextStyle}" Margin="0,0,0,16"/>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="220"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="VPS Host/IP" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding State.VpsHost, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="1" Text="VPS Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding State.VpsPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="2" Text="Proxy Listen Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding State.ProxyPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="3" Text="VPS Network (IC1)" Style="{StaticResource FormLabelStyle}"/>
+                    <ComboBox Grid.Row="3" Grid.Column="1"
+                              ItemsSource="{Binding State.Adapters}"
+                              SelectedItem="{Binding State.VpsAdapter}"
+                              DisplayMemberPath="Display"
+                              Style="{StaticResource FormComboBoxStyle}"/>
+
+                    <TextBlock Grid.Row="4" Text="Outgoing Network (IC2)" Style="{StaticResource FormLabelStyle}"/>
+                    <ComboBox Grid.Row="4" Grid.Column="1"
+                              ItemsSource="{Binding State.Adapters}"
+                              SelectedItem="{Binding State.OutgoingAdapter}"
+                              DisplayMemberPath="Display"
+                              Style="{StaticResource FormComboBoxStyle}"/>
+                </Grid>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="220"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="Enable Tunnel" Style="{StaticResource FormLabelStyle}"/>
+                    <CheckBox Grid.Row="0" Grid.Column="1" IsChecked="{Binding State.TunnelEnabled}" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Text}"/>
+
+                    <TextBlock Grid.Row="1" Text="Tunnel Host" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding State.TunnelHost, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="2" Text="Tunnel SSH Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding State.TunnelSshPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="3" Text="Tunnel Remote Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding State.TunnelRemotePortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="4" Text="Tunnel User / Key Path" Style="{StaticResource FormLabelStyle}"/>
+                    <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal">
+                        <TextBox Width="140" Text="{Binding State.TunnelUser, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                        <TextBox Width="420" Margin="10,0,0,0" Text="{Binding State.TunnelKeyPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="220"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="License Endpoint" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding State.LicenseEndpoint, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="1" Text="License Key" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding State.LicenseKey, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="2" Text="Service EXE Path" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding State.ServiceExePath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                </Grid>
+            </Border>
+
+            <WrapPanel Margin="0,16,0,0">
+                <Button Content="Apply Configuration" Command="{Binding ApplyConfigCommand}" Style="{StaticResource PrimaryButtonStyle}" />
+            </WrapPanel>
+            <TextBlock Text="{Binding Feedback}" Style="{StaticResource FeedbackTextStyle}" Margin="0,10,0,0"/>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

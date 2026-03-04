@@ -21,6 +21,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EstherLink.Backend.IntegrationTests", "tests\EstherLink.Backend.IntegrationTests\EstherLink.Backend.IntegrationTests.csproj", "{625A8573-B893-404E-8EE2-7E14ED61F843}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EstherLink.UI.Tests", "tests\EstherLink.UI.Tests\EstherLink.UI.Tests.csproj", "{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -115,6 +117,18 @@ Global
 		{625A8573-B893-404E-8EE2-7E14ED61F843}.Release|x64.Build.0 = Release|Any CPU
 		{625A8573-B893-404E-8EE2-7E14ED61F843}.Release|x86.ActiveCfg = Release|Any CPU
 		{625A8573-B893-404E-8EE2-7E14ED61F843}.Release|x86.Build.0 = Release|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Debug|x64.Build.0 = Debug|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Debug|x86.Build.0 = Debug|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|x64.ActiveCfg = Release|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|x64.Build.0 = Release|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|x86.ActiveCfg = Release|Any CPU
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -127,5 +141,6 @@ Global
 		{1D3C4D26-C58D-4C48-8AE8-35309DF63BED} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{903A8E54-B5EA-42FC-85CA-AD32F5C9FAC2} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{625A8573-B893-404E-8EE2-7E14ED61F843} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

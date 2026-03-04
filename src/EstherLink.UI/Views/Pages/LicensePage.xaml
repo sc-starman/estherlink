@@ -1,0 +1,78 @@
+<Page x:Class="EstherLink.UI.Views.Pages.LicensePage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Title="License Management"
+      Background="{DynamicResource Brush.Background}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="28" MaxWidth="980">
+            <StackPanel Margin="0,0,0,16">
+                <TextBlock Text="License Activation" Style="{StaticResource SectionTitleTextStyle}"/>
+                <TextBlock Text="Enter your license key to activate professional features and unlock enterprise security protocols." Style="{StaticResource MutedTextStyle}"/>
+            </StackPanel>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="License Key" Style="{StaticResource FormLabelStyle}" Margin="0,0,0,6"/>
+                    <DockPanel LastChildFill="False">
+                        <TextBox Width="520"
+                                 Text="{Binding State.LicenseKey, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource FormTextBoxStyle}"
+                                 VerticalAlignment="Center"/>
+                        <Button Content="Activate License"
+                                Command="{Binding ActivateLicenseCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Margin="12,0,0,0"
+                                VerticalAlignment="Center"/>
+                    </DockPanel>
+                </StackPanel>
+            </Border>
+
+            <UniformGrid Columns="3" Margin="0,0,0,18">
+                <Border Style="{StaticResource CardStyle}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="License Status" Style="{StaticResource CardLabelStyle}"/>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding LicenseStatus}" Style="{StaticResource CardValueStyle}"/>
+                            <Ellipse Width="8" Height="8" Margin="8,8,0,0"
+                                     Fill="{Binding LicenseActive, Converter={StaticResource BoolToStatusBrushConverter}}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardStyle}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="Expiration Date" Style="{StaticResource CardLabelStyle}"/>
+                        <TextBlock Text="{Binding ExpirationDate}" Style="{StaticResource CardValueStyle}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel>
+                        <TextBlock Text="Device Fingerprint" Style="{StaticResource CardLabelStyle}"/>
+                        <TextBlock Text="{Binding DeviceFingerprint}" Style="{StaticResource CardValueStyle}" FontFamily="Consolas"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <Border Style="{StaticResource HighlightBannerStyle}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Professional License is Active" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>
+                        <TextBlock Text="You have access to 256-bit AES encryption, unlimited network configurations, and dedicated 24/7 technical support."
+                                   TextWrapping="Wrap"
+                                   Margin="0,6,0,0"
+                                   Foreground="{DynamicResource Brush.MutedText}"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="View Feature Log" Style="{StaticResource SecondaryButtonStyle}" Margin="14,0,0,0" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="{Binding Feedback}" Style="{StaticResource FeedbackTextStyle}" Margin="0,14,0,0"/>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

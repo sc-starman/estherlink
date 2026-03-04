@@ -47,6 +47,26 @@ Implemented:
 - Persistent config at `C:\ProgramData\EstherLink\config.json` with encrypted license key.
 - Service log at `C:\ProgramData\EstherLink\logs\service.log`.
 
+UI redesign (Tailwind-inspired WPF shell):
+- MVVM + `Frame/Page` navigation with `CommunityToolkit.Mvvm`.
+- Shell layout:
+  - Left sidebar navigation
+  - Top header
+  - Page content frame
+  - Footer status strip
+- Pages:
+  - Dashboard
+  - Network Configuration
+  - Whitelist Rules
+  - Service Status
+  - License
+  - Logs
+  - Settings
+- Runtime theme switching (Dark/Light) with persisted preference in:
+  - `%AppData%\EstherLink\ui.settings.json`
+- Busy-state command gating to prevent duplicate action clicks.
+- License page visual direction aligned to the provided Tailwind concept.
+
 ## Backend API
 
 Capabilities:
@@ -160,6 +180,12 @@ Seed includes:
 
 ```powershell
 dotnet test tests/EstherLink.Backend.IntegrationTests/EstherLink.Backend.IntegrationTests.csproj -c Debug
+```
+
+## UI ViewModel Tests
+
+```powershell
+dotnet test tests/EstherLink.UI.Tests/EstherLink.UI.Tests.csproj -c Debug
 ```
 
 ## CI

@@ -4,123 +4,117 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="EstherLink Control"
-        Height="820"
-        Width="1100"
-        MinHeight="720"
-        MinWidth="980">
-    <Grid Margin="14">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+        Title="EstherLink"
+        Width="1360"
+        Height="860"
+        MinWidth="1120"
+        MinHeight="740">
+    <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="220"/>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="280"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <Grid Grid.Row="0" Grid.ColumnSpan="4">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Image Width="40"
-                   Height="40"
-                   Margin="0,0,10,0"
-                   VerticalAlignment="Center"
-                   Source="pack://application:,,,/Assets/logo.png"
-                   Stretch="Uniform"/>
-            <TextBlock Grid.Column="1"
-                       VerticalAlignment="Center"
-                       FontSize="22"
-                       FontWeight="SemiBold"
-                       Text="EstherLink MVP Control Panel"/>
-        </Grid>
-        <TextBlock Grid.Row="1" Grid.ColumnSpan="4" Margin="0,6,0,14" Foreground="#555" Text="Windows service + CONNECT proxy with adapter-bound egress (IC1/IC2)."/>
+        <Border Grid.Column="0"
+                Background="{DynamicResource Brush.SidebarBackground}"
+                BorderBrush="{DynamicResource Brush.Border}"
+                BorderThickness="0,0,1,0">
+            <DockPanel>
+                <Border DockPanel.Dock="Bottom"
+                        Margin="20"
+                        Padding="14"
+                        Style="{StaticResource CardStyle}">
+                    <StackPanel>
+                        <TextBlock Text="Current Plan" Style="{StaticResource CardLabelStyle}"/>
+                        <TextBlock Text="Professional" Margin="0,4,0,10" FontWeight="Bold"/>
+                        <ProgressBar Height="8" Value="85" Maximum="100" Foreground="{DynamicResource Brush.Primary}"/>
+                    </StackPanel>
+                </Border>
 
-        <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Text="VPS Host/IP"/>
-        <TextBox Grid.Row="2" Grid.Column="1" x:Name="VpsHostTextBox" Margin="8,4,12,4" Text="vps.example.com"/>
+                <StackPanel Margin="20,24,20,20">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
+                        <Border Width="44"
+                                Height="44"
+                                CornerRadius="22"
+                                Background="{DynamicResource Brush.NavActiveBackground}"
+                                BorderBrush="{DynamicResource Brush.Primary}"
+                                BorderThickness="1"
+                                Padding="6">
+                            <Image Source="pack://application:,,,/Assets/logo.png" Stretch="Uniform"/>
+                        </Border>
+                        <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="EstherLink" Style="{StaticResource SidebarTitleStyle}"/>
+                            <TextBlock Text="Secure Network Admin" Style="{StaticResource SidebarSubTitleStyle}"/>
+                        </StackPanel>
+                    </StackPanel>
 
-        <TextBlock Grid.Row="2" Grid.Column="2" VerticalAlignment="Center" Text="VPS Port"/>
-        <TextBox Grid.Row="2" Grid.Column="3" x:Name="VpsPortTextBox" Margin="8,4,0,4" Text="443"/>
+                    <ItemsControl ItemsSource="{Binding NavigationItems}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource SidebarNavButtonStyle}"
+                                        Margin="0,0,0,4"
+                                        Command="{Binding DataContext.NavigateCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        CommandParameter="{Binding Item.Route}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Item.IconGlyph}" FontFamily="Segoe Fluent Icons" FontSize="16" Width="24" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Item.Title}" VerticalAlignment="Center" FontSize="13"/>
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </DockPanel>
+        </Border>
 
-        <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Text="Proxy Listen Port"/>
-        <TextBox Grid.Row="3" Grid.Column="1" x:Name="ProxyPortTextBox" Margin="8,4,12,4" Text="19080"/>
-
-        <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Text="VPS Network (IC1)"/>
-        <ComboBox Grid.Row="4" Grid.Column="1" x:Name="VpsNetworkComboBox" Margin="8,4,12,4" DisplayMemberPath="Display"/>
-
-        <TextBlock Grid.Row="4" Grid.Column="2" VerticalAlignment="Center" Text="Outgoing Network (IC2)"/>
-        <ComboBox Grid.Row="4" Grid.Column="3" x:Name="OutgoingNetworkComboBox" Margin="8,4,0,4" DisplayMemberPath="Display"/>
-
-        <Grid Grid.Row="5" Grid.ColumnSpan="4" Margin="0,12,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
+        <Grid Grid.Column="1">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="64"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="36"/>
             </Grid.RowDefinitions>
 
-            <TextBlock Grid.Row="0" Grid.Column="0" FontWeight="SemiBold" Text="Service / License"/>
-            <TextBlock Grid.Row="0" Grid.Column="1" FontWeight="SemiBold" Margin="12,0,0,0" Text="Whitelist (CIDR/IP per line, # comments allowed)"/>
+            <Border Grid.Row="0"
+                    Background="{DynamicResource Brush.HeaderBackground}"
+                    BorderBrush="{DynamicResource Brush.Border}"
+                    BorderThickness="0,0,0,1">
+                <Grid Margin="24,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-            <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,8,0,0" Text="License Endpoint"/>
-            <TextBox Grid.Row="1" Grid.Column="0" x:Name="LicenseEndpointTextBox" Margin="130,8,12,0" Text="https://backend.example.com/api/license/verify"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="&#xE72E;" FontFamily="Segoe Fluent Icons" Foreground="{DynamicResource Brush.Primary}" FontSize="18" Margin="0,0,8,0"/>
+                        <TextBlock Text="{Binding PageTitle}" FontSize="20" FontWeight="Bold"/>
+                    </StackPanel>
 
-            <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,8,0,0" Text="License Key"/>
-            <TextBox Grid.Row="2" Grid.Column="0" x:Name="LicenseKeyTextBox" Margin="130,8,12,0"/>
-
-            <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,8,0,0" Text="Service EXE Path"/>
-            <TextBox Grid.Row="3" Grid.Column="0" x:Name="ServiceExePathTextBox" Margin="130,8,12,0"/>
-
-            <CheckBox Grid.Row="4" Grid.Column="0" x:Name="TunnelEnabledCheckBox" Margin="130,8,12,0" Content="Enable reverse SSH tunnel supervision"/>
-
-            <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,8,0,0" Text="Tunnel Host"/>
-            <TextBox Grid.Row="5" Grid.Column="0" x:Name="TunnelHostTextBox" Margin="130,8,12,0" Text="vps.example.com"/>
-
-            <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,8,0,0" Text="Tunnel SSH Port"/>
-            <TextBox Grid.Row="6" Grid.Column="0" x:Name="TunnelSshPortTextBox" Margin="130,8,12,0" Text="22"/>
-
-            <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,8,0,0" Text="Tunnel Remote Port"/>
-            <TextBox Grid.Row="7" Grid.Column="0" x:Name="TunnelRemotePortTextBox" Margin="130,8,12,0" Text="15000"/>
-
-            <TextBlock Grid.Row="8" Grid.Column="0" Margin="0,8,0,0" Text="Tunnel User / Key"/>
-            <StackPanel Grid.Row="8" Grid.Column="0" Margin="130,8,12,0" Orientation="Horizontal">
-                <TextBox x:Name="TunnelUserTextBox" Width="140" Text="estherlink"/>
-                <TextBox x:Name="TunnelKeyPathTextBox" Width="220" Margin="8,0,0,0"/>
-            </StackPanel>
-
-            <TextBox Grid.Row="1" Grid.Column="1" Grid.RowSpan="9" x:Name="WhitelistTextBox" Margin="12,8,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" MinHeight="220" FontFamily="Consolas"/>
-        </Grid>
-
-        <StackPanel Grid.Row="6" Grid.ColumnSpan="4" Margin="0,14,0,0">
-            <WrapPanel>
-                <Button x:Name="VerifyLicenseButton" Width="140" Margin="0,0,8,0" Content="Verify License" Click="VerifyLicenseButton_Click"/>
-                <Button x:Name="UpdateWhitelistButton" Width="140" Margin="0,0,8,0" Content="Update Whitelist" Click="UpdateWhitelistButton_Click"/>
-                <Button x:Name="InstallStartServiceButton" Width="180" Margin="0,0,8,0" Content="Install/Start Service" Click="InstallStartServiceButton_Click"/>
-                <Button x:Name="StopServiceButton" Width="120" Margin="0,0,8,0" Content="Stop Service" Click="StopServiceButton_Click"/>
-                <Button x:Name="RefreshStatusButton" Width="120" Content="Refresh Status" Click="RefreshStatusButton_Click"/>
-            </WrapPanel>
-            <Border Margin="0,10,0,0" Padding="10" BorderBrush="#DDD" BorderThickness="1" CornerRadius="4">
-                <TextBlock x:Name="StatusTextBlock" TextWrapping="Wrap" FontFamily="Consolas"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource SecondaryButtonStyle}" Padding="10,6" Margin="0,0,10,0" Command="{Binding ToggleThemeCommand}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE706;" FontFamily="Segoe Fluent Icons" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding ThemeLabel}"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource SecondaryButtonStyle}" Padding="10,6" IsEnabled="False">
+                            <TextBlock Text="&#xE7F4;" FontFamily="Segoe Fluent Icons"/>
+                        </Button>
+                    </StackPanel>
+                </Grid>
             </Border>
-        </StackPanel>
+
+            <Frame x:Name="ContentFrame"
+                   Grid.Row="1"
+                   NavigationUIVisibility="Hidden"
+                   Background="Transparent"/>
+
+            <Border Grid.Row="2"
+                    Background="{DynamicResource Brush.FooterBackground}"
+                    BorderBrush="{DynamicResource Brush.Border}"
+                    BorderThickness="0,1,0,0"
+                    Padding="14,6">
+                <TextBlock Text="{Binding StatusSummary}" FontSize="12" Foreground="{DynamicResource Brush.MutedText}" TextTrimming="CharacterEllipsis"/>
+            </Border>
+        </Grid>
     </Grid>
 </Window>
