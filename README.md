@@ -255,12 +255,21 @@ Runs:
 
 VPS must forward incoming client TCP streams to the Windows proxy listener endpoint over the reverse tunnel.
 
-Example concept:
-- HAProxy on VPS listens on public port.
-- Backend points to tunnel endpoint that reaches `127.0.0.1:<proxy-listen-port>` on Windows.
+Primary ingress path (current):
+- 3x-ui/Xray on VPS listens on public port `443` (client auth/profile management).
+- Xray outbound is forced to `127.0.0.1:15000` (loopback tunnel endpoint).
+- Windows reverse SSH tunnel maps VPS `127.0.0.1:15000` to Windows `127.0.0.1:<proxy-listen-port>`.
+- Fail mode is fail-closed for client traffic (no direct VPS fallback).
 
-Helper setup script:
-- `scripts/setup_estherlink_vps.sh`
+Helper setup scripts:
+- Primary: `scripts/setup_omnirelay_vps_3xui.sh`
+- Rollback/legacy: `scripts/setup_estherlink_vps.sh`
+
+Example (primary path):
+
+```bash
+sudo bash scripts/setup_omnirelay_vps_3xui.sh --public-port 443 --panel-port 8443 --backend-port 15000 --ssh-port 22 --pubkey-file /root/windows_tunnel.pub
+```
 
 ## Notes
 

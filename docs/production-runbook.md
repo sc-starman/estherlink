@@ -34,7 +34,7 @@
 ### Tunnel Instability (Windows)
 1. Inspect service status via UI `TunnelConnected/TunnelLastError`.
 2. Validate SSH binary availability and key path.
-3. Validate VPS `sshd` + HAProxy listeners and firewall.
+3. Validate VPS `sshd` + `x-ui` listeners and firewall.
 4. Confirm remote port forwarding is accepted for `estherlink` user.
 
 ## Rollback

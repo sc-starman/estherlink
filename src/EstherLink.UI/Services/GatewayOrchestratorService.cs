@@ -2,6 +2,9 @@ using EstherLink.Core.Configuration;
 using EstherLink.Core.Networking;
 using EstherLink.Ipc;
 using EstherLink.UI.Models;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Net.Sockets;
 
 namespace EstherLink.UI.Services;
@@ -153,10 +156,19 @@ public sealed class GatewayOrchestratorService
 
         if (response is null)
         {
-            var fallback = await TestSshTcpConnectivityAsync(config, cancellationToken);
-            return fallback
-                ? SetAction(true, "SSH endpoint is reachable (service not connected for auth-level test).")
-                : SetAction(false, "Tunnel test failed: service unavailable and SSH endpoint was not reachable.");
+            var authFallback = await TestSshAuthConnectivityAsync(config, cancellationToken);
+            if (authFallback.Success)
+            {
+                return SetAction(true, "Tunnel connection test succeeded (UI fallback while service IPC was unavailable).");
+            }
+
+            var tcpFallback = await TestSshTcpConnectivityAsync(config, cancellationToken);
+            if (tcpFallback)
+            {
+                return SetAction(false, $"SSH endpoint is reachable, but authentication test failed: {authFallback.Message}");
+            }
+
+            return SetAction(false, $"Tunnel test failed: service unavailable and SSH endpoint was not reachable. Details: {authFallback.Message}");
         }
 
         return SetAction(false, $"Tunnel test failed: {response.Error ?? "unknown error"}");
@@ -310,5 +322,247 @@ public sealed class GatewayOrchestratorService
         {
             return false;
         }
+    }
+
+    private static async Task<(bool Success, string Message)> TestSshAuthConnectivityAsync(ServiceConfig config, CancellationToken cancellationToken)
+    {
+        if (!TryCreateUiSshTestStartInfo(config, out var startInfo, out var error))
+        {
+            return (false, error ?? "Tunnel configuration is invalid.");
+        }
+
+        Process? process = null;
+        try
+        {
+            process = Process.Start(startInfo!);
+            if (process is null)
+            {
+                return (false, "Unable to start ssh process.");
+            }
+
+            process.StandardInput.Close();
+
+            var waitTask = process.WaitForExitAsync(cancellationToken);
+            var runningDelay = Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            var completed = await Task.WhenAny(waitTask, runningDelay);
+
+            if (completed == waitTask)
+            {
+                var stderr = (await process.StandardError.ReadToEndAsync(cancellationToken)).Trim();
+                var stdout = (await process.StandardOutput.ReadToEndAsync(cancellationToken)).Trim();
+
+                if (process.ExitCode == 0)
+                {
+                    return (true, "SSH connection established.");
+                }
+
+                return (false, FirstNonEmpty(stderr, stdout) ?? $"SSH exited with code {process.ExitCode}.");
+            }
+
+            await StopProcessAsync(process);
+            return (true, "SSH connection established.");
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or TaskCanceledException or OperationCanceledException)
+        {
+            return (false, ex.Message);
+        }
+        finally
+        {
+            if (process is not null)
+            {
+                await StopProcessAsync(process);
+                process.Dispose();
+            }
+        }
+    }
+
+    private static bool TryCreateUiSshTestStartInfo(
+        ServiceConfig config,
+        out ProcessStartInfo? startInfo,
+        out string? error)
+    {
+        startInfo = null;
+        error = ValidateTunnelConfigForTest(config);
+        if (error is not null)
+        {
+            return false;
+        }
+
+        var args = new List<string>
+        {
+            "-N",
+            "-o", "ServerAliveInterval=10",
+            "-o", "ServerAliveCountMax=1",
+            "-o", "TCPKeepAlive=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new"
+        };
+
+        var appDataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "EstherLink");
+        Directory.CreateDirectory(appDataDir);
+        args.Add("-o");
+        args.Add($"UserKnownHostsFile={Path.Combine(appDataDir, "known_hosts_ui")}");
+
+        var method = TunnelAuthMethods.Normalize(config.TunnelAuthMethod);
+        string? secret = null;
+        if (string.Equals(method, TunnelAuthMethods.Password, StringComparison.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(config.TunnelPassword))
+            {
+                error = "Tunnel password is required for password authentication.";
+                return false;
+            }
+
+            args.Add("-o");
+            args.Add("PreferredAuthentications=password,keyboard-interactive");
+            args.Add("-o");
+            args.Add("PubkeyAuthentication=no");
+            args.Add("-o");
+            args.Add("NumberOfPasswordPrompts=1");
+            secret = config.TunnelPassword;
+        }
+        else
+        {
+            var keyPath = (config.TunnelPrivateKeyPath ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(keyPath))
+            {
+                error = "Tunnel host key file path is required for host-key authentication.";
+                return false;
+            }
+
+            if (!File.Exists(keyPath))
+            {
+                error = $"Tunnel host key file not found: {keyPath}";
+                return false;
+            }
+
+            args.Add("-i");
+            args.Add(keyPath);
+            args.Add("-o");
+            args.Add("PreferredAuthentications=publickey");
+
+            if (string.IsNullOrWhiteSpace(config.TunnelPrivateKeyPassphrase))
+            {
+                args.Add("-o");
+                args.Add("BatchMode=yes");
+            }
+            else
+            {
+                secret = config.TunnelPrivateKeyPassphrase;
+            }
+        }
+
+        args.Add($"{config.TunnelUser.Trim()}@{config.TunnelHost.Trim()}");
+        args.Add("-p");
+        args.Add(config.TunnelSshPort.ToString());
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "ssh",
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            RedirectStandardInput = true,
+            CreateNoWindow = true
+        };
+
+        foreach (var arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        if (!string.IsNullOrWhiteSpace(secret))
+        {
+            ConfigureAskPass(psi, secret);
+        }
+
+        startInfo = psi;
+        return true;
+    }
+
+    private static string? ValidateTunnelConfigForTest(ServiceConfig config)
+    {
+        if (string.IsNullOrWhiteSpace(config.TunnelHost))
+        {
+            return "Tunnel host is required.";
+        }
+
+        if (string.IsNullOrWhiteSpace(config.TunnelUser))
+        {
+            return "Tunnel user is required.";
+        }
+
+        if (config.TunnelSshPort <= 0 || config.TunnelSshPort > 65535)
+        {
+            return "Tunnel SSH port must be between 1 and 65535.";
+        }
+
+        return null;
+    }
+
+    private static void ConfigureAskPass(ProcessStartInfo startInfo, string secret)
+    {
+        var launcherPath = EnsureAskPassLauncher();
+        startInfo.Environment["SSH_ASKPASS"] = launcherPath;
+        startInfo.Environment["SSH_ASKPASS_REQUIRE"] = "force";
+        startInfo.Environment["DISPLAY"] = "estherlink-ui:0";
+        startInfo.Environment["ESTHERLINK_UI_SSH_SECRET"] = secret;
+    }
+
+    private static string EnsureAskPassLauncher()
+    {
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "EstherLink",
+            "ssh-ui");
+        Directory.CreateDirectory(root);
+
+        var scriptPath = Path.Combine(root, "ssh-askpass.ps1");
+        var launcherPath = Path.Combine(root, "ssh-askpass.cmd");
+
+        if (!File.Exists(scriptPath))
+        {
+            var scriptContent = "$secret = $env:ESTHERLINK_UI_SSH_SECRET; if ($null -ne $secret) { [Console]::Out.Write($secret) }";
+            File.WriteAllText(scriptPath, scriptContent);
+        }
+
+        if (!File.Exists(launcherPath))
+        {
+            var launcherContent = "@echo off\r\npowershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File \"%~dp0ssh-askpass.ps1\"";
+            File.WriteAllText(launcherPath, launcherContent);
+        }
+
+        return launcherPath;
+    }
+
+    private static async Task StopProcessAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            await process.WaitForExitAsync();
+        }
+        catch
+        {
+        }
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 }
