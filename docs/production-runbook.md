@@ -37,6 +37,18 @@
 3. Validate VPS `sshd` + `x-ui` listeners and firewall.
 4. Confirm remote port forwarding is accepted for `estherlink` user.
 
+### Gateway Deployment Failures (VPS from UI)
+1. In UI `Service Status`, review operation log and failing phase (`upload`, `gateway_install`, `gateway_health`).
+2. Confirm session sudo password is set (clear/re-enter if auth fails).
+3. Confirm tunnel user has shell + sudo permissions.
+4. Validate bundled script exists on VPS:
+   - `/usr/local/sbin/omnirelay-gatewayctl`
+5. Validate gateway status/health directly:
+   - `sudo /usr/local/sbin/omnirelay-gatewayctl status --json`
+   - `sudo /usr/local/sbin/omnirelay-gatewayctl health --json`
+6. If bundle integrity error appears, rebuild:
+   - `bash scripts/build_omnirelay_vps_bundle.sh ...`
+
 ## Rollback
 - Backend:
   1. Roll back container image to previous tag.

@@ -11,8 +11,20 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="Assets\GatewayBundle\omnirelay-vps-bundle-x64.tar.gz"
+             Condition="Exists('Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz" />
+    <Content Include="Assets\GatewayBundle\omnirelay-vps-bundle-x64.tar.gz.sha256"
+             Condition="Exists('Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz.sha256')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz.sha256" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <PackageReference Include="SSH.NET" Version="2024.2.0" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -23,5 +35,12 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <Target Name="EnsureGatewayBundlePresentForRelease" BeforeTargets="Build;Publish" Condition="'$(Configuration)' == 'Release'">
+    <Error Condition="!Exists('Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz')"
+           Text="Release build requires Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz. Run scripts/build_omnirelay_vps_bundle.sh first." />
+    <Error Condition="!Exists('Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz.sha256')"
+           Text="Release build requires Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz.sha256. Run scripts/build_omnirelay_vps_bundle.sh first." />
+  </Target>
 
 </Project>

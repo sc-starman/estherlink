@@ -15,6 +15,9 @@
 [Ll]og/
 [Ll]ogs/
 src/EstherLink.Installer/payload/
+.artifacts/
+src/EstherLink.UI/Assets/GatewayBundle/*.tar.gz
+src/EstherLink.UI/Assets/GatewayBundle/*.sha256
 
 # MSBuild Binary and Structured Log
 *.binlog

@@ -29,6 +29,15 @@ public partial class GatewayStateStore : ObservableObject
     private string tunnelRemotePortText = "15000";
 
     [ObservableProperty]
+    private string gatewayPublicPortText = "443";
+
+    [ObservableProperty]
+    private string gatewayPanelPortText = "8443";
+
+    [ObservableProperty]
+    private string gatewayBackendPortText = "15000";
+
+    [ObservableProperty]
     private string tunnelUser = "estherlink";
 
     [ObservableProperty]
@@ -57,4 +66,9 @@ public partial class GatewayStateStore : ObservableObject
 
     [ObservableProperty]
     private string lastAction = "Ready.";
+
+    partial void OnTunnelRemotePortTextChanged(string value)
+    {
+        GatewayBackendPortText = value;
+    }
 }

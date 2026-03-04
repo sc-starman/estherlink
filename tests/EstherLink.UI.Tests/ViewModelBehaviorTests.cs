@@ -136,6 +136,11 @@ public class ViewModelBehaviorTests
         {
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
+
+        public Task<IpcResponse?> TestTunnelConnectionAsync(ServiceConfig config, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
     }
 
     private sealed class FakeServiceControlService : IServiceControlService
@@ -153,12 +158,17 @@ public class ViewModelBehaviorTests
             return ServiceState;
         }
 
-        public Task<bool> InstallOrStartWindowsServiceAsync(string exePath, CancellationToken cancellationToken = default)
+        public Task<bool> InstallOrStartWindowsServiceAsync(CancellationToken cancellationToken = default)
         {
             return Task.FromResult(true);
         }
 
         public Task<bool> StopWindowsServiceAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> UninstallWindowsServiceAsync(CancellationToken cancellationToken = default)
         {
             return Task.FromResult(true);
         }

@@ -5,22 +5,24 @@ umask 027
 
 SCRIPT_NAME="$(basename "$0")"
 
+COMMAND="install"
+BUNDLE_DIR=""
 PUBLIC_PORT=443
 PANEL_PORT=8443
 BACKEND_PORT=15000
 SSH_PORT=22
 TUNNEL_USER="estherlink"
-
+TUNNEL_AUTH_METHOD="both"
 VPS_IP=""
 PUBKEY=""
 PUBKEY_FILE=""
-XUI_VERSION=""
-
 PANEL_USER=""
 PANEL_PASSWORD=""
 PANEL_BASE_PATH=""
 PANEL_CERT_FILE=""
 PANEL_KEY_FILE=""
+STATUS_JSON=0
+HEALTH_JSON=0
 
 log() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"
@@ -35,29 +37,46 @@ die() {
   exit 1
 }
 
+progress() {
+  local pct="$1"
+  shift
+  printf 'OMNIRELAY_PROGRESS:%s:%s\n' "$pct" "$*"
+}
+
 usage() {
   cat <<EOF
-Usage: sudo ./${SCRIPT_NAME} [options]
+Usage: sudo ./${SCRIPT_NAME} <command> [options]
+
+Commands:
+  install      Install/configure offline 3x-ui gateway components
+  uninstall    Remove x-ui gateway components
+  start        Start gateway services
+  stop         Stop gateway services
+  status       Show gateway service status
+  health       Run gateway operational checks
 
 Options:
+  --bundle-dir <path>        Extracted offline bundle root (contains apt/, xui/, manifest.json)
   --public-port <port>       Public client ingress port for 3x-ui/Xray inbound (default: ${PUBLIC_PORT})
   --panel-port <port>        3x-ui panel HTTPS port (default: ${PANEL_PORT})
-  --backend-port <port>      Loopback port for Windows reverse tunnel endpoint (default: ${BACKEND_PORT})
+  --backend-port <port>      Loopback port for reverse tunnel endpoint (default: ${BACKEND_PORT})
   --ssh-port <port>          SSH port exposed on VPS/UFW (default: ${SSH_PORT})
-  --vps-ip <ip-or-host>      VPS IP/hostname for printed access commands
-  --pubkey '<ssh-pubkey>'    Add one SSH public key to ${TUNNEL_USER} authorized_keys
+  --tunnel-user <name>       SSH tunnel user (default: ${TUNNEL_USER})
+  --tunnel-auth <method>     host_key | password | both (default: ${TUNNEL_AUTH_METHOD})
+  --vps-ip <ip-or-host>      VPS IP/hostname for summary output
+  --pubkey '<ssh-pubkey>'    Add one SSH public key to tunnel user authorized_keys
   --pubkey-file <path>       Read SSH public key from file and add it
-  --xui-version <tag>        Pin 3x-ui version (example: v2.6.5). Default: latest
   --panel-user <name>        Panel username (default: generated)
   --panel-password <value>   Panel password (default: generated)
   --panel-base-path <path>   Panel base path (default: generated random path)
   --panel-cert-file <path>   Existing panel TLS cert path (PEM). Requires --panel-key-file
   --panel-key-file <path>    Existing panel TLS key path (PEM). Requires --panel-cert-file
+  --json                     For status/health commands output compact JSON
   -h, --help                 Show this help
 
-Example:
-  sudo ./${SCRIPT_NAME} --public-port 443 --panel-port 8443 --backend-port 15000 \\
-    --ssh-port 22 --pubkey-file /root/windows_tunnel.pub
+Examples:
+  sudo ./${SCRIPT_NAME} install --bundle-dir /tmp/omnirelay/bundle --public-port 443 --panel-port 8443
+  sudo ./${SCRIPT_NAME} health --json --backend-port 15000
 EOF
 }
 
@@ -69,7 +88,7 @@ validate_port() {
 }
 
 require_root() {
-  (( EUID == 0 )) || die "Run as root (use sudo)."
+  (( EUID == 0 )) || die "This command requires root. Re-run with sudo."
 }
 
 random_string() {
@@ -80,12 +99,25 @@ random_string() {
 detect_arch() {
   case "$(uname -m)" in
     x86_64|amd64) echo "amd64" ;;
-    aarch64|arm64) echo "arm64" ;;
-    armv7l|armv7) echo "armv7" ;;
-    armv6l|armv6) echo "armv6" ;;
-    i386|i686) echo "386" ;;
-    s390x) echo "s390x" ;;
-    *) die "Unsupported architecture: $(uname -m)" ;;
+    *) die "Unsupported architecture: $(uname -m). Offline bundle currently supports amd64 only." ;;
+  esac
+}
+
+detect_codename() {
+  local codename=""
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    codename="${VERSION_CODENAME:-}"
+  fi
+
+  case "$codename" in
+    jammy|noble)
+      echo "$codename"
+      ;;
+    *)
+      die "Unsupported Ubuntu codename '${codename:-unknown}'. Supported: jammy, noble."
+      ;;
   esac
 }
 
@@ -123,11 +155,58 @@ write_file_if_changed() {
   return 0
 }
 
-install_packages() {
-  log "Installing required packages..."
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
-  apt-get install -y --no-install-recommends \
+json_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/ }"
+  value="${value//$'\r'/ }"
+  printf '%s' "$value"
+}
+
+bundle_default_dir() {
+  local script_dir
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+  printf '%s' "${script_dir}/bundle"
+}
+
+require_bundle() {
+  if [[ -z "$BUNDLE_DIR" ]]; then
+    BUNDLE_DIR="$(bundle_default_dir)"
+  fi
+
+  [[ -d "$BUNDLE_DIR" ]] || die "Bundle directory not found: $BUNDLE_DIR"
+  [[ -f "$BUNDLE_DIR/manifest.json" ]] || die "Bundle manifest missing: $BUNDLE_DIR/manifest.json"
+  [[ -d "$BUNDLE_DIR/xui" ]] || die "Bundle xui directory missing: $BUNDLE_DIR/xui"
+  [[ -d "$BUNDLE_DIR/apt" ]] || die "Bundle apt directory missing: $BUNDLE_DIR/apt"
+}
+
+apt_get_local() {
+  local apt_list="$1"
+  shift
+  apt-get \
+    -o Dir::Etc::sourcelist="$apt_list" \
+    -o Dir::Etc::sourceparts="-" \
+    -o APT::Get::List-Cleanup="0" \
+    "$@"
+}
+
+install_packages_offline() {
+  local codename="$1"
+  local apt_repo_dir="$BUNDLE_DIR/apt/$codename"
+  local apt_list="/etc/apt/sources.list.d/omnirelay-offline.list"
+
+  [[ -d "$apt_repo_dir" ]] || die "Offline apt repo for '${codename}' not found at ${apt_repo_dir}"
+  [[ -f "$apt_repo_dir/Packages" || -f "$apt_repo_dir/Packages.gz" ]] || die "Offline apt repo metadata missing in ${apt_repo_dir}"
+
+  progress 12 "Configuring local offline apt source"
+  write_file_if_changed "$apt_list" 0644 root root "deb [trusted=yes] file:${apt_repo_dir} ./" || true
+
+  progress 18 "Updating apt index from local bundle"
+  apt_get_local "$apt_list" update
+
+  progress 24 "Installing required packages from local bundle"
+  DEBIAN_FRONTEND=noninteractive apt_get_local "$apt_list" install -y --no-install-recommends \
     openssh-server \
     fail2ban \
     ufw \
@@ -141,14 +220,13 @@ install_packages() {
 }
 
 setup_tunnel_user() {
-  log "Ensuring dedicated tunnel user '${TUNNEL_USER}' exists..."
+  progress 31 "Ensuring tunnel user exists and has shell access"
 
   if ! id -u "$TUNNEL_USER" >/dev/null 2>&1; then
-    useradd --create-home --home-dir "/home/${TUNNEL_USER}" --shell /usr/sbin/nologin "$TUNNEL_USER"
+    useradd --create-home --home-dir "/home/${TUNNEL_USER}" --shell /bin/bash "$TUNNEL_USER"
   fi
 
-  passwd -l "$TUNNEL_USER" >/dev/null 2>&1 || true
-  usermod -s /usr/sbin/nologin "$TUNNEL_USER" || true
+  usermod -s /bin/bash "$TUNNEL_USER" || true
 
   install -d -m 0700 -o "$TUNNEL_USER" -g "$TUNNEL_USER" "/home/${TUNNEL_USER}/.ssh"
   touch "/home/${TUNNEL_USER}/.ssh/authorized_keys"
@@ -161,17 +239,44 @@ setup_tunnel_user() {
     if ! grep -Fqx "$restricted_key" "/home/${TUNNEL_USER}/.ssh/authorized_keys"; then
       printf '%s\n' "$restricted_key" >> "/home/${TUNNEL_USER}/.ssh/authorized_keys"
       log "Added provided SSH public key for ${TUNNEL_USER}."
-    else
-      log "Provided SSH public key already present for ${TUNNEL_USER}."
     fi
-  else
-    warn "No --pubkey/--pubkey-file provided. Add a key to /home/${TUNNEL_USER}/.ssh/authorized_keys before connecting from Windows."
+  fi
+
+  if [[ "$TUNNEL_AUTH_METHOD" == "host_key" ]]; then
+    passwd -l "$TUNNEL_USER" >/dev/null 2>&1 || true
   fi
 }
 
 configure_sshd() {
-  log "Configuring sshd for reverse tunnel support..."
+  progress 38 "Configuring sshd for reverse tunnel"
+
   local sshd_dropin="/etc/ssh/sshd_config.d/99-estherlink.conf"
+  local auth_block=""
+
+  case "$TUNNEL_AUTH_METHOD" in
+    host_key)
+      auth_block="    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AuthenticationMethods publickey
+    PubkeyAuthentication yes"
+      ;;
+    password)
+      auth_block="    PasswordAuthentication yes
+    KbdInteractiveAuthentication no
+    AuthenticationMethods password
+    PubkeyAuthentication no"
+      ;;
+    both)
+      auth_block="    PasswordAuthentication yes
+    KbdInteractiveAuthentication no
+    AuthenticationMethods any
+    PubkeyAuthentication yes"
+      ;;
+    *)
+      die "Invalid --tunnel-auth value: ${TUNNEL_AUTH_METHOD}. Expected host_key|password|both."
+      ;;
+  esac
+
   local content
   content="# Managed by ${SCRIPT_NAME}
 AllowTcpForwarding yes
@@ -181,11 +286,8 @@ ClientAliveInterval 30
 ClientAliveCountMax 3
 
 Match User ${TUNNEL_USER}
-    PasswordAuthentication no
-    KbdInteractiveAuthentication no
-    AuthenticationMethods publickey
-    PubkeyAuthentication yes
-    PermitTTY no
+${auth_block}
+    PermitTTY yes
     X11Forwarding no
     AllowAgentForwarding no
     AllowStreamLocalForwarding no
@@ -196,78 +298,27 @@ Match User ${TUNNEL_USER}
 "
 
   write_file_if_changed "$sshd_dropin" 0644 root root "$content" || true
+
   sshd -t
   systemctl enable --now ssh
   systemctl restart ssh
 }
 
-configure_fail2ban() {
-  log "Configuring fail2ban (sshd jail)..."
-  local jail_file="/etc/fail2ban/jail.d/estherlink-sshd.local"
-  local content
-  content="# Managed by ${SCRIPT_NAME}
-[sshd]
-enabled = true
-port = ${SSH_PORT}
-backend = systemd
-maxretry = 5
-findtime = 10m
-bantime = 1h
-bantime.increment = true
-banaction = ufw
-"
+install_3xui_offline() {
+  progress 50 "Installing 3x-ui from offline bundle"
 
-  write_file_if_changed "$jail_file" 0644 root root "$content" || true
-  systemctl enable --now fail2ban
-  systemctl restart fail2ban
-}
+  local tar_path="$BUNDLE_DIR/xui/x-ui-linux-amd64.tar.gz"
+  [[ -f "$tar_path" ]] || die "x-ui archive not found: ${tar_path}"
 
-configure_firewall() {
-  log "Configuring UFW firewall..."
-  ufw --force default deny incoming
-  ufw --force default allow outgoing
-
-  ufw allow "${SSH_PORT}/tcp" comment "SSH"
-  ufw allow "${PUBLIC_PORT}/tcp" comment "OmniRelay client ingress (3x-ui/Xray)"
-  ufw allow "${PANEL_PORT}/tcp" comment "3x-ui panel"
-
-  ufw --force enable
-}
-
-disable_haproxy() {
-  if systemctl list-unit-files | grep -q '^haproxy\.service'; then
-    log "Disabling HAProxy to free ingress ownership for 3x-ui..."
-    systemctl disable --now haproxy || true
-  fi
-}
-
-fetch_latest_xui_version() {
-  local latest
-  latest="$(curl -fsSL "https://api.github.com/repos/MHSanaei/3x-ui/releases/latest" | jq -r '.tag_name // empty')"
-  [[ -n "$latest" ]] || die "Failed to fetch latest 3x-ui version tag from GitHub API."
-  printf '%s' "$latest"
-}
-
-install_3xui() {
-  local arch version download_url tmp
-  arch="$(detect_arch)"
-  version="${XUI_VERSION}"
-  if [[ -z "$version" ]]; then
-    version="$(fetch_latest_xui_version)"
-  fi
-
-  log "Installing 3x-ui (${version}) for architecture ${arch}..."
+  local tmp
   tmp="$(mktemp -d)"
-  download_url="https://github.com/MHSanaei/3x-ui/releases/download/${version}/x-ui-linux-${arch}.tar.gz"
-
-  curl -fL "$download_url" -o "${tmp}/x-ui.tar.gz"
-  tar -xzf "${tmp}/x-ui.tar.gz" -C "$tmp"
-  [[ -d "${tmp}/x-ui" ]] || die "Extracted archive does not contain x-ui directory."
+  tar -xzf "$tar_path" -C "$tmp"
+  [[ -d "$tmp/x-ui" ]] || die "Extracted x-ui archive does not contain x-ui directory."
 
   systemctl disable --now x-ui >/dev/null 2>&1 || true
   rm -rf /usr/local/x-ui
   mkdir -p /usr/local
-  mv "${tmp}/x-ui" /usr/local/x-ui
+  mv "$tmp/x-ui" /usr/local/x-ui
 
   chmod +x /usr/local/x-ui/x-ui
   chmod +x /usr/local/x-ui/x-ui.sh
@@ -298,6 +349,8 @@ detect_vps_ip() {
 }
 
 configure_panel_credentials() {
+  progress 62 "Configuring 3x-ui panel credentials"
+
   if [[ -z "$PANEL_USER" ]]; then
     PANEL_USER="omniadmin_$(random_string 6)"
   fi
@@ -307,11 +360,11 @@ configure_panel_credentials() {
   if [[ -z "$PANEL_BASE_PATH" ]]; then
     PANEL_BASE_PATH="$(random_string 18)"
   fi
+
   PANEL_BASE_PATH="${PANEL_BASE_PATH#/}"
   PANEL_BASE_PATH="${PANEL_BASE_PATH%/}"
   [[ -n "$PANEL_BASE_PATH" ]] || die "Panel base path cannot be empty."
 
-  log "Configuring panel credentials and endpoint..."
   /usr/local/x-ui/x-ui setting \
     -username "$PANEL_USER" \
     -password "$PANEL_PASSWORD" \
@@ -323,7 +376,7 @@ configure_panel_credentials() {
 generate_panel_self_signed_cert() {
   local endpoint cn san
 
-  endpoint="${VPS_IP}"
+  endpoint="$VPS_IP"
   if [[ -z "$endpoint" ]]; then
     endpoint="$(detect_vps_ip || true)"
   fi
@@ -339,7 +392,6 @@ generate_panel_self_signed_cert() {
     san="DNS:${endpoint}"
   fi
 
-  log "Generating self-signed TLS certificate for 3x-ui panel (${cn})..."
   openssl req -x509 -nodes -newkey rsa:3072 -sha256 -days 365 \
     -keyout "$PANEL_KEY_FILE" \
     -out "$PANEL_CERT_FILE" \
@@ -351,6 +403,8 @@ generate_panel_self_signed_cert() {
 }
 
 configure_panel_tls() {
+  progress 70 "Configuring 3x-ui panel TLS"
+
   if [[ -n "$PANEL_CERT_FILE" || -n "$PANEL_KEY_FILE" ]]; then
     [[ -n "$PANEL_CERT_FILE" && -n "$PANEL_KEY_FILE" ]] || die "Both --panel-cert-file and --panel-key-file are required together."
     [[ -f "$PANEL_CERT_FILE" ]] || die "--panel-cert-file not found: ${PANEL_CERT_FILE}"
@@ -359,7 +413,6 @@ configure_panel_tls() {
     generate_panel_self_signed_cert
   fi
 
-  log "Applying panel TLS certificate..."
   /usr/local/x-ui/x-ui cert -webCert "$PANEL_CERT_FILE" -webCertKey "$PANEL_KEY_FILE" >/dev/null
   systemctl restart x-ui
 }
@@ -408,34 +461,11 @@ write_xray_template() {
       }
     },
     {
-      "tag": "direct",
-      "protocol": "freedom",
-      "settings": {
-        "domainStrategy": "AsIs",
-        "redirect": "",
-        "noises": []
-      }
-    },
-    {
       "tag": "blocked",
       "protocol": "blackhole",
       "settings": {}
     }
   ],
-  "policy": {
-    "levels": {
-      "0": {
-        "statsUserDownlink": true,
-        "statsUserUplink": true
-      }
-    },
-    "system": {
-      "statsInboundDownlink": true,
-      "statsInboundUplink": true,
-      "statsOutboundDownlink": false,
-      "statsOutboundUplink": false
-    }
-  },
   "routing": {
     "domainStrategy": "AsIs",
     "rules": [
@@ -448,13 +478,6 @@ write_xray_template() {
       },
       {
         "type": "field",
-        "outboundTag": "blocked",
-        "protocol": [
-          "bittorrent"
-        ]
-      },
-      {
-        "type": "field",
         "network": "udp",
         "outboundTag": "blocked"
       },
@@ -464,20 +487,17 @@ write_xray_template() {
       }
     ]
   },
-  "stats": {},
-  "metrics": {
-    "tag": "metrics_out",
-    "listen": "127.0.0.1:11111"
-  }
+  "stats": {}
 }
 EOF
 }
 
 apply_fail_closed_xray_template() {
+  progress 78 "Applying fail-closed Xray template"
+
   local db_path="/etc/x-ui/x-ui.db"
   local template_path="/etc/x-ui/omnirelay-xray-template.json"
 
-  log "Applying fail-closed Xray outbound template (all client traffic via 127.0.0.1:${BACKEND_PORT})..."
   write_xray_template "$template_path"
 
   for _ in {1..20}; do
@@ -515,9 +535,245 @@ PY
   systemctl restart x-ui
 }
 
+configure_fail2ban() {
+  progress 84 "Configuring fail2ban"
+
+  local jail_file="/etc/fail2ban/jail.d/estherlink-sshd.local"
+  local content
+  content="# Managed by ${SCRIPT_NAME}
+[sshd]
+enabled = true
+port = ${SSH_PORT}
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h
+bantime.increment = true
+banaction = ufw
+"
+
+  write_file_if_changed "$jail_file" 0644 root root "$content" || true
+  systemctl enable --now fail2ban
+  systemctl restart fail2ban
+}
+
+configure_firewall() {
+  progress 89 "Configuring firewall"
+
+  ufw --force default deny incoming
+  ufw --force default allow outgoing
+
+  ufw allow "${SSH_PORT}/tcp" comment "SSH"
+  ufw allow "${PUBLIC_PORT}/tcp" comment "OmniRelay client ingress"
+  ufw allow "${PANEL_PORT}/tcp" comment "3x-ui panel"
+
+  ufw --force enable
+}
+
+disable_haproxy() {
+  if systemctl list-unit-files | grep -q '^haproxy\.service'; then
+    systemctl disable --now haproxy || true
+  fi
+}
+
+check_listener() {
+  local port="$1"
+  if ss -lnt "( sport = :${port} )" 2>/dev/null | awk 'NR>1 {print $0}' | grep -q .; then
+    echo true
+  else
+    echo false
+  fi
+}
+
+status_impl() {
+  local ssh_state xui_state fail2ban_state tunnel_listener ingress_listener panel_listener
+  ssh_state="$(systemctl is-active ssh 2>/dev/null || echo inactive)"
+  xui_state="$(systemctl is-active x-ui 2>/dev/null || echo inactive)"
+  fail2ban_state="$(systemctl is-active fail2ban 2>/dev/null || echo inactive)"
+  tunnel_listener="$(check_listener "$BACKEND_PORT")"
+  ingress_listener="$(check_listener "$PUBLIC_PORT")"
+  panel_listener="$(check_listener "$PANEL_PORT")"
+
+  if (( STATUS_JSON == 1 )); then
+    printf '{"sshState":"%s","xuiState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s}\n' \
+      "$(json_escape "$ssh_state")" \
+      "$(json_escape "$xui_state")" \
+      "$(json_escape "$fail2ban_state")" \
+      "$BACKEND_PORT" \
+      "$PUBLIC_PORT" \
+      "$PANEL_PORT" \
+      "$tunnel_listener" \
+      "$ingress_listener" \
+      "$panel_listener"
+    return
+  fi
+
+  cat <<EOF
+Gateway status:
+  sshd:      ${ssh_state}
+  x-ui:      ${xui_state}
+  fail2ban:  ${fail2ban_state}
+  backend listener 127.0.0.1:${BACKEND_PORT}: ${tunnel_listener}
+  public listener 0.0.0.0:${PUBLIC_PORT}: ${ingress_listener}
+  panel listener 0.0.0.0:${PANEL_PORT}: ${panel_listener}
+EOF
+}
+
+health_impl() {
+  progress 5 "Running gateway health checks"
+  local ssh_state xui_state fail2ban_state tunnel_listener ingress_listener panel_listener healthy
+
+  ssh_state="$(systemctl is-active ssh 2>/dev/null || echo inactive)"
+  xui_state="$(systemctl is-active x-ui 2>/dev/null || echo inactive)"
+  fail2ban_state="$(systemctl is-active fail2ban 2>/dev/null || echo inactive)"
+
+  progress 45 "Checking expected listeners"
+  tunnel_listener="$(check_listener "$BACKEND_PORT")"
+  ingress_listener="$(check_listener "$PUBLIC_PORT")"
+  panel_listener="$(check_listener "$PANEL_PORT")"
+
+  healthy=true
+  [[ "$ssh_state" == "active" ]] || healthy=false
+  [[ "$xui_state" == "active" ]] || healthy=false
+  [[ "$fail2ban_state" == "active" ]] || healthy=false
+  [[ "$ingress_listener" == "true" ]] || healthy=false
+  [[ "$panel_listener" == "true" ]] || healthy=false
+
+  progress 100 "Health checks completed"
+
+  if (( HEALTH_JSON == 1 )); then
+    printf '{"healthy":%s,"sshState":"%s","xuiState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s}\n' \
+      "$healthy" \
+      "$(json_escape "$ssh_state")" \
+      "$(json_escape "$xui_state")" \
+      "$(json_escape "$fail2ban_state")" \
+      "$BACKEND_PORT" \
+      "$PUBLIC_PORT" \
+      "$PANEL_PORT" \
+      "$tunnel_listener" \
+      "$ingress_listener" \
+      "$panel_listener"
+    return
+  fi
+
+  cat <<EOF
+Gateway health: ${healthy}
+  sshd:      ${ssh_state}
+  x-ui:      ${xui_state}
+  fail2ban:  ${fail2ban_state}
+  backend listener 127.0.0.1:${BACKEND_PORT}: ${tunnel_listener}
+  public listener 0.0.0.0:${PUBLIC_PORT}: ${ingress_listener}
+  panel listener 0.0.0.0:${PANEL_PORT}: ${panel_listener}
+EOF
+}
+
+start_impl() {
+  require_root
+  progress 12 "Starting sshd"
+  systemctl start ssh
+  progress 45 "Starting fail2ban"
+  systemctl start fail2ban
+  progress 75 "Starting x-ui"
+  systemctl start x-ui
+  progress 100 "Gateway services started"
+}
+
+stop_impl() {
+  require_root
+  progress 20 "Stopping x-ui"
+  systemctl stop x-ui || true
+  progress 100 "Gateway service stop completed"
+}
+
+uninstall_impl() {
+  require_root
+  progress 10 "Stopping x-ui"
+  systemctl disable --now x-ui || true
+
+  progress 40 "Removing x-ui files"
+  rm -rf /usr/local/x-ui /etc/x-ui /var/log/x-ui
+  rm -f /usr/bin/x-ui /etc/systemd/system/x-ui.service
+  rm -f /usr/local/sbin/omnirelay-gatewayctl
+
+  progress 70 "Cleaning managed sshd drop-in"
+  rm -f /etc/ssh/sshd_config.d/99-estherlink.conf
+  sshd -t || true
+  systemctl restart ssh || true
+
+  progress 100 "Gateway uninstall completed"
+}
+
+print_summary() {
+  local endpoint panel_url
+  endpoint="$VPS_IP"
+  if [[ -z "$endpoint" ]]; then
+    endpoint="$(detect_vps_ip || true)"
+  fi
+  if [[ -z "$endpoint" ]]; then
+    endpoint="<VPS_IP_OR_HOSTNAME>"
+  fi
+
+  panel_url="https://${endpoint}:${PANEL_PORT}/${PANEL_BASE_PATH}/"
+
+  cat <<EOF
+
+============================================================
+OmniRelay VPS 3x-ui offline install complete.
+
+Services:
+  - sshd:      $(systemctl is-active ssh || true)
+  - x-ui:      $(systemctl is-active x-ui || true)
+  - fail2ban:  $(systemctl is-active fail2ban || true)
+
+Panel:
+  URL:      ${panel_url}
+  Username: ${PANEL_USER}
+  Password: ${PANEL_PASSWORD}
+
+Traffic model:
+  Client -> VPS:${PUBLIC_PORT} -> x-ui/Xray -> http://127.0.0.1:${BACKEND_PORT}
+  -> SSH reverse tunnel -> Windows proxy
+============================================================
+EOF
+}
+
+install_impl() {
+  require_root
+  require_bundle
+
+  progress 3 "Validating platform"
+  detect_arch >/dev/null
+  local codename
+  codename="$(detect_codename)"
+
+  install_packages_offline "$codename"
+  setup_tunnel_user
+  configure_sshd
+  disable_haproxy
+  install_3xui_offline
+  configure_panel_credentials
+  configure_panel_tls
+  apply_fail_closed_xray_template
+  configure_fail2ban
+  configure_firewall
+  install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
+
+  progress 100 "Gateway install completed"
+  print_summary
+}
+
 parse_args() {
+  if [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; then
+    COMMAND="$1"
+    shift
+  fi
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --bundle-dir)
+        BUNDLE_DIR="${2:-}"
+        shift 2
+        ;;
       --public-port)
         PUBLIC_PORT="${2:-}"
         shift 2
@@ -534,6 +790,14 @@ parse_args() {
         SSH_PORT="${2:-}"
         shift 2
         ;;
+      --tunnel-user)
+        TUNNEL_USER="${2:-}"
+        shift 2
+        ;;
+      --tunnel-auth)
+        TUNNEL_AUTH_METHOD="${2:-}"
+        shift 2
+        ;;
       --vps-ip)
         VPS_IP="${2:-}"
         shift 2
@@ -544,10 +808,6 @@ parse_args() {
         ;;
       --pubkey-file)
         PUBKEY_FILE="${2:-}"
-        shift 2
-        ;;
-      --xui-version)
-        XUI_VERSION="${2:-}"
         shift 2
         ;;
       --panel-user)
@@ -570,6 +830,11 @@ parse_args() {
         PANEL_KEY_FILE="${2:-}"
         shift 2
         ;;
+      --json)
+        STATUS_JSON=1
+        HEALTH_JSON=1
+        shift
+        ;;
       -h|--help)
         usage
         exit 0
@@ -581,89 +846,7 @@ parse_args() {
   done
 }
 
-print_summary() {
-  local endpoint panel_url
-  endpoint="${VPS_IP}"
-  if [[ -z "$endpoint" ]]; then
-    endpoint="$(detect_vps_ip || true)"
-  fi
-  if [[ -z "$endpoint" ]]; then
-    endpoint="<VPS_IP_OR_HOSTNAME>"
-  fi
-
-  panel_url="https://${endpoint}:${PANEL_PORT}/${PANEL_BASE_PATH}/"
-
-  cat <<EOF
-
-============================================================
-OmniRelay VPS 3x-ui ingress setup complete.
-
-Services:
-  - sshd:      $(systemctl is-active ssh || true)
-  - x-ui:      $(systemctl is-active x-ui || true)
-  - fail2ban:  $(systemctl is-active fail2ban || true)
-  - haproxy:   $(systemctl is-active haproxy 2>/dev/null || echo "inactive/not-installed")
-
-Firewall (UFW):
-$(ufw status verbose || true)
-
-Traffic model:
-  Client -> VPS:${PUBLIC_PORT} (3x-ui/Xray inbound) -> outbound http://127.0.0.1:${BACKEND_PORT}
-  -> SSH reverse tunnel -> Windows 127.0.0.1:<WINDOWS_PROXY_PORT>
-
-Fail-closed behavior:
-  - Xray default outbound is forced to 127.0.0.1:${BACKEND_PORT}
-  - UDP is blocked by routing rule
-  - If tunnel/proxy is down, client traffic fails (no direct VPS fallback)
-
-3x-ui panel:
-  URL:      ${panel_url}
-  Username: ${PANEL_USER}
-  Password: ${PANEL_PASSWORD}
-  TLS cert: ${PANEL_CERT_FILE}
-  TLS key:  ${PANEL_KEY_FILE}
-
-Windows reverse tunnel command (run on Windows):
-  ssh -NT \\
-    -o ExitOnForwardFailure=yes \\
-    -o ServerAliveInterval=30 \\
-    -o ServerAliveCountMax=3 \\
-    -o TCPKeepAlive=yes \\
-    -R 127.0.0.1:${BACKEND_PORT}:127.0.0.1:<WINDOWS_PROXY_PORT> \\
-    ${TUNNEL_USER}@${endpoint} -p ${SSH_PORT}
-
-3x-ui post-install (panel):
-  1) Create inbound: VLESS + TCP + REALITY
-  2) Bind inbound to 0.0.0.0:${PUBLIC_PORT}
-  3) Keep client profiles TCP-only (disable UDP for launch)
-  4) Manage all client auth/profiles from 3x-ui panel
-
-Validation commands:
-  - sshd config:           sshd -t
-  - x-ui status:           systemctl status x-ui --no-pager
-  - x-ui logs:             journalctl -u x-ui -f
-  - ssh logs:              journalctl -u ssh -f
-  - fail2ban status:       fail2ban-client status sshd
-  - listeners check:       ss -lnt | grep -E ':${SSH_PORT}\\b|:${PANEL_PORT}\\b|:${PUBLIC_PORT}\\b|:${BACKEND_PORT}\\b'
-  - tunnel endpoint probe: timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/${BACKEND_PORT}' && echo OPEN || echo CLOSED
-
-Security checks:
-  - Reverse tunnel port is loopback-only by policy:
-    PermitListen 127.0.0.1:${BACKEND_PORT}
-  - No intended public listener on :${BACKEND_PORT}
-  - SSH tunnel user has no shell and key-only auth
-
-Rollback path:
-  - Old HAProxy script remains available:
-    scripts/setup_estherlink_vps.sh
-============================================================
-EOF
-}
-
-main() {
-  require_root
-  parse_args "$@"
-
+validate_common() {
   validate_port "$PUBLIC_PORT" "--public-port"
   validate_port "$PANEL_PORT" "--panel-port"
   validate_port "$BACKEND_PORT" "--backend-port"
@@ -682,18 +865,39 @@ main() {
     warn "Public key does not look like a standard SSH key. Continuing anyway."
   fi
 
-  install_packages
-  setup_tunnel_user
-  configure_sshd
-  disable_haproxy
-  install_3xui
-  configure_panel_credentials
-  configure_panel_tls
-  apply_fail_closed_xray_template
-  configure_fail2ban
-  configure_firewall
-  print_summary
+  case "$TUNNEL_AUTH_METHOD" in
+    host_key|password|both) ;;
+    *) die "Invalid --tunnel-auth value: ${TUNNEL_AUTH_METHOD}. Expected host_key|password|both." ;;
+  esac
+}
+
+main() {
+  parse_args "$@"
+  validate_common
+
+  case "$COMMAND" in
+    install)
+      install_impl
+      ;;
+    uninstall)
+      uninstall_impl
+      ;;
+    start)
+      start_impl
+      ;;
+    stop)
+      stop_impl
+      ;;
+    status)
+      status_impl
+      ;;
+    health)
+      health_impl
+      ;;
+    *)
+      die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|status|health"
+      ;;
+  esac
 }
 
 main "$@"
-

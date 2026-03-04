@@ -25,6 +25,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="Proxy Listen Port" Style="{StaticResource FormLabelStyle}"/>
@@ -53,6 +54,9 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -138,6 +142,27 @@
                                 Style="{StaticResource SecondaryButtonStyle}"
                                 Margin="10,6,0,6"/>
                     </StackPanel>
+
+                    <TextBlock Grid.Row="8"
+                               Grid.ColumnSpan="2"
+                               Margin="0,12,0,4"
+                               Text="Gateway Deployment Defaults"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource Brush.Text}"/>
+
+                    <TextBlock Grid.Row="9" Text="Gateway Public Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="9" Grid.Column="1" Text="{Binding State.GatewayPublicPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="10" Text="Gateway Panel Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="10" Grid.Column="1" Text="{Binding State.GatewayPanelPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+
+                    <TextBlock Grid.Row="11" Text="Gateway Backend Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="11"
+                             Grid.Column="1"
+                             Text="{Binding State.GatewayBackendPortText}"
+                             IsReadOnly="True"
+                             ToolTip="Derived from Tunnel Remote Port."
+                             Style="{StaticResource FormTextBoxStyle}"/>
                 </Grid>
             </Border>
 

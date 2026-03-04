@@ -39,6 +39,12 @@ public partial class App : Application
         services.AddSingleton<GatewayStateStore>();
         services.AddSingleton<IGatewayClientService, GatewayClientService>();
         services.AddSingleton<IServiceControlService, ServiceControlService>();
+        services.AddSingleton<ISshHostKeyTrustStore, SshHostKeyTrustStore>();
+        services.AddSingleton<IGatewayBundleResolverService, GatewayBundleResolverService>();
+        services.AddSingleton<IGatewayDeploymentService, GatewayDeploymentService>();
+        services.AddSingleton<IGatewayHealthService, GatewayDeploymentService>();
+        services.AddSingleton<IDeploymentProgressAggregator, DeploymentProgressAggregator>();
+        services.AddSingleton<ISudoSessionSecretCache, SudoSessionSecretCache>();
         services.AddSingleton<ILogReaderService, LogReaderService>();
         services.AddSingleton<IUiSettingsService, UiSettingsService>();
         services.AddSingleton<IThemeService, ThemeService>();

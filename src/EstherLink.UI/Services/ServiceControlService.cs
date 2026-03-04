@@ -96,6 +96,20 @@ if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {{
         return await RunElevatedPowerShellScriptAsync(script, cancellationToken);
     }
 
+    public async Task<bool> UninstallWindowsServiceAsync(CancellationToken cancellationToken = default)
+    {
+        var script = $@"
+$ErrorActionPreference = 'Stop'
+$serviceName = '{ServiceName}'
+if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {{
+    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+    sc.exe delete $serviceName | Out-Null
+}}
+";
+
+        return await RunElevatedPowerShellScriptAsync(script, cancellationToken);
+    }
+
     private static async Task<bool> RunElevatedPowerShellScriptAsync(string script, CancellationToken cancellationToken)
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"estherlink-ui-{Guid.NewGuid():N}.ps1");

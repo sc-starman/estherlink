@@ -160,10 +160,13 @@ dotnet run --project src/EstherLink.UI
 
 In UI:
 1. Select `VPS Network (IC1)` and `Outgoing Network (IC2)` adapters.
-2. Enter VPS host/port, proxy listen port, license endpoint/key.
-3. Update whitelist.
-4. Verify license.
-5. Install/Start service (or start proxy when service runs in console mode).
+2. Enter tunnel host/user/auth settings and proxy listen port.
+3. Configure gateway public/panel ports in Network Configuration.
+4. Update whitelist and verify license.
+5. Open `Service Status` and use:
+   - Relay controls (Install/Start/Stop/Uninstall)
+   - Gateway controls (Install/Start/Stop/Uninstall/Health Check)
+   - `Install/Start All` for end-to-end deployment.
 
 ## Publish Windows Service
 
@@ -175,6 +178,16 @@ dotnet publish src/EstherLink.Service -c Release -r win-x64 --self-contained fal
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_msi.ps1 -Configuration Release
+```
+
+Release MSI requires offline gateway bundle files:
+- `src/EstherLink.UI/Assets/GatewayBundle/omnirelay-vps-bundle-x64.tar.gz`
+- `src/EstherLink.UI/Assets/GatewayBundle/omnirelay-vps-bundle-x64.tar.gz.sha256`
+
+Build the bundle first (Linux/macOS host with Docker):
+
+```bash
+bash scripts/build_omnirelay_vps_bundle.sh --output-dir src/EstherLink.UI/Assets/GatewayBundle --xui-version v2.6.5
 ```
 
 Output:
@@ -274,13 +287,14 @@ Primary ingress path (current):
 - Fail mode is fail-closed for client traffic (no direct VPS fallback).
 
 Helper setup scripts:
-- Primary: `scripts/setup_omnirelay_vps_3xui.sh`
+- Primary control script (command-mode): `scripts/setup_omnirelay_vps_3xui.sh`
+- Offline bundle builder: `scripts/build_omnirelay_vps_bundle.sh`
 - Rollback/legacy: `scripts/setup_estherlink_vps.sh`
 
-Example (primary path):
+Example (manual offline install, if not using UI deploy):
 
 ```bash
-sudo bash scripts/setup_omnirelay_vps_3xui.sh --public-port 443 --panel-port 8443 --backend-port 15000 --ssh-port 22 --pubkey-file /root/windows_tunnel.pub
+sudo bash scripts/setup_omnirelay_vps_3xui.sh install --bundle-dir /opt/omnirelay/bundle --public-port 443 --panel-port 8443 --backend-port 15000 --ssh-port 22 --tunnel-user estherlink --tunnel-auth host_key
 ```
 
 ## Notes
