@@ -1,0 +1,220 @@
+using System.Net;
+using EstherLink.Core.Configuration;
+using EstherLink.Core.Licensing;
+using EstherLink.Core.Policy;
+using EstherLink.Core.Status;
+
+namespace EstherLink.Service.Runtime;
+
+public sealed class GatewayRuntime
+{
+    private readonly object _sync = new();
+    private readonly ConfigStore _configStore;
+    private readonly FileLogWriter _log;
+
+    private ServiceConfig _config;
+    private IReadOnlyList<string> _whitelistEntries;
+    private WhitelistSet _whitelist;
+    private bool _proxyRequested;
+    private GatewayStatus _status;
+
+    public GatewayRuntime(ConfigStore configStore, FileLogWriter log)
+    {
+        _configStore = configStore;
+        _log = log;
+
+        var persisted = _configStore.Load();
+        _config = CloneConfig(persisted.Config);
+        _whitelistEntries = persisted.WhitelistEntries.ToList();
+
+        if (!WhitelistSet.TryCreate(_whitelistEntries, out _whitelist, out var errors))
+        {
+            _whitelist = WhitelistSet.Empty;
+            _whitelistEntries = [];
+            _log.Warn($"Invalid persisted whitelist ignored: {string.Join("; ", errors)}");
+        }
+
+        _status = new GatewayStatus
+        {
+            ServiceRunning = true,
+            ProxyRunning = false,
+            ProxyListenPort = _config.LocalProxyListenPort,
+            WhitelistCount = _whitelist.Rules.Count,
+            WhitelistMode = _config.WhitelistMode.ToString()
+        };
+    }
+
+    public ServiceConfig GetConfigSnapshot()
+    {
+        lock (_sync)
+        {
+            return CloneConfig(_config);
+        }
+    }
+
+    public WhitelistSet GetWhitelistSnapshot()
+    {
+        lock (_sync)
+        {
+            return _whitelist;
+        }
+    }
+
+    public IReadOnlyList<string> GetWhitelistEntriesSnapshot()
+    {
+        lock (_sync)
+        {
+            return _whitelistEntries.ToList();
+        }
+    }
+
+    public void SetConfig(ServiceConfig config)
+    {
+        lock (_sync)
+        {
+            _config = CloneConfig(config);
+            _status.ProxyListenPort = _config.LocalProxyListenPort;
+            _status.WhitelistMode = _config.WhitelistMode.ToString();
+            PersistLocked();
+        }
+    }
+
+    public bool TryUpdateWhitelist(IEnumerable<string> entries, out string? error)
+    {
+        var normalized = entries
+            .Select(x => (x ?? string.Empty).Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList();
+
+        if (!WhitelistSet.TryCreate(normalized, out var parsed, out var errors))
+        {
+            error = string.Join("; ", errors);
+            return false;
+        }
+
+        lock (_sync)
+        {
+            _whitelist = parsed;
+            _whitelistEntries = normalized;
+            _status.WhitelistCount = parsed.Rules.Count;
+            PersistLocked();
+        }
+
+        error = null;
+        return true;
+    }
+
+    public bool ShouldUseWhitelistAdapter(IPAddress? sourceAddress, IPAddress? destinationAddress)
+    {
+        lock (_sync)
+        {
+            return _whitelist.Matches(sourceAddress, destinationAddress, _config.WhitelistMode);
+        }
+    }
+
+    public void RequestProxyStart()
+    {
+        lock (_sync)
+        {
+            _proxyRequested = true;
+        }
+    }
+
+    public void RequestProxyStop()
+    {
+        lock (_sync)
+        {
+            _proxyRequested = false;
+            _status.ProxyRunning = false;
+        }
+    }
+
+    public bool IsProxyRequested()
+    {
+        lock (_sync)
+        {
+            return _proxyRequested;
+        }
+    }
+
+    public void SetProxyRunning(bool running, int port)
+    {
+        lock (_sync)
+        {
+            _status.ProxyRunning = running;
+            _status.ProxyListenPort = port;
+        }
+    }
+
+    public void SetAdapterIps(string? whitelistAdapterIp, string? defaultAdapterIp)
+    {
+        lock (_sync)
+        {
+            _status.WhitelistAdapterIp = whitelistAdapterIp;
+            _status.DefaultAdapterIp = defaultAdapterIp;
+        }
+    }
+
+    public void SetLicenseStatus(LicenseValidationResult result)
+    {
+        lock (_sync)
+        {
+            _status.LicenseValid = result.IsValid;
+            _status.LicenseFromCache = result.FromCache;
+            _status.LicenseCheckedAtUtc = result.CheckedAtUtc;
+            _status.LicenseExpiresAtUtc = result.ExpiresAtUtc;
+            _status.LastError = result.Error;
+        }
+    }
+
+    public void SetError(string? message)
+    {
+        lock (_sync)
+        {
+            _status.LastError = message;
+        }
+    }
+
+    public GatewayStatus GetStatusSnapshot()
+    {
+        lock (_sync)
+        {
+            return new GatewayStatus
+            {
+                ServiceRunning = _status.ServiceRunning,
+                ProxyRunning = _status.ProxyRunning,
+                ProxyListenPort = _status.ProxyListenPort,
+                LicenseValid = _status.LicenseValid,
+                LicenseFromCache = _status.LicenseFromCache,
+                LicenseCheckedAtUtc = _status.LicenseCheckedAtUtc,
+                LicenseExpiresAtUtc = _status.LicenseExpiresAtUtc,
+                WhitelistAdapterIp = _status.WhitelistAdapterIp,
+                DefaultAdapterIp = _status.DefaultAdapterIp,
+                WhitelistCount = _status.WhitelistCount,
+                WhitelistMode = _status.WhitelistMode,
+                LastError = _status.LastError
+            };
+        }
+    }
+
+    private void PersistLocked()
+    {
+        _configStore.Save(_config, _whitelistEntries);
+    }
+
+    private static ServiceConfig CloneConfig(ServiceConfig config)
+    {
+        return new ServiceConfig
+        {
+            VpsHost = config.VpsHost,
+            VpsPort = config.VpsPort,
+            LocalProxyListenPort = config.LocalProxyListenPort,
+            WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
+            DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
+            WhitelistMode = config.WhitelistMode,
+            ExpectProxyProtocolV2 = config.ExpectProxyProtocolV2,
+            LicenseServerUrl = config.LicenseServerUrl,
+            LicenseKey = config.LicenseKey
+        };
+    }
+}
