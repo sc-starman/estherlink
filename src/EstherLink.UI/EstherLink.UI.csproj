@@ -4,6 +4,10 @@
     <ProjectReference Include="..\EstherLink.Core\EstherLink.Core.csproj" />
     <ProjectReference Include="..\EstherLink.Ipc\EstherLink.Ipc.csproj" />
   </ItemGroup>
+  
+  <ItemGroup>
+    <Resource Include="Assets\logo.png" />
+  </ItemGroup>
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>

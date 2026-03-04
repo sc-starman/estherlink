@@ -29,7 +29,6 @@ public partial class MainWindow : Window
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         LoadAdapters();
-        LoadModes();
         ServiceExePathTextBox.Text = GetDefaultServiceExePath();
 
         _statusTimer.Tick += async (_, _) => await RefreshStatusAsync();
@@ -59,18 +58,6 @@ public partial class MainWindow : Window
             VpsNetworkComboBox.SelectedIndex = 0;
             OutgoingNetworkComboBox.SelectedIndex = Math.Min(1, adapters.Count - 1);
         }
-    }
-
-    private void LoadModes()
-    {
-        var modes = new List<WhitelistModeChoice>
-        {
-            new("Whitelist by Destination (target IP)", RoutingPolicyMode.DestinationOnly),
-            new("Whitelist by Source (client IP via PROXY v2)", RoutingPolicyMode.SourceOnly)
-        };
-
-        WhitelistModeComboBox.ItemsSource = modes;
-        WhitelistModeComboBox.SelectedIndex = 0;
     }
 
     private async void VerifyLicenseButton_Click(object sender, RoutedEventArgs e)
@@ -298,8 +285,6 @@ public partial class MainWindow : Window
 
         var vpsAdapter = VpsNetworkComboBox.SelectedItem as AdapterChoice;
         var outgoingAdapter = OutgoingNetworkComboBox.SelectedItem as AdapterChoice;
-        var mode = (WhitelistModeComboBox.SelectedItem as WhitelistModeChoice)?.Mode ?? RoutingPolicyMode.DestinationOnly;
-
         return new ServiceConfig
         {
             VpsHost = VpsHostTextBox.Text.Trim(),
@@ -307,8 +292,8 @@ public partial class MainWindow : Window
             LocalProxyListenPort = proxyPort,
             WhitelistAdapterIfIndex = vpsAdapter?.IfIndex ?? -1,
             DefaultAdapterIfIndex = outgoingAdapter?.IfIndex ?? -1,
-            WhitelistMode = mode,
-            ExpectProxyProtocolV2 = ProxyV2CheckBox.IsChecked == true,
+            WhitelistMode = RoutingPolicyMode.DestinationOnly,
+            ExpectProxyProtocolV2 = false,
             LicenseServerUrl = LicenseEndpointTextBox.Text.Trim(),
             LicenseKey = LicenseKeyTextBox.Text.Trim()
         };
@@ -479,10 +464,5 @@ if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {{
     }
 
     private sealed record AdapterChoice(int IfIndex, string Display);
-    private sealed record WhitelistModeChoice(string Display, RoutingPolicyMode Mode)
-    {
-        public override string ToString() => Display;
-    }
-
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
 }

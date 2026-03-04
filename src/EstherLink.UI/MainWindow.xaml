@@ -26,7 +26,23 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <TextBlock Grid.Row="0" Grid.ColumnSpan="4" FontSize="22" FontWeight="SemiBold" Text="EstherLink MVP Control Panel"/>
+        <Grid Grid.Row="0" Grid.ColumnSpan="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Image Width="40"
+                   Height="40"
+                   Margin="0,0,10,0"
+                   VerticalAlignment="Center"
+                   Source="pack://application:,,,/Assets/logo.png"
+                   Stretch="Uniform"/>
+            <TextBlock Grid.Column="1"
+                       VerticalAlignment="Center"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Text="EstherLink MVP Control Panel"/>
+        </Grid>
         <TextBlock Grid.Row="1" Grid.ColumnSpan="4" Margin="0,6,0,14" Foreground="#555" Text="Windows service + CONNECT proxy with adapter-bound egress (IC1/IC2)."/>
 
         <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Text="VPS Host/IP"/>
@@ -37,9 +53,6 @@
 
         <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Text="Proxy Listen Port"/>
         <TextBox Grid.Row="3" Grid.Column="1" x:Name="ProxyPortTextBox" Margin="8,4,12,4" Text="19080"/>
-
-        <TextBlock Grid.Row="3" Grid.Column="2" VerticalAlignment="Center" Text="Whitelist Mode"/>
-        <ComboBox Grid.Row="3" Grid.Column="3" x:Name="WhitelistModeComboBox" Margin="8,4,0,4"/>
 
         <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Text="VPS Network (IC1)"/>
         <ComboBox Grid.Row="4" Grid.Column="1" x:Name="VpsNetworkComboBox" Margin="8,4,12,4" DisplayMemberPath="Display"/>
@@ -72,8 +85,6 @@
 
             <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,8,0,0" Text="Service EXE Path"/>
             <TextBox Grid.Row="3" Grid.Column="0" x:Name="ServiceExePathTextBox" Margin="130,8,12,0"/>
-
-            <CheckBox Grid.Row="4" Grid.Column="0" x:Name="ProxyV2CheckBox" Margin="130,8,12,0" Content="Expect PROXY protocol v2 on listener"/>
 
             <TextBox Grid.Row="1" Grid.Column="1" Grid.RowSpan="5" x:Name="WhitelistTextBox" Margin="12,8,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" MinHeight="220" FontFamily="Consolas"/>
         </Grid>
