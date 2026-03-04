@@ -23,6 +23,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EstherLink.Backend.Integrat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EstherLink.UI.Tests", "tests\EstherLink.UI.Tests\EstherLink.UI.Tests.csproj", "{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}"
 EndProject
+Project("{930C7802-8A8C-48F9-8165-68863BCCD9DD}") = "EstherLink.Installer", "src\EstherLink.Installer\EstherLink.Installer.wixproj", "{91A88CE5-6033-496D-AD79-2050E83B0456}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -129,6 +131,12 @@ Global
 		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|x64.Build.0 = Release|Any CPU
 		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|x86.ActiveCfg = Release|Any CPU
 		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98}.Release|x86.Build.0 = Release|Any CPU
+		{91A88CE5-6033-496D-AD79-2050E83B0456}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{91A88CE5-6033-496D-AD79-2050E83B0456}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{91A88CE5-6033-496D-AD79-2050E83B0456}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{91A88CE5-6033-496D-AD79-2050E83B0456}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{91A88CE5-6033-496D-AD79-2050E83B0456}.Release|x64.ActiveCfg = Release|Any CPU
+		{91A88CE5-6033-496D-AD79-2050E83B0456}.Release|x86.ActiveCfg = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -142,5 +150,6 @@ Global
 		{903A8E54-B5EA-42FC-85CA-AD32F5C9FAC2} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{625A8573-B893-404E-8EE2-7E14ED61F843} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{A1B4DEB0-616D-4254-87C8-B5B9620EBB98} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{91A88CE5-6033-496D-AD79-2050E83B0456} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

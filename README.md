@@ -19,6 +19,8 @@ Traffic flow:
   - Windows Service host + CONNECT proxy engine + licensing + persistence.
 - `src/EstherLink.UI`
   - WPF control panel for configuration, whitelist, license verify, service control.
+- `src/EstherLink.Installer`
+  - WiX-based MSI installer packaging UI + Service for Windows.
 - `src/EstherLink.Backend`
   - .NET 8 minimal API for licensing, whitelist updates, app releases.
 - `src/EstherLink.Backend.Contracts`
@@ -169,13 +171,23 @@ In UI:
 dotnet publish src/EstherLink.Service -c Release -r win-x64 --self-contained false -o .\out\service
 ```
 
-Set UI `Service EXE Path` to:
+## Build Windows MSI (UI + Service)
 
-```text
-<repo>\out\service\EstherLink.Service.exe
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_msi.ps1 -Configuration Release
 ```
 
-Then click `Install/Start Service` in UI (UAC prompt appears).
+Output:
+
+```text
+<repo>\src\EstherLink.Installer\bin\Release\OmniRelay.msi
+```
+
+MSI behavior:
+1. Installs UI binaries under `Program Files\OmniRelay\UI`.
+2. Installs Service binaries under `Program Files\OmniRelay\Service`.
+3. Registers and starts `EstherLink.Service` (DisplayName: `OmniRelay Service`).
+4. Creates Start Menu shortcut for OmniRelay UI.
 
 ## Run Backend with Docker
 

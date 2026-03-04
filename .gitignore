@@ -14,6 +14,7 @@
 [Ee]xt/
 [Ll]og/
 [Ll]ogs/
+src/EstherLink.Installer/payload/
 
 # MSBuild Binary and Structured Log
 *.binlog
