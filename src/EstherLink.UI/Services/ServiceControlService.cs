@@ -8,6 +8,7 @@ namespace EstherLink.UI.Services;
 public sealed class ServiceControlService : IServiceControlService
 {
     private const string ServiceName = "EstherLink.Service";
+    private const string ServiceExeName = "EstherLink.Service.exe";
 
     public async Task<string> QueryServiceStateAsync(CancellationToken cancellationToken = default)
     {
@@ -49,15 +50,29 @@ public sealed class ServiceControlService : IServiceControlService
         return stateLine.Trim();
     }
 
-    public async Task<bool> InstallOrStartWindowsServiceAsync(string exePath, CancellationToken cancellationToken = default)
+    public async Task<bool> InstallOrStartWindowsServiceAsync(CancellationToken cancellationToken = default)
     {
-        var escapedPath = exePath.Replace("'", "''", StringComparison.Ordinal);
+        var serviceInstalled = await IsServiceInstalledAsync(cancellationToken);
+        var serviceExePath = serviceInstalled ? null : ResolveServiceExecutablePath();
+        if (!serviceInstalled && string.IsNullOrWhiteSpace(serviceExePath))
+        {
+            return false;
+        }
+
+        var escapedPath = (serviceExePath ?? string.Empty).Replace("'", "''", StringComparison.Ordinal);
+        var createBlock = serviceInstalled
+            ? string.Empty
+            : @"
+$binPath = '" + escapedPath + @"'
+$binaryPathName = '""' + $binPath + '""'
+New-Service -Name $serviceName -DisplayName 'EstherLink Service' -BinaryPathName $binaryPathName -StartupType Automatic
+";
+
         var script = $@"
 $ErrorActionPreference = 'Stop'
 $serviceName = '{ServiceName}'
-$binPath = '{escapedPath}'
 if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {{
-    New-Service -Name $serviceName -DisplayName 'EstherLink Service' -BinaryPathName $binPath -StartupType Automatic
+{createBlock}
 }}
 $svc = Get-Service -Name $serviceName
 if ($svc.Status -ne 'Running') {{
@@ -151,6 +166,46 @@ if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {{
             process.ExitCode,
             await stdOutTask,
             await stdErrTask);
+    }
+
+    private static async Task<bool> IsServiceInstalledAsync(CancellationToken cancellationToken)
+    {
+        var result = await RunProcessCaptureAsync("sc.exe", $"query {ServiceName}", cancellationToken);
+        return result.ExitCode == 0;
+    }
+
+    private static string? ResolveServiceExecutablePath()
+    {
+        var env = Environment.GetEnvironmentVariable("ESTHERLINK_SERVICE_EXE_PATH");
+        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
+        {
+            return Path.GetFullPath(env);
+        }
+
+        var baseDir = AppContext.BaseDirectory;
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, ServiceExeName),
+            Path.Combine(baseDir, "service", ServiceExeName),
+            Path.Combine(baseDir, "..", ServiceExeName),
+            Path.Combine(baseDir, "..", "service", ServiceExeName),
+            Path.Combine(baseDir, "..", "..", ServiceExeName),
+            Path.Combine(baseDir, "..", "..", "service", ServiceExeName),
+            Path.Combine(baseDir, "..", "..", "..", "..", "EstherLink.Service", "bin", "Debug", "net8.0-windows", ServiceExeName),
+            Path.Combine(baseDir, "..", "..", "..", "..", "EstherLink.Service", "bin", "Release", "net8.0-windows", ServiceExeName),
+            Path.Combine(baseDir, "..", "..", "..", "..", "out", "service", ServiceExeName)
+        };
+
+        foreach (var candidate in candidates)
+        {
+            var fullPath = Path.GetFullPath(candidate);
+            if (File.Exists(fullPath))
+            {
+                return fullPath;
+            }
+        }
+
+        return null;
     }
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);

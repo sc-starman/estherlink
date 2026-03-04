@@ -2,7 +2,6 @@ using EstherLink.Core.Configuration;
 using EstherLink.Core.Networking;
 using EstherLink.Ipc;
 using EstherLink.UI.Models;
-using System.IO;
 using System.Net.Sockets;
 
 namespace EstherLink.UI.Services;
@@ -46,8 +45,6 @@ public sealed class GatewayOrchestratorService
             _state.VpsAdapter = adapters[0];
             _state.OutgoingAdapter = adapters[Math.Min(1, adapters.Count - 1)];
         }
-
-        _state.ServiceExePath = GetDefaultServiceExePath();
     }
 
     public async Task<OperationResult> RefreshStatusAsync(CancellationToken cancellationToken = default)
@@ -167,12 +164,7 @@ public sealed class GatewayOrchestratorService
 
     public async Task<OperationResult> InstallStartServiceAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(_state.ServiceExePath))
-        {
-            return SetAction(false, $"Service executable not found: {_state.ServiceExePath}");
-        }
-
-        var installed = await _serviceControl.InstallOrStartWindowsServiceAsync(_state.ServiceExePath, cancellationToken);
+        var installed = await _serviceControl.InstallOrStartWindowsServiceAsync(cancellationToken);
         if (!installed)
         {
             return SetAction(false, "Service install/start canceled or failed.");
@@ -301,7 +293,6 @@ public sealed class GatewayOrchestratorService
             TunnelPrivateKeyPath = _state.TunnelKeyPath.Trim(),
             TunnelPrivateKeyPassphrase = _state.TunnelKeyPassphrase,
             TunnelPassword = _state.TunnelPassword,
-            LicenseServerUrl = _state.LicenseEndpoint.Trim(),
             LicenseKey = _state.LicenseKey.Trim()
         };
     }
@@ -310,22 +301,6 @@ public sealed class GatewayOrchestratorService
     {
         _state.LastAction = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} {message}";
         return new OperationResult(success, message);
-    }
-
-    private static string GetDefaultServiceExePath()
-    {
-        return Path.GetFullPath(
-            Path.Combine(
-                AppContext.BaseDirectory,
-                "..",
-                "..",
-                "..",
-                "..",
-                "EstherLink.Service",
-                "bin",
-                "Debug",
-                "net8.0-windows",
-                "EstherLink.Service.exe"));
     }
 
     private static async Task<bool> TestSshTcpConnectivityAsync(ServiceConfig config, CancellationToken cancellationToken)

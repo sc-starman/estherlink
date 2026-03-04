@@ -7,7 +7,7 @@ namespace EstherLink.Service.Runtime;
 
 public sealed class ConfigStore
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -50,6 +50,12 @@ public sealed class ConfigStore
             if (stored.SchemaVersion < 2)
             {
                 stored.TunnelAuthMethod = TunnelAuthMethods.HostKey;
+                stored.SchemaVersion = 2;
+                migrated = true;
+            }
+
+            if (stored.SchemaVersion < 3)
+            {
                 stored.SchemaVersion = CurrentSchemaVersion;
                 migrated = true;
             }
@@ -71,7 +77,6 @@ public sealed class ConfigStore
                     TunnelPrivateKeyPath = stored.TunnelPrivateKeyPath ?? string.Empty,
                     TunnelPrivateKeyPassphrase = Decrypt(stored.EncryptedTunnelKeyPassphrase),
                     TunnelPassword = Decrypt(stored.EncryptedTunnelPassword),
-                    LicenseServerUrl = stored.LicenseServerUrl ?? string.Empty,
                     LicenseKey = Decrypt(stored.EncryptedLicenseKey)
                 },
                 stored.WhitelistEntries ?? []);
@@ -112,7 +117,6 @@ public sealed class ConfigStore
                 TunnelPrivateKeyPath = config.TunnelPrivateKeyPath,
                 EncryptedTunnelKeyPassphrase = Encrypt(config.TunnelPrivateKeyPassphrase),
                 EncryptedTunnelPassword = Encrypt(config.TunnelPassword),
-                LicenseServerUrl = config.LicenseServerUrl,
                 EncryptedLicenseKey = Encrypt(config.LicenseKey),
                 WhitelistEntries = whitelistEntries.ToList()
             };
@@ -170,7 +174,6 @@ public sealed class ConfigStore
         public string? TunnelPrivateKeyPath { get; set; }
         public string? EncryptedTunnelKeyPassphrase { get; set; }
         public string? EncryptedTunnelPassword { get; set; }
-        public string? LicenseServerUrl { get; set; }
         public string? EncryptedLicenseKey { get; set; }
         public List<string>? WhitelistEntries { get; set; }
     }

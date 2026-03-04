@@ -10,6 +10,8 @@ namespace EstherLink.Service.Runtime;
 
 public sealed class LicenseValidator
 {
+    private const string VerifyUrl = "https://omnirelay.net/api/license/verify";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -58,9 +60,9 @@ public sealed class LicenseValidator
                 cache.KeyId);
         }
 
-        if (string.IsNullOrWhiteSpace(config.LicenseServerUrl) || string.IsNullOrWhiteSpace(config.LicenseKey))
+        if (string.IsNullOrWhiteSpace(config.LicenseKey))
         {
-            return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, "License key or server endpoint is missing.");
+            return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, "License key is missing.");
         }
 
         try
@@ -68,7 +70,7 @@ public sealed class LicenseValidator
             var client = _httpClientFactory.CreateClient(nameof(LicenseValidator));
             client.Timeout = TimeSpan.FromSeconds(10);
 
-            var verifyUrl = BuildVerifyUrl(config.LicenseServerUrl);
+            var verifyUrl = VerifyUrl;
             var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
 
             using var fingerprintDoc = JsonDocument.Parse(
@@ -201,22 +203,6 @@ public sealed class LicenseValidator
         }
 
         return new LicenseValidationResult(false, false, now, cache?.ExpiresAtUtc, error, "OFFLINE_FALLBACK_FAILED");
-    }
-
-    private static string BuildVerifyUrl(string configuredUrl)
-    {
-        var trimmed = (configuredUrl ?? string.Empty).Trim().TrimEnd('/');
-        if (trimmed.EndsWith("/api/license/verify", StringComparison.OrdinalIgnoreCase))
-        {
-            return trimmed;
-        }
-
-        if (trimmed.EndsWith("/api/license", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"{trimmed}/verify";
-        }
-
-        return $"{trimmed}/api/license/verify";
     }
 
     private static string BuildPublicKeysUrl(string verifyUrl)

@@ -129,29 +129,6 @@
                 </Grid>
             </Border>
 
-            <Border Style="{StaticResource CardStyle}">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="220"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0" Text="License Endpoint" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding State.LicenseEndpoint, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
-
-                    <TextBlock Grid.Row="1" Text="License Key" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding State.LicenseKey, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
-
-                    <TextBlock Grid.Row="2" Text="Service EXE Path" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding State.ServiceExePath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
-                </Grid>
-            </Border>
-
             <WrapPanel Margin="0,16,0,0">
                 <Button Content="Apply Configuration" Command="{Binding ApplyConfigCommand}" Style="{StaticResource PrimaryButtonStyle}"/>
                 <Button Content="Test Tunnel Connection"

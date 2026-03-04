@@ -232,7 +232,6 @@ public sealed class GatewayRuntime
             TunnelPrivateKeyPath = config.TunnelPrivateKeyPath,
             TunnelPrivateKeyPassphrase = config.TunnelPrivateKeyPassphrase,
             TunnelPassword = config.TunnelPassword,
-            LicenseServerUrl = config.LicenseServerUrl,
             LicenseKey = config.LicenseKey
         };
     }

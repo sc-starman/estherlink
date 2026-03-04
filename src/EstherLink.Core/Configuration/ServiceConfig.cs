@@ -2,7 +2,7 @@ namespace EstherLink.Core.Configuration;
 
 public sealed class ServiceConfig
 {
-    public int SchemaVersion { get; set; } = 2;
+    public int SchemaVersion { get; set; } = 3;
     public string VpsHost { get; set; } = string.Empty;
     public int VpsPort { get; set; } = 443;
     public int LocalProxyListenPort { get; set; } = 19080;
@@ -16,6 +16,5 @@ public sealed class ServiceConfig
     public string TunnelPrivateKeyPath { get; set; } = string.Empty;
     public string TunnelPrivateKeyPassphrase { get; set; } = string.Empty;
     public string TunnelPassword { get; set; } = string.Empty;
-    public string LicenseServerUrl { get; set; } = string.Empty;
     public string LicenseKey { get; set; } = string.Empty;
 }

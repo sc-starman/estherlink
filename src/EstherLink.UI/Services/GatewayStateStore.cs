@@ -50,13 +50,7 @@ public partial class GatewayStateStore : ObservableObject
     private string tunnelPassword = string.Empty;
 
     [ObservableProperty]
-    private string licenseEndpoint = "https://backend.example.com/api/license/verify";
-
-    [ObservableProperty]
     private string licenseKey = string.Empty;
-
-    [ObservableProperty]
-    private string serviceExePath = string.Empty;
 
     [ObservableProperty]
     private string whitelistText = string.Empty;
