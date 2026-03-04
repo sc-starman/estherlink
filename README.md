@@ -211,6 +211,31 @@ docker compose up --build
 - Backend API: `http://localhost:8080`
 - Swagger: `http://localhost:8080/swagger`
 
+### HTTPS Reverse Proxy (Nginx + Let's Encrypt on :443)
+
+`docker-compose.yml` now includes:
+- `nginx-proxy` on ports `80/443`
+- `acme-companion` for automatic Let's Encrypt certificates
+- backend wired via `VIRTUAL_HOST` / `LETSENCRYPT_HOST`
+
+Before starting in server mode, set DNS + environment:
+1. Point your domain A record to the VPS public IP.
+2. Create `.env` at repo root (you can copy from `.env.example`):
+
+```env
+OMNIRELAY_DOMAIN=api.your-domain.com
+LETSENCRYPT_EMAIL=ops@your-domain.com
+```
+
+Then run:
+
+```bash
+docker compose up -d --build
+```
+
+Public endpoint:
+- `https://<OMNIRELAY_DOMAIN>` (TLS auto-managed)
+
 ## Run Backend Locally (without Docker)
 
 ```powershell

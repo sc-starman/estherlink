@@ -1,4 +1,33 @@
 services:
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:alpine
+    container_name: omnirelay-nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - omnirelay_proxy_certs:/etc/nginx/certs:rw
+      - omnirelay_proxy_vhost:/etc/nginx/vhost.d
+      - omnirelay_proxy_html:/usr/share/nginx/html
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+
+  acme-companion:
+    image: nginxproxy/acme-companion
+    container_name: omnirelay-acme-companion
+    restart: unless-stopped
+    depends_on:
+      - nginx-proxy
+    environment:
+      NGINX_PROXY_CONTAINER: omnirelay-nginx-proxy
+      DEFAULT_EMAIL: ${LETSENCRYPT_EMAIL}
+    volumes:
+      - omnirelay_proxy_certs:/etc/nginx/certs:rw
+      - omnirelay_proxy_vhost:/etc/nginx/vhost.d
+      - omnirelay_proxy_html:/usr/share/nginx/html
+      - omnirelay_proxy_acme:/etc/acme.sh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   postgres:
     image: postgres:16
     container_name: estherlink-postgres
@@ -30,6 +59,7 @@ services:
       context: .
       dockerfile: src/EstherLink.Backend/Dockerfile
     container_name: estherlink-backend
+    restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=estherlink;Username=estherlink;Password=estherlink_dev_password
@@ -49,9 +79,19 @@ services:
       Web__DocumentationUrl: https://docs.omnirelay.example
       Web__DownloadChannel: stable
       Database__ApplyMigrationsOnStartup: "true"
+      VIRTUAL_HOST: ${OMNIRELAY_DOMAIN}
+      LETSENCRYPT_HOST: ${OMNIRELAY_DOMAIN}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+      VIRTUAL_PORT: 8080
     ports:
       - "8080:8080"
+    expose:
+      - "8080"
     depends_on:
+      nginx-proxy:
+        condition: service_started
+      acme-companion:
+        condition: service_started
       postgres:
         condition: service_healthy
       redis:
@@ -60,3 +100,7 @@ services:
 volumes:
   estherlink_pgdata:
   estherlink_redisdata:
+  omnirelay_proxy_certs:
+  omnirelay_proxy_vhost:
+  omnirelay_proxy_html:
+  omnirelay_proxy_acme:
