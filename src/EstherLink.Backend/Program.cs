@@ -48,6 +48,7 @@ else
 builder.Services.AddScoped<LicenseService>();
 builder.Services.AddScoped<WhitelistService>();
 builder.Services.AddScoped<AppReleaseService>();
+builder.Services.AddScoped<SampleDataSeeder>();
 builder.Services.AddSingleton<LicenseResponseSigner>();
 
 builder.Services.AddRateLimiter(options =>
@@ -370,6 +371,20 @@ admin.MapPost("/app/releases", async (
     })
     ;
 
+admin.MapPost("/seed/sample", async (
+        SampleDataSeeder seeder,
+        CancellationToken cancellationToken) =>
+    {
+        var result = await seeder.SeedAsync(cancellationToken);
+        return Results.Ok(new
+        {
+            message = "Sample dataset seeded.",
+            result.Created,
+            result.Skipped
+        });
+    })
+    ;
+
 app.Run();
 
 static AdminLicenseResponse ToAdminResponse(LicenseEntity entity, int activationCount)
@@ -387,4 +402,6 @@ static AdminLicenseResponse ToAdminResponse(LicenseEntity entity, int activation
         UpdatedAt = entity.UpdatedAt
     };
 }
+
+public partial class Program;
 

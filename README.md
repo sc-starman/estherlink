@@ -1,150 +1,136 @@
 # EstherLink Backend (.NET 8 Minimal API)
 
-Production-oriented backend for EstherLink desktop clients.
+Production-ready backend for EstherLink desktop clients.
 
-## Features
+## What It Provides
 
 1. Licensing
-- Online license verification (`POST /api/license/verify`)
-- Device activation tracking and max-device enforcement
-- Signed server response (HMAC-SHA256) for offline cache verification on client
+- `POST /api/license/verify`
+- Device activations (`max_devices` enforcement)
+- HMAC-SHA256 signed verify response for offline cache validation
 
-2. Whitelist updates
-- Country/category grouped whitelist sets
-- Versioned snapshots with SHA-256
-- Latest set fetch and CIDR diff endpoint
+2. Whitelist updates (CIDR/IP)
+- Latest grouped whitelist sets by country/category
+- Versioned whitelist snapshots
+- Diff endpoint (`added` / `removed`)
 
-3. App update metadata
-- Latest release check by channel + current version
-- Semver-aware comparison
+3. App updates
+- Latest release metadata by channel
+- Semver-aware update check
 
-4. Security/ops
-- Admin API key protection (`X-ADMIN-API-KEY`)
+4. Security and operations
+- Admin endpoint protection via `X-ADMIN-API-KEY`
 - Public endpoint rate limiting
 - Swagger/OpenAPI
-- Health probes (`/health/live`, `/health/ready`)
+- Health checks (`/health/live`, `/health/ready`)
 - EF Core migrations (PostgreSQL)
-- Docker compose (backend + Postgres + Redis)
+- Docker Compose stack (Postgres + Redis + backend)
 
-## Repository Structure
+## Repository Layout
 
 - `src/EstherLink.Backend`
-  - .NET 8 Minimal API
-  - EF Core (Npgsql)
-  - Endpoints, services, auth filter, health checks, migrations
+  - Minimal API, EF Core models/migrations, services, security filters
 - `src/EstherLink.Backend.Contracts`
-  - DTO contracts shared by backend endpoints
+  - Request/response DTOs
+- `tests/EstherLink.Backend.IntegrationTests`
+  - Integration tests for license verify, whitelist diff, and app latest
 - `docker-compose.yml`
-  - `postgres`, `redis`, `backend`
+  - Local stack orchestration
+- `.github/workflows/ci.yml`
+  - Build/test/validation CI pipeline
 
-## Data Model
-
-Implemented entities/tables:
-- `licenses`
-- `license_activations`
-- `whitelist_sets` (includes `set_group_id` for stable logical set identity across versions)
-- `whitelist_entries`
-- `app_releases`
-
-## Run with Docker Compose
+## Run with Docker
 
 ```bash
 docker compose up --build
 ```
 
-Backend: `http://localhost:8080`
-Swagger: `http://localhost:8080/swagger`
+- API: `http://localhost:8080`
+- Swagger: `http://localhost:8080/swagger`
 
-## Run Locally (without Docker)
-
-1. Start PostgreSQL and create database/user matching `appsettings.json`.
-2. Run backend:
+## Run Locally
 
 ```bash
+dotnet tool restore
+dotnet restore EstherLink.sln
+dotnet build EstherLink.sln -c Debug
 dotnet run --project src/EstherLink.Backend
 ```
 
-App auto-applies migrations on startup (`Database:ApplyMigrationsOnStartup=true`).
+## Seed Sample Data (Step 1)
 
-## EF Migrations
+Admin endpoint:
+- `POST /api/admin/seed/sample`
 
-Local tool manifest includes `dotnet-ef`.
+Helper script:
+- `scripts/seed_backend_sample.sh`
 
-Create migration:
-
-```bash
-dotnet tool run dotnet-ef migrations add <Name> \
-  --project src/EstherLink.Backend \
-  --startup-project src/EstherLink.Backend
-```
-
-Apply migration:
+Example:
 
 ```bash
-dotnet tool run dotnet-ef database update \
-  --project src/EstherLink.Backend \
-  --startup-project src/EstherLink.Backend
+BASE_URL=http://localhost:8080 ADMIN_API_KEY=dev-admin-key bash scripts/seed_backend_sample.sh
 ```
+
+Seed includes:
+- demo license (`DEMO-KEY-001`)
+- sample whitelist logical set (`IR Core`, versions 1 and 2)
+- sample app releases (`stable` 1.2.0 and 1.3.0)
+
+## Run Integration Tests (Step 2)
+
+```bash
+dotnet test tests/EstherLink.Backend.IntegrationTests/EstherLink.Backend.IntegrationTests.csproj -c Debug
+```
+
+Test coverage includes:
+- license verify + device limit behavior
+- whitelist diff behavior
+- app latest update behavior
+
+## CI Pipeline (Step 3)
+
+Workflow: `.github/workflows/ci.yml`
+
+CI runs:
+- `dotnet tool restore`
+- `dotnet restore`
+- `dotnet build`
+- `dotnet test`
+- `dotnet-ef migrations script --idempotent` validation
+- `docker compose config` validation
 
 ## Configuration
 
-`src/EstherLink.Backend/appsettings.json` keys:
+`src/EstherLink.Backend/appsettings.json`:
 
 - `ConnectionStrings:Postgres`
 - `ConnectionStrings:Redis` (optional)
-- `Admin:ApiKeys` (one or more keys)
-- `Licensing:SigningSecret` (required for response signature)
+- `Admin:ApiKeys` (admin keys)
+- `Licensing:SigningSecret` (required)
 - `Licensing:OfflineCacheTtlHours` (default 24)
 - `Database:ApplyMigrationsOnStartup`
 
-## API Summary
+## Public API Summary
 
-Public endpoints (rate limited):
 - `POST /api/license/verify`
-- `GET /api/whitelist/sets?country=IR&category=...`
+- `GET /api/whitelist/sets?country=IR&category=core`
 - `GET /api/whitelist/{setId}/latest`
-- `GET /api/whitelist/{setId}/diff?fromVersion=12`
+- `GET /api/whitelist/{setId}/diff?fromVersion=1`
 - `GET /api/app/latest?channel=stable&current=1.2.3`
 
-Admin endpoints (`X-ADMIN-API-KEY` required):
+## Admin API Summary
+
+All admin endpoints require `X-ADMIN-API-KEY`.
+
 - `POST /api/admin/licenses`
 - `POST /api/admin/licenses/{id}/revoke`
 - `GET /api/admin/licenses/{id}`
-- `POST /api/admin/whitelist/sets` (helper endpoint to create initial logical set)
+- `POST /api/admin/whitelist/sets`
 - `POST /api/admin/whitelist/{setId}/publish`
 - `POST /api/admin/app/releases`
-
-## Example cURL
-
-Verify license:
-
-```bash
-curl -X POST http://localhost:8080/api/license/verify \
-  -H "Content-Type: application/json" \
-  -d '{
-    "licenseKey":"ABC-123",
-    "fingerprint":{"machineGuid":"m1","nicMac":"aa-bb","osVersion":"win11"},
-    "appVersion":"1.2.3",
-    "nonce":"random-nonce-1"
-  }'
-```
-
-Create license (admin):
-
-```bash
-curl -X POST http://localhost:8080/api/admin/licenses \
-  -H "Content-Type: application/json" \
-  -H "X-ADMIN-API-KEY: dev-admin-key" \
-  -d '{
-    "licenseKey":"ABC-123",
-    "status":"active",
-    "plan":"pro",
-    "maxDevices":2
-  }'
-```
+- `POST /api/admin/seed/sample`
 
 ## Notes
 
-- All timestamps are stored and returned in UTC (`DateTimeOffset.UtcNow`).
+- UTC timestamps are used end-to-end (`DateTimeOffset.UtcNow`).
 - License response signature includes: `valid, reason, plan, licenseExpiresAt, cacheExpiresAt, serverTime, nonce`.
-- Redis is optional in this MVP; included for production caching extension.
