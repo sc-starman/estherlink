@@ -4,7 +4,8 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="EstherLink"
+        Title="OmniRelay"
+        Icon="Assets/app.ico"
         Width="1360"
         Height="860"
         MinWidth="1120"
@@ -20,7 +21,7 @@
                 BorderBrush="{DynamicResource Brush.Border}"
                 BorderThickness="0,0,1,0">
             <DockPanel>
-                <Border DockPanel.Dock="Bottom"
+                <!-- <Border DockPanel.Dock="Bottom"
                         Margin="20"
                         Padding="14"
                         Style="{StaticResource CardStyle}">
@@ -29,7 +30,7 @@
                         <TextBlock Text="Professional" Margin="0,4,0,10" FontWeight="Bold"/>
                         <ProgressBar Height="8" Value="85" Maximum="100" Foreground="{DynamicResource Brush.Primary}"/>
                     </StackPanel>
-                </Border>
+                </Border> -->
 
                 <StackPanel Margin="20,24,20,20">
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
@@ -43,7 +44,7 @@
                             <Image Source="pack://application:,,,/Assets/logo.png" Stretch="Uniform"/>
                         </Border>
                         <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                            <TextBlock Text="EstherLink" Style="{StaticResource SidebarTitleStyle}"/>
+                            <TextBlock Text="OmniRelay" Style="{StaticResource SidebarTitleStyle}"/>
                             <TextBlock Text="Secure Network Admin" Style="{StaticResource SidebarSubTitleStyle}"/>
                         </StackPanel>
                     </StackPanel>

@@ -107,7 +107,7 @@ public partial class MainWindowViewModel : ObservableObject
             "license" => "License Management",
             "logs" => "Logs",
             "settings" => "Settings",
-            _ => "EstherLink"
+            _ => "OmniRelay"
         };
     }
 

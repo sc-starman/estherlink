@@ -65,7 +65,7 @@ public sealed class ServiceControlService : IServiceControlService
             : @"
 $binPath = '" + escapedPath + @"'
 $binaryPathName = '""' + $binPath + '""'
-New-Service -Name $serviceName -DisplayName 'EstherLink Service' -BinaryPathName $binaryPathName -StartupType Automatic
+New-Service -Name $serviceName -DisplayName 'OmniRelay Service' -BinaryPathName $binaryPathName -StartupType Automatic
 ";
 
         var script = $@"
