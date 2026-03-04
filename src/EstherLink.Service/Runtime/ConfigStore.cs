@@ -7,7 +7,7 @@ namespace EstherLink.Service.Runtime;
 
 public sealed class ConfigStore
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -43,6 +43,13 @@ public sealed class ConfigStore
             var migrated = false;
             if (stored.SchemaVersion <= 0)
             {
+                stored.SchemaVersion = 1;
+                migrated = true;
+            }
+
+            if (stored.SchemaVersion < 2)
+            {
+                stored.TunnelAuthMethod = TunnelAuthMethods.HostKey;
                 stored.SchemaVersion = CurrentSchemaVersion;
                 migrated = true;
             }
@@ -56,12 +63,14 @@ public sealed class ConfigStore
                     LocalProxyListenPort = stored.LocalProxyListenPort,
                     WhitelistAdapterIfIndex = stored.WhitelistAdapterIfIndex,
                     DefaultAdapterIfIndex = stored.DefaultAdapterIfIndex,
-                    TunnelEnabled = stored.TunnelEnabled,
                     TunnelHost = stored.TunnelHost ?? string.Empty,
                     TunnelSshPort = stored.TunnelSshPort,
                     TunnelRemotePort = stored.TunnelRemotePort,
                     TunnelUser = stored.TunnelUser ?? "estherlink",
+                    TunnelAuthMethod = TunnelAuthMethods.Normalize(stored.TunnelAuthMethod),
                     TunnelPrivateKeyPath = stored.TunnelPrivateKeyPath ?? string.Empty,
+                    TunnelPrivateKeyPassphrase = Decrypt(stored.EncryptedTunnelKeyPassphrase),
+                    TunnelPassword = Decrypt(stored.EncryptedTunnelPassword),
                     LicenseServerUrl = stored.LicenseServerUrl ?? string.Empty,
                     LicenseKey = Decrypt(stored.EncryptedLicenseKey)
                 },
@@ -70,7 +79,7 @@ public sealed class ConfigStore
             if (migrated)
             {
                 Save(state.Config, state.WhitelistEntries);
-                _log.Info("Migrated legacy config to schema version 1.");
+                _log.Info($"Migrated legacy config to schema version {CurrentSchemaVersion}.");
             }
 
             return state;
@@ -95,12 +104,14 @@ public sealed class ConfigStore
                 LocalProxyListenPort = config.LocalProxyListenPort,
                 WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
                 DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
-                TunnelEnabled = config.TunnelEnabled,
                 TunnelHost = config.TunnelHost,
                 TunnelSshPort = config.TunnelSshPort,
                 TunnelRemotePort = config.TunnelRemotePort,
                 TunnelUser = config.TunnelUser,
+                TunnelAuthMethod = TunnelAuthMethods.Normalize(config.TunnelAuthMethod),
                 TunnelPrivateKeyPath = config.TunnelPrivateKeyPath,
+                EncryptedTunnelKeyPassphrase = Encrypt(config.TunnelPrivateKeyPassphrase),
+                EncryptedTunnelPassword = Encrypt(config.TunnelPassword),
                 LicenseServerUrl = config.LicenseServerUrl,
                 EncryptedLicenseKey = Encrypt(config.LicenseKey),
                 WhitelistEntries = whitelistEntries.ToList()
@@ -155,7 +166,10 @@ public sealed class ConfigStore
         public int TunnelSshPort { get; set; } = 22;
         public int TunnelRemotePort { get; set; } = 15000;
         public string? TunnelUser { get; set; }
+        public string? TunnelAuthMethod { get; set; }
         public string? TunnelPrivateKeyPath { get; set; }
+        public string? EncryptedTunnelKeyPassphrase { get; set; }
+        public string? EncryptedTunnelPassword { get; set; }
         public string? LicenseServerUrl { get; set; }
         public string? EncryptedLicenseKey { get; set; }
         public List<string>? WhitelistEntries { get; set; }

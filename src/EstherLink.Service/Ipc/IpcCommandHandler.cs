@@ -7,17 +7,20 @@ public sealed class IpcCommandHandler
 {
     private readonly GatewayRuntime _runtime;
     private readonly LicenseValidator _licenseValidator;
+    private readonly TunnelConnectionTester _tunnelConnectionTester;
     private readonly FileLogWriter _fileLog;
     private readonly ILogger<IpcCommandHandler> _logger;
 
     public IpcCommandHandler(
         GatewayRuntime runtime,
         LicenseValidator licenseValidator,
+        TunnelConnectionTester tunnelConnectionTester,
         FileLogWriter fileLog,
         ILogger<IpcCommandHandler> logger)
     {
         _runtime = runtime;
         _licenseValidator = licenseValidator;
+        _tunnelConnectionTester = tunnelConnectionTester;
         _fileLog = fileLog;
         _logger = logger;
     }
@@ -35,6 +38,7 @@ public sealed class IpcCommandHandler
                 IpcCommands.StartProxy => HandleStartProxy(),
                 IpcCommands.StopProxy => HandleStopProxy(),
                 IpcCommands.VerifyLicense => await HandleVerifyLicenseAsync(cancellationToken),
+                IpcCommands.TestTunnelConnection => await HandleTestTunnelConnectionAsync(request.JsonPayload, cancellationToken),
                 _ => new IpcResponse(false, $"Unknown command '{request.Command}'.")
             };
         }
@@ -110,5 +114,23 @@ public sealed class IpcCommandHandler
             result.Error);
 
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
+    }
+
+    private async Task<IpcResponse> HandleTestTunnelConnectionAsync(string? jsonPayload, CancellationToken cancellationToken)
+    {
+        var payload = IpcJson.Deserialize<TestTunnelConnectionRequest>(jsonPayload);
+        if (payload is null)
+        {
+            return new IpcResponse(false, "Invalid test tunnel payload.");
+        }
+
+        var result = await _tunnelConnectionTester.TestAsync(payload.Config, cancellationToken);
+        if (!result.Success)
+        {
+            return new IpcResponse(false, result.Message);
+        }
+
+        _fileLog.Info("Tunnel connection test succeeded.");
+        return new IpcResponse(true);
     }
 }

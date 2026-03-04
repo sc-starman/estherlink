@@ -11,4 +11,5 @@ public interface IGatewayClientService
     Task<IpcResponse?> VerifyLicenseAsync(CancellationToken cancellationToken = default);
     Task<IpcResponse?> StartProxyAsync(CancellationToken cancellationToken = default);
     Task<IpcResponse?> StopProxyAsync(CancellationToken cancellationToken = default);
+    Task<IpcResponse?> TestTunnelConnectionAsync(ServiceConfig config, CancellationToken cancellationToken = default);
 }

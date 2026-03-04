@@ -3,6 +3,7 @@ using EstherLink.Core.Networking;
 using EstherLink.Ipc;
 using EstherLink.UI.Models;
 using System.IO;
+using System.Net.Sockets;
 
 namespace EstherLink.UI.Services;
 
@@ -135,6 +136,35 @@ public sealed class GatewayOrchestratorService
             : SetAction(false, $"License invalid: {payload.Error ?? "unknown error"}");
     }
 
+    public async Task<OperationResult> TestTunnelConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        ServiceConfig config;
+        try
+        {
+            config = BuildConfig();
+        }
+        catch (Exception ex)
+        {
+            return SetAction(false, ex.Message);
+        }
+
+        var response = await _gatewayClient.TestTunnelConnectionAsync(config, cancellationToken);
+        if (response?.Success == true)
+        {
+            return SetAction(true, "Tunnel connection test succeeded.");
+        }
+
+        if (response is null)
+        {
+            var fallback = await TestSshTcpConnectivityAsync(config, cancellationToken);
+            return fallback
+                ? SetAction(true, "SSH endpoint is reachable (service not connected for auth-level test).")
+                : SetAction(false, "Tunnel test failed: service unavailable and SSH endpoint was not reachable.");
+        }
+
+        return SetAction(false, $"Tunnel test failed: {response.Error ?? "unknown error"}");
+    }
+
     public async Task<OperationResult> InstallStartServiceAsync(CancellationToken cancellationToken = default)
     {
         if (!File.Exists(_state.ServiceExePath))
@@ -245,6 +275,17 @@ public sealed class GatewayOrchestratorService
             throw new InvalidOperationException("Tunnel remote port must be a positive integer.");
         }
 
+        var authMethod = TunnelAuthMethods.Normalize(_state.TunnelAuthMethod);
+        if (authMethod == TunnelAuthMethods.Password && string.IsNullOrWhiteSpace(_state.TunnelPassword))
+        {
+            throw new InvalidOperationException("Tunnel password is required when password authentication is selected.");
+        }
+
+        if (authMethod == TunnelAuthMethods.HostKey && string.IsNullOrWhiteSpace(_state.TunnelKeyPath))
+        {
+            throw new InvalidOperationException("Tunnel host key file path is required when host-key authentication is selected.");
+        }
+
         return new ServiceConfig
         {
             VpsHost = _state.VpsHost.Trim(),
@@ -252,12 +293,14 @@ public sealed class GatewayOrchestratorService
             LocalProxyListenPort = proxyPort,
             WhitelistAdapterIfIndex = _state.VpsAdapter?.IfIndex ?? -1,
             DefaultAdapterIfIndex = _state.OutgoingAdapter?.IfIndex ?? -1,
-            TunnelEnabled = _state.TunnelEnabled,
             TunnelHost = _state.TunnelHost.Trim(),
             TunnelSshPort = tunnelSshPort,
             TunnelRemotePort = tunnelRemotePort,
             TunnelUser = _state.TunnelUser.Trim(),
+            TunnelAuthMethod = authMethod,
             TunnelPrivateKeyPath = _state.TunnelKeyPath.Trim(),
+            TunnelPrivateKeyPassphrase = _state.TunnelKeyPassphrase,
+            TunnelPassword = _state.TunnelPassword,
             LicenseServerUrl = _state.LicenseEndpoint.Trim(),
             LicenseKey = _state.LicenseKey.Trim()
         };
@@ -283,5 +326,21 @@ public sealed class GatewayOrchestratorService
                 "Debug",
                 "net8.0-windows",
                 "EstherLink.Service.exe"));
+    }
+
+    private static async Task<bool> TestSshTcpConnectivityAsync(ServiceConfig config, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var tcp = new TcpClient();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            await tcp.ConnectAsync(config.TunnelHost, config.TunnelSshPort, cts.Token);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

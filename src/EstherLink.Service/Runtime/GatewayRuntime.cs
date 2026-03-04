@@ -224,12 +224,14 @@ public sealed class GatewayRuntime
             LocalProxyListenPort = config.LocalProxyListenPort,
             WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
             DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
-            TunnelEnabled = config.TunnelEnabled,
             TunnelHost = config.TunnelHost,
             TunnelSshPort = config.TunnelSshPort,
             TunnelRemotePort = config.TunnelRemotePort,
             TunnelUser = config.TunnelUser,
+            TunnelAuthMethod = config.TunnelAuthMethod,
             TunnelPrivateKeyPath = config.TunnelPrivateKeyPath,
+            TunnelPrivateKeyPassphrase = config.TunnelPrivateKeyPassphrase,
+            TunnelPassword = config.TunnelPassword,
             LicenseServerUrl = config.LicenseServerUrl,
             LicenseKey = config.LicenseKey
         };

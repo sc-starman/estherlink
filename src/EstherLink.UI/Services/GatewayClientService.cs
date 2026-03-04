@@ -37,6 +37,11 @@ public sealed class GatewayClientService : IGatewayClientService
         return SendAsync(IpcCommands.StopProxy, null, cancellationToken);
     }
 
+    public Task<IpcResponse?> TestTunnelConnectionAsync(ServiceConfig config, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.TestTunnelConnection, new TestTunnelConnectionRequest(config), cancellationToken);
+    }
+
     private async Task<IpcResponse?> SendAsync(string command, object? payload, CancellationToken cancellationToken)
     {
         try
@@ -44,7 +49,7 @@ public sealed class GatewayClientService : IGatewayClientService
             var request = new IpcRequest(command, payload is null ? null : IpcJson.Serialize(payload));
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             linked.CancelAfter(TimeSpan.FromSeconds(15));
-            return await _client.SendAsync(request);
+            return await _client.SendAsync(request, linked.Token);
         }
         catch
         {

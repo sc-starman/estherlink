@@ -6,6 +6,10 @@
       mc:Ignorable="d"
       Title="Network Configuration"
       Background="{DynamicResource Brush.Background}">
+    <Page.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+    </Page.Resources>
+
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="28" MaxWidth="980">
             <TextBlock Text="Network Configuration" Style="{StaticResource SectionTitleTextStyle}"/>
@@ -62,25 +66,66 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="Enable Tunnel" Style="{StaticResource FormLabelStyle}"/>
-                    <CheckBox Grid.Row="0" Grid.Column="1" IsChecked="{Binding State.TunnelEnabled}" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Text}"/>
+                    <TextBlock Grid.Row="0" Text="Tunnel Host" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding State.TunnelHost, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
 
-                    <TextBlock Grid.Row="1" Text="Tunnel Host" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding State.TunnelHost, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                    <TextBlock Grid.Row="1" Text="Tunnel SSH Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding State.TunnelSshPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
 
-                    <TextBlock Grid.Row="2" Text="Tunnel SSH Port" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding State.TunnelSshPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                    <TextBlock Grid.Row="2" Text="Tunnel Remote Port" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding State.TunnelRemotePortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
 
-                    <TextBlock Grid.Row="3" Text="Tunnel Remote Port" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding State.TunnelRemotePortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                    <TextBlock Grid.Row="3" Text="Tunnel User" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding State.TunnelUser, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
 
-                    <TextBlock Grid.Row="4" Text="Tunnel User / Key Path" Style="{StaticResource FormLabelStyle}"/>
-                    <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal">
-                        <TextBox Width="140" Text="{Binding State.TunnelUser, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
-                        <TextBox Width="420" Margin="10,0,0,0" Text="{Binding State.TunnelKeyPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                    <TextBlock Grid.Row="4" Text="Authentication Method" Style="{StaticResource FormLabelStyle}"/>
+                    <ComboBox Grid.Row="4" Grid.Column="1"
+                              SelectedValue="{Binding State.TunnelAuthMethod}"
+                              SelectedValuePath="Tag"
+                              Style="{StaticResource FormComboBoxStyle}">
+                        <ComboBoxItem Content="Host Key File" Tag="host_key"/>
+                        <ComboBoxItem Content="Password" Tag="password"/>
+                    </ComboBox>
+
+                    <TextBlock Grid.Row="5"
+                               Text="Host Key File"
+                               Style="{StaticResource FormLabelStyle}"
+                               Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    <StackPanel Grid.Row="5"
+                                Grid.Column="1"
+                                Orientation="Horizontal"
+                                Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBox Width="520" Text="{Binding State.TunnelKeyPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
+                        <Button Content="Choose File"
+                                Margin="10,6,0,6"
+                                Command="{Binding BrowseTunnelKeyCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"/>
                     </StackPanel>
+
+                    <TextBlock Grid.Row="6"
+                               Text="Key Passphrase"
+                               Style="{StaticResource FormLabelStyle}"
+                               Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    <TextBox Grid.Row="6"
+                             Grid.Column="1"
+                             Text="{Binding State.TunnelKeyPassphrase, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource FormTextBoxStyle}"
+                             Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
+
+                    <TextBlock Grid.Row="7"
+                               Text="Tunnel Password"
+                               Style="{StaticResource FormLabelStyle}"
+                               Visibility="{Binding IsPasswordAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    <TextBox Grid.Row="7"
+                             Grid.Column="1"
+                             Text="{Binding State.TunnelPassword, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource FormTextBoxStyle}"
+                             Visibility="{Binding IsPasswordAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
                 </Grid>
             </Border>
 
@@ -108,7 +153,11 @@
             </Border>
 
             <WrapPanel Margin="0,16,0,0">
-                <Button Content="Apply Configuration" Command="{Binding ApplyConfigCommand}" Style="{StaticResource PrimaryButtonStyle}" />
+                <Button Content="Apply Configuration" Command="{Binding ApplyConfigCommand}" Style="{StaticResource PrimaryButtonStyle}"/>
+                <Button Content="Test Tunnel Connection"
+                        Command="{Binding TestTunnelConnectionCommand}"
+                        Margin="10,0,0,0"
+                        Style="{StaticResource SecondaryButtonStyle}"/>
             </WrapPanel>
             <TextBlock Text="{Binding Feedback}" Style="{StaticResource FeedbackTextStyle}" Margin="0,10,0,0"/>
         </StackPanel>

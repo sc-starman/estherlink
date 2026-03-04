@@ -12,6 +12,7 @@ builder.Services.AddSingleton<FileLogWriter>();
 builder.Services.AddSingleton<ConfigStore>();
 builder.Services.AddSingleton<GatewayRuntime>();
 builder.Services.AddSingleton<LicenseValidator>();
+builder.Services.AddSingleton<TunnelConnectionTester>();
 builder.Services.AddSingleton<IpcCommandHandler>();
 builder.Services.AddSingleton<HttpConnectProxyEngine>();
 builder.Services.AddHostedService<ProxyCoordinatorWorker>();

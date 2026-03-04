@@ -31,10 +31,10 @@ public sealed class TunnelSupervisorWorker : BackgroundService
             try
             {
                 var config = _runtime.GetConfigSnapshot();
-                if (!config.TunnelEnabled || string.IsNullOrWhiteSpace(config.TunnelHost))
+                if (string.IsNullOrWhiteSpace(config.TunnelHost))
                 {
                     await StopTunnelProcessAsync();
-                    _runtime.SetTunnelStatus(false, _lastConnectedAtUtc, _reconnectCount, "Tunnel disabled.");
+                    _runtime.SetTunnelStatus(false, _lastConnectedAtUtc, _reconnectCount, "Tunnel host is not configured.");
                     await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
                     continue;
                 }
@@ -69,16 +69,13 @@ public sealed class TunnelSupervisorWorker : BackgroundService
     {
         await StopTunnelProcessAsync();
 
-        var args = BuildSshArguments(config);
-        var psi = new ProcessStartInfo
+        if (!SshTunnelProcessFactory.TryCreateReverseTunnelStartInfo(config, out var psi, out var error) || psi is null)
         {
-            FileName = "ssh",
-            Arguments = args,
-            UseShellExecute = false,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true,
-            CreateNoWindow = true
-        };
+            _lastError = error ?? "Tunnel configuration is invalid.";
+            _runtime.SetTunnelStatus(false, _lastConnectedAtUtc, _reconnectCount, _lastError);
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+            return;
+        }
 
         _process = Process.Start(psi);
         if (_process is null)
@@ -86,6 +83,7 @@ public sealed class TunnelSupervisorWorker : BackgroundService
             throw new InvalidOperationException("Failed to start ssh process.");
         }
 
+        _process.StandardInput.Close();
         _reconnectCount++;
         _lastConnectedAtUtc = DateTimeOffset.UtcNow;
         _lastError = null;
@@ -132,32 +130,6 @@ public sealed class TunnelSupervisorWorker : BackgroundService
             _process.Dispose();
             _process = null;
         }
-    }
-
-    private static string BuildSshArguments(EstherLink.Core.Configuration.ServiceConfig config)
-    {
-        var args = new List<string>
-        {
-            "-NT",
-            "-o", "ExitOnForwardFailure=yes",
-            "-o", "ServerAliveInterval=30",
-            "-o", "ServerAliveCountMax=3",
-            "-o", "TCPKeepAlive=yes"
-        };
-
-        if (!string.IsNullOrWhiteSpace(config.TunnelPrivateKeyPath))
-        {
-            args.Add("-i");
-            args.Add($"\"{config.TunnelPrivateKeyPath}\"");
-        }
-
-        args.Add("-R");
-        args.Add($"127.0.0.1:{config.TunnelRemotePort}:127.0.0.1:{config.LocalProxyListenPort}");
-        args.Add($"{config.TunnelUser}@{config.TunnelHost}");
-        args.Add("-p");
-        args.Add(config.TunnelSshPort.ToString());
-
-        return string.Join(' ', args);
     }
 
     private static TimeSpan GetBackoffDelay(int attempt)

@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using EstherLink.Core.Configuration;
 using EstherLink.Core.Status;
 using EstherLink.UI.Models;
 using System.Collections.ObjectModel;
@@ -37,10 +38,16 @@ public partial class GatewayStateStore : ObservableObject
     private string tunnelUser = "estherlink";
 
     [ObservableProperty]
+    private string tunnelAuthMethod = TunnelAuthMethods.HostKey;
+
+    [ObservableProperty]
     private string tunnelKeyPath = string.Empty;
 
     [ObservableProperty]
-    private bool tunnelEnabled;
+    private string tunnelKeyPassphrase = string.Empty;
+
+    [ObservableProperty]
+    private string tunnelPassword = string.Empty;
 
     [ObservableProperty]
     private string licenseEndpoint = "https://backend.example.com/api/license/verify";
