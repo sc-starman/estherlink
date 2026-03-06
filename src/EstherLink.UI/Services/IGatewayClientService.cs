@@ -8,6 +8,7 @@ public interface IGatewayClientService
     Task<IpcResponse?> GetStatusAsync(CancellationToken cancellationToken = default);
     Task<IpcResponse?> GetCapabilitiesAsync(CancellationToken cancellationToken = default);
     Task<IpcResponse?> SetLicenseKeyAsync(string licenseKey, CancellationToken cancellationToken = default);
+    Task<IpcResponse?> RequestLicenseTransferAsync(CancellationToken cancellationToken = default);
     Task<IpcResponse?> SetConfigAsync(ServiceConfig config, CancellationToken cancellationToken = default);
     Task<IpcResponse?> UpdateWhitelistAsync(IReadOnlyList<string> entries, CancellationToken cancellationToken = default);
     Task<IpcResponse?> VerifyLicenseAsync(CancellationToken cancellationToken = default);

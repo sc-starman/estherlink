@@ -35,6 +35,12 @@ public sealed class LicenseResponseSigner
         return
             $"valid={response.Valid};" +
             $"reason={response.Reason};" +
+            $"transferRequired={response.TransferRequired};" +
+            $"activeDeviceIdHint={response.ActiveDeviceIdHint ?? string.Empty};" +
+            $"transferLimitPerRollingYear={response.TransferLimitPerRollingYear};" +
+            $"transfersUsedInWindow={response.TransfersUsedInWindow};" +
+            $"transfersRemainingInWindow={response.TransfersRemainingInWindow};" +
+            $"transferWindowStartAt={Format(response.TransferWindowStartAt)};" +
             $"plan={response.Plan ?? string.Empty};" +
             $"licenseExpiresAt={Format(response.LicenseExpiresAt)};" +
             $"cacheExpiresAt={Format(response.CacheExpiresAt)};" +

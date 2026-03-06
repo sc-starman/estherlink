@@ -4,3 +4,4 @@
 .vs/
 *.user
 *.suo
+src/EstherLink.Backend/data/installers/

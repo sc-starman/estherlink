@@ -12,8 +12,9 @@
         <div class="mb-4 rounded border border-red-500/50 bg-red-500/10 p-3 text-red-200">@Model.ErrorMessage</div>
     }
 
-    <form method="post" class="space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-6">
+    <form id="registerForm" method="post" class="space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-6">
         @Html.AntiForgeryToken()
+        <input asp-for="Input.RecaptchaToken" type="hidden" id="registerRecaptchaToken" />
         <div>
             <label asp-for="Input.Email" class="block text-sm mb-1">Email</label>
             <input asp-for="Input.Email" class="w-full rounded bg-slate-800 border border-slate-700 px-3 py-2" />
@@ -38,4 +39,28 @@
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+    @if (Model.RecaptchaEnabled && !string.IsNullOrWhiteSpace(Model.RecaptchaSiteKey))
+    {
+        <script src="https://www.google.com/recaptcha/api.js?render=@Model.RecaptchaSiteKey"></script>
+        <script>
+            (function () {
+                const form = document.getElementById("registerForm");
+                if (!form || !window.grecaptcha) return;
+
+                form.addEventListener("submit", function (event) {
+                    if (form.dataset.recaptchaReady === "true") return;
+                    event.preventDefault();
+
+                    grecaptcha.ready(function () {
+                        grecaptcha.execute("@Model.RecaptchaSiteKey", { action: "register_form" })
+                            .then(function (token) {
+                                document.getElementById("registerRecaptchaToken").value = token || "";
+                                form.dataset.recaptchaReady = "true";
+                                form.submit();
+                            });
+                    });
+                });
+            })();
+        </script>
+    }
 }

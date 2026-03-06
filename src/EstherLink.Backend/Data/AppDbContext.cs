@@ -15,6 +15,7 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRo
 
     public DbSet<LicenseEntity> Licenses => Set<LicenseEntity>();
     public DbSet<LicenseActivationEntity> LicenseActivations => Set<LicenseActivationEntity>();
+    public DbSet<LicenseTransferEntity> LicenseTransfers => Set<LicenseTransferEntity>();
     public DbSet<WhitelistSetEntity> WhitelistSets => Set<WhitelistSetEntity>();
     public DbSet<WhitelistEntryEntity> WhitelistEntries => Set<WhitelistEntryEntity>();
     public DbSet<AppReleaseEntity> AppReleases => Set<AppReleaseEntity>();
@@ -84,6 +85,25 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRo
             entity.HasIndex(x => new { x.LicenseId, x.FingerprintHash }).IsUnique();
             entity.HasOne(x => x.License)
                 .WithMany(x => x.Activations)
+                .HasForeignKey(x => x.LicenseId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<LicenseTransferEntity>(entity =>
+        {
+            entity.ToTable("license_transfers");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.LicenseId).HasColumnName("license_id").IsRequired();
+            entity.Property(x => x.FromFingerprintHash).HasColumnName("from_fingerprint_hash").HasMaxLength(128);
+            entity.Property(x => x.ToFingerprintHash).HasColumnName("to_fingerprint_hash").HasMaxLength(128).IsRequired();
+            entity.Property(x => x.RequestId).HasColumnName("request_id").HasMaxLength(128).IsRequired();
+            entity.Property(x => x.AppVersion).HasColumnName("app_version").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(x => x.MetaJson).HasColumnName("meta_json").HasColumnType("jsonb").IsRequired();
+            entity.HasIndex(x => new { x.LicenseId, x.CreatedAt });
+            entity.HasOne(x => x.License)
+                .WithMany(x => x.Transfers)
                 .HasForeignKey(x => x.LicenseId)
                 .OnDelete(DeleteBehavior.Cascade);
         });

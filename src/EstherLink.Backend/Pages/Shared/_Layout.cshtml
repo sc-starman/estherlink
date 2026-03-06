@@ -2,10 +2,6 @@
 @using EstherLink.Backend.Models
 @inject SignInManager<ApplicationUser> SignInManager
 @inject UserManager<ApplicationUser> UserManager
-@{
-    var docsUrl = ViewData["DocumentationUrl"] as string ?? "https://docs.omnirelay.example";
-}
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -22,11 +18,12 @@
             OmniRelay</a>
             <nav class="flex items-center gap-4 text-sm">
                 <a href="/" class="hover:text-cyan-300">Home</a>
-                <a href="/app/downloads" class="hover:text-cyan-300">Download</a>
-                <a href="@docsUrl" target="_blank" rel="noopener" class="hover:text-cyan-300">Documentation</a>
+                <a href="/download" class="hover:text-cyan-300">Download</a>
+                <a href="/contact" class="hover:text-cyan-300">Contact</a>
+                <a href="/docs" class="hover:text-cyan-300">Documentation</a>
                 @if (SignInManager.IsSignedIn(User))
                 {
-                    <a href="/app/dashboard" class="hover:text-cyan-300">Dashboard</a>
+                    <a href="/dashboard" class="hover:text-cyan-300">Dashboard</a>
                     <form method="post" asp-page="/Account/Logout" class="inline">
                         @Html.AntiForgeryToken()
                         <button type="submit" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">Logout</button>

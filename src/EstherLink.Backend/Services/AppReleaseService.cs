@@ -90,6 +90,91 @@ public sealed class AppReleaseService
         return release;
     }
 
+    public async Task<AppReleaseEntity> UpsertReleaseAsync(
+        string channel,
+        string version,
+        string minSupportedVersion,
+        string downloadUrl,
+        string sha256,
+        string notes,
+        DateTimeOffset? publishedAt,
+        CancellationToken cancellationToken)
+    {
+        var normalizedChannel = (channel ?? "stable").Trim().ToLowerInvariant();
+        var normalizedVersion = version.Trim();
+        var normalizedMinSupportedVersion = minSupportedVersion.Trim();
+        var normalizedDownloadUrl = downloadUrl.Trim();
+        var normalizedSha256 = sha256.Trim().ToLowerInvariant();
+        var normalizedNotes = notes?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(normalizedChannel))
+        {
+            throw new InvalidOperationException("Channel is required.");
+        }
+
+        if (ParseVersionSafe(normalizedVersion) is null)
+        {
+            throw new InvalidOperationException("Version must be valid semver.");
+        }
+
+        if (ParseVersionSafe(normalizedMinSupportedVersion) is null)
+        {
+            throw new InvalidOperationException("MinSupportedVersion must be valid semver.");
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedDownloadUrl))
+        {
+            throw new InvalidOperationException("DownloadUrl is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedSha256))
+        {
+            throw new InvalidOperationException("Sha256 is required.");
+        }
+
+        var release = await _dbContext.AppReleases
+            .FirstOrDefaultAsync(
+                x => x.Channel == normalizedChannel && x.Version == normalizedVersion,
+                cancellationToken);
+
+        if (release is null)
+        {
+            release = new AppReleaseEntity
+            {
+                Id = Guid.NewGuid(),
+                Channel = normalizedChannel,
+                Version = normalizedVersion,
+                MinSupportedVersion = normalizedMinSupportedVersion,
+                DownloadUrl = normalizedDownloadUrl,
+                Sha256 = normalizedSha256,
+                Notes = normalizedNotes,
+                PublishedAt = publishedAt?.ToUniversalTime() ?? DateTimeOffset.UtcNow
+            };
+
+            _dbContext.AppReleases.Add(release);
+            _logger.LogInformation(
+                "App release created via upsert channel={Channel} version={Version}",
+                release.Channel,
+                release.Version);
+        }
+        else
+        {
+            release.MinSupportedVersion = normalizedMinSupportedVersion;
+            release.DownloadUrl = normalizedDownloadUrl;
+            release.Sha256 = normalizedSha256;
+            release.Notes = normalizedNotes;
+            release.PublishedAt = publishedAt?.ToUniversalTime() ?? DateTimeOffset.UtcNow;
+
+            _logger.LogInformation(
+                "App release updated via upsert channel={Channel} version={Version}",
+                release.Channel,
+                release.Version);
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return release;
+    }
+
     private static NuGetVersion? ParseVersionSafe(string? version)
     {
         if (string.IsNullOrWhiteSpace(version))

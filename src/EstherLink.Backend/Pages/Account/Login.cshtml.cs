@@ -1,9 +1,12 @@
 using System.ComponentModel.DataAnnotations;
+using EstherLink.Backend.Configuration;
 using EstherLink.Backend.Models;
+using EstherLink.Backend.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
 
 namespace EstherLink.Backend.Pages.Account;
 
@@ -11,10 +14,17 @@ namespace EstherLink.Backend.Pages.Account;
 public sealed class LoginModel : PageModel
 {
     private readonly SignInManager<ApplicationUser> _signInManager;
+    private readonly IOptions<SpamProtectionOptions> _spamOptions;
+    private readonly IRecaptchaVerifier _recaptchaVerifier;
 
-    public LoginModel(SignInManager<ApplicationUser> signInManager)
+    public LoginModel(
+        SignInManager<ApplicationUser> signInManager,
+        IOptions<SpamProtectionOptions> spamOptions,
+        IRecaptchaVerifier recaptchaVerifier)
     {
         _signInManager = signInManager;
+        _spamOptions = spamOptions;
+        _recaptchaVerifier = recaptchaVerifier;
     }
 
     [BindProperty]
@@ -26,14 +36,34 @@ public sealed class LoginModel : PageModel
     [TempData]
     public string? ErrorMessage { get; set; }
 
+    [TempData]
+    public string? SuccessMessage { get; set; }
+
+    public bool RecaptchaEnabled { get; private set; }
+    public string RecaptchaSiteKey { get; private set; } = string.Empty;
+
     public void OnGet()
     {
+        ApplySpamOptions();
     }
 
     public async Task<IActionResult> OnPostAsync()
     {
+        ApplySpamOptions();
+
         if (!ModelState.IsValid)
         {
+            return Page();
+        }
+
+        var recaptchaResult = await _recaptchaVerifier.VerifyAsync(
+            Input.RecaptchaToken,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            HttpContext.RequestAborted,
+            expectedAction: "login_form");
+        if (!recaptchaResult.IsValid)
+        {
+            ErrorMessage = "Verification failed. Please refresh and try again.";
             return Page();
         }
 
@@ -47,7 +77,9 @@ public sealed class LoginModel : PageModel
         {
             ErrorMessage = result.IsLockedOut
                 ? "Account is temporarily locked. Try again later."
-                : "Invalid credentials.";
+                : result.IsNotAllowed
+                    ? "Please confirm your email address before logging in."
+                    : "Invalid credentials.";
             return Page();
         }
 
@@ -57,6 +89,13 @@ public sealed class LoginModel : PageModel
         }
 
         return RedirectToPage("/App/Dashboard");
+    }
+
+    private void ApplySpamOptions()
+    {
+        var options = _spamOptions.Value;
+        RecaptchaEnabled = options.EnableRecaptcha;
+        RecaptchaSiteKey = options.RecaptchaSiteKey;
     }
 
     public sealed class LoginInputModel
@@ -70,5 +109,8 @@ public sealed class LoginModel : PageModel
         public string Password { get; set; } = string.Empty;
 
         public bool RememberMe { get; set; }
+
+        [StringLength(4096)]
+        public string RecaptchaToken { get; set; } = string.Empty;
     }
 }

@@ -7,6 +7,7 @@ using Chaos.NaCl;
 using EstherLink.Backend.Contracts.Licensing;
 using EstherLink.Core.Configuration;
 using EstherLink.Core.Licensing;
+using Microsoft.Win32;
 
 namespace EstherLink.Service.Runtime;
 
@@ -38,6 +39,7 @@ public sealed class LicenseValidator
     public async Task<LicenseValidationResult> ValidateAsync(
         ServiceConfig config,
         bool forceOnline,
+        bool transferRequested,
         CancellationToken cancellationToken)
     {
         await ValidationLock.WaitAsync(cancellationToken);
@@ -66,6 +68,12 @@ public sealed class LicenseValidator
                     cache.CheckedAtUtc,
                     cache.ExpiresAtUtc,
                     null,
+                    cache.TransferRequired,
+                    cache.TransferLimitPerRollingYear,
+                    cache.TransfersUsedInWindow,
+                    cache.TransfersRemainingInWindow,
+                    cache.TransferWindowStartAt,
+                    cache.ActiveDeviceIdHint,
                     cache.Reason,
                     cache.RequestId,
                     cache.KeyId);
@@ -81,19 +89,15 @@ public sealed class LicenseValidator
                 var verifyUrl = VerifyUrl;
                 var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
 
-                using var fingerprintDoc = JsonDocument.Parse(
-                    JsonSerializer.Serialize(new
-                    {
-                        machineName = Environment.MachineName,
-                        osVersion = Environment.OSVersion.VersionString
-                    }));
+                using var fingerprintDoc = JsonDocument.Parse(BuildDeviceFingerprintPayload());
 
                 var verifyRequest = new LicenseVerifyRequest
                 {
                     LicenseKey = config.LicenseKey,
                     AppVersion = GetAppVersion(),
                     Nonce = nonce,
-                    Fingerprint = fingerprintDoc.RootElement.Clone()
+                    Fingerprint = fingerprintDoc.RootElement.Clone(),
+                    TransferRequested = transferRequested
                 };
 
                 var verifyRequestJson = JsonSerializer.Serialize(verifyRequest, JsonOptions);
@@ -150,6 +154,12 @@ public sealed class LicenseValidator
                     parsed.KeyId,
                     parsed.Signature,
                     parsed.Reason,
+                    parsed.TransferRequired,
+                    parsed.TransferLimitPerRollingYear,
+                    parsed.TransfersUsedInWindow,
+                    parsed.TransfersRemainingInWindow,
+                    parsed.TransferWindowStartAt?.ToUniversalTime(),
+                    parsed.ActiveDeviceIdHint,
                     parsed.Plan,
                     parsed.LicenseExpiresAt?.ToUniversalTime(),
                     parsed.ServerTime.ToUniversalTime(),
@@ -165,6 +175,12 @@ public sealed class LicenseValidator
                         now,
                         cacheExpiresAt,
                         parsed.Reason,
+                        parsed.TransferRequired,
+                        parsed.TransferLimitPerRollingYear,
+                        parsed.TransfersUsedInWindow,
+                        parsed.TransfersRemainingInWindow,
+                        parsed.TransferWindowStartAt?.ToUniversalTime(),
+                        parsed.ActiveDeviceIdHint,
                         parsed.Reason,
                         parsed.RequestId,
                         parsed.KeyId);
@@ -177,6 +193,12 @@ public sealed class LicenseValidator
                     now,
                     cacheExpiresAt,
                     null,
+                    parsed.TransferRequired,
+                    parsed.TransferLimitPerRollingYear,
+                    parsed.TransfersUsedInWindow,
+                    parsed.TransfersRemainingInWindow,
+                    parsed.TransferWindowStartAt?.ToUniversalTime(),
+                    parsed.ActiveDeviceIdHint,
                     parsed.Reason,
                     parsed.RequestId,
                     parsed.KeyId);
@@ -213,12 +235,24 @@ public sealed class LicenseValidator
                 cache.CheckedAtUtc,
                 cache.ExpiresAtUtc,
                 null,
+                cache.TransferRequired,
+                cache.TransferLimitPerRollingYear,
+                cache.TransfersUsedInWindow,
+                cache.TransfersRemainingInWindow,
+                cache.TransferWindowStartAt,
+                cache.ActiveDeviceIdHint,
                 cache.Reason,
                 cache.RequestId,
                 cache.KeyId);
         }
 
-        return new LicenseValidationResult(false, false, now, cache?.ExpiresAtUtc, error, "OFFLINE_FALLBACK_FAILED");
+        return new LicenseValidationResult(
+            false,
+            false,
+            now,
+            cache?.ExpiresAtUtc,
+            error,
+            Reason: "OFFLINE_FALLBACK_FAILED");
     }
 
     private static string BuildPublicKeysUrl(string verifyUrl)
@@ -342,6 +376,12 @@ public sealed class LicenseValidator
         return VerifySignature(
             response.Valid,
             response.Reason,
+            response.TransferRequired,
+            response.ActiveDeviceIdHint,
+            response.TransferLimitPerRollingYear,
+            response.TransfersUsedInWindow,
+            response.TransfersRemainingInWindow,
+            response.TransferWindowStartAt?.ToUniversalTime(),
             response.Plan,
             response.LicenseExpiresAt?.ToUniversalTime(),
             response.CacheExpiresAt.ToUniversalTime(),
@@ -370,6 +410,12 @@ public sealed class LicenseValidator
         return VerifySignature(
             cache.IsValid,
             cache.Reason,
+            cache.TransferRequired,
+            cache.ActiveDeviceIdHint,
+            cache.TransferLimitPerRollingYear,
+            cache.TransfersUsedInWindow,
+            cache.TransfersRemainingInWindow,
+            cache.TransferWindowStartAt?.ToUniversalTime(),
             cache.Plan,
             cache.LicenseExpiresAtUtc,
             cache.ExpiresAtUtc,
@@ -385,6 +431,12 @@ public sealed class LicenseValidator
     private static bool VerifySignature(
         bool valid,
         string reason,
+        bool transferRequired,
+        string? activeDeviceIdHint,
+        int transferLimitPerRollingYear,
+        int transfersUsedInWindow,
+        int transfersRemainingInWindow,
+        DateTimeOffset? transferWindowStartAt,
         string? plan,
         DateTimeOffset? licenseExpiresAt,
         DateTimeOffset cacheExpiresAt,
@@ -404,6 +456,12 @@ public sealed class LicenseValidator
         var payload =
             $"valid={valid};" +
             $"reason={reason};" +
+            $"transferRequired={transferRequired};" +
+            $"activeDeviceIdHint={activeDeviceIdHint ?? string.Empty};" +
+            $"transferLimitPerRollingYear={transferLimitPerRollingYear};" +
+            $"transfersUsedInWindow={transfersUsedInWindow};" +
+            $"transfersRemainingInWindow={transfersRemainingInWindow};" +
+            $"transferWindowStartAt={Format(transferWindowStartAt)};" +
             $"plan={plan ?? string.Empty};" +
             $"licenseExpiresAt={Format(licenseExpiresAt)};" +
             $"cacheExpiresAt={Format(cacheExpiresAt)};" +
@@ -440,6 +498,34 @@ public sealed class LicenseValidator
     private static string GetAppVersion()
     {
         return typeof(LicenseValidator).Assembly.GetName().Version?.ToString() ?? "0.0.0";
+    }
+
+    private static string BuildDeviceFingerprintPayload()
+    {
+        var machineGuid = TryReadMachineGuid();
+        var payload = new
+        {
+            machineName = Environment.MachineName,
+            osVersion = Environment.OSVersion.VersionString,
+            machineGuid,
+            domainName = Environment.UserDomainName,
+            processorCount = Environment.ProcessorCount
+        };
+
+        return JsonSerializer.Serialize(payload, JsonOptions);
+    }
+
+    private static string? TryReadMachineGuid()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography");
+            return key?.GetValue("MachineGuid")?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static async Task<LicenseCacheEntry?> ReadCacheAsync(CancellationToken cancellationToken)

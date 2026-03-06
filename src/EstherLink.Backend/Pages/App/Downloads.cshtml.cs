@@ -1,11 +1,9 @@
-using EstherLink.Backend.Configuration;
 using EstherLink.Backend.Services.Commerce;
 using EstherLink.Backend.Data;
 using EstherLink.Backend.Utilities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 
 namespace EstherLink.Backend.Pages.App;
 
@@ -14,22 +12,19 @@ public sealed class DownloadsModel : PageModel
 {
     private readonly IDownloadCatalogService _downloadCatalogService;
     private readonly AppDbContext _dbContext;
-    private readonly IOptions<WebOptions> _webOptions;
 
-    public DownloadsModel(IDownloadCatalogService downloadCatalogService, AppDbContext dbContext, IOptions<WebOptions> webOptions)
+    public DownloadsModel(IDownloadCatalogService downloadCatalogService, AppDbContext dbContext)
     {
         _downloadCatalogService = downloadCatalogService;
         _dbContext = dbContext;
-        _webOptions = webOptions;
     }
 
     public DownloadCatalogItem? Latest { get; private set; }
-    public string DocumentationUrl { get; private set; } = string.Empty;
+    public string DocumentationUrl { get; private set; } = "/docs";
     public List<EntitlementItem> Entitlements { get; private set; } = [];
 
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
-        DocumentationUrl = _webOptions.Value.DocumentationUrl;
         Latest = await _downloadCatalogService.GetLatestAsync(null, cancellationToken);
 
         var userId = User.GetUserId();

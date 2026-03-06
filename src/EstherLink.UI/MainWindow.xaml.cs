@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Windows;
+using System.Windows.Navigation;
 using EstherLink.UI.Services;
 using EstherLink.UI.ViewModels;
 
@@ -30,5 +32,21 @@ public partial class MainWindow : Window
         Loaded -= MainWindow_Loaded;
         _navigationService.Initialize(ContentFrame, _serviceProvider);
         await _viewModel.InitializeAsync();
+    }
+
+    private void FooterLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri)
+            {
+                UseShellExecute = true
+            });
+            e.Handled = true;
+        }
+        catch
+        {
+            // Ignore link launch failures.
+        }
     }
 }

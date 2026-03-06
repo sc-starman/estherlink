@@ -1,25 +1,23 @@
-using EstherLink.Backend.Configuration;
 using EstherLink.Backend.Data;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
+using NuGet.Versioning;
 
 namespace EstherLink.Backend.Services.Commerce;
 
 public sealed class DownloadCatalogService : IDownloadCatalogService
 {
+    private const string DefaultDownloadChannel = "stable";
     private readonly AppDbContext _dbContext;
-    private readonly IOptions<WebOptions> _options;
 
-    public DownloadCatalogService(AppDbContext dbContext, IOptions<WebOptions> options)
+    public DownloadCatalogService(AppDbContext dbContext)
     {
         _dbContext = dbContext;
-        _options = options;
     }
 
     public async Task<DownloadCatalogItem?> GetLatestAsync(string? channel, CancellationToken cancellationToken)
     {
         var normalized = string.IsNullOrWhiteSpace(channel)
-            ? _options.Value.DownloadChannel
+            ? DefaultDownloadChannel
             : channel;
 
         normalized = normalized.Trim().ToLowerInvariant();
@@ -27,20 +25,31 @@ public sealed class DownloadCatalogService : IDownloadCatalogService
         var release = await _dbContext.AppReleases
             .AsNoTracking()
             .Where(x => x.Channel == normalized)
-            .OrderByDescending(x => x.PublishedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
-        if (release is null)
+        if (release.Count == 0)
         {
             return null;
         }
 
+        var latest = release
+            .Select(x => new
+            {
+                Release = x,
+                ParsedVersion = NuGetVersion.TryParse(x.Version, out var parsed) ? parsed : null
+            })
+            .OrderByDescending(x => x.ParsedVersion is not null)
+            .ThenByDescending(x => x.ParsedVersion)
+            .ThenByDescending(x => x.Release.PublishedAt)
+            .First()
+            .Release;
+
         return new DownloadCatalogItem(
-            release.Version,
-            release.Channel,
-            release.PublishedAt,
-            release.DownloadUrl,
-            release.Sha256,
-            release.Notes);
+            latest.Version,
+            latest.Channel,
+            latest.PublishedAt,
+            latest.DownloadUrl,
+            latest.Sha256,
+            latest.Notes);
     }
 }

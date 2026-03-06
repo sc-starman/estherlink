@@ -35,6 +35,7 @@ public sealed class IpcCommandHandler
                 IpcCommands.GetStatus => HandleGetStatus(),
                 IpcCommands.SetConfig => HandleSetConfig(request.JsonPayload),
                 IpcCommands.SetLicenseKey => HandleSetLicenseKey(request.JsonPayload),
+                IpcCommands.RequestLicenseTransfer => HandleRequestLicenseTransfer(),
                 IpcCommands.GetCapabilities => HandleGetCapabilities(),
                 IpcCommands.UpdateWhitelist => HandleUpdateWhitelist(request.JsonPayload),
                 IpcCommands.StartProxy => HandleStartProxy(),
@@ -66,6 +67,7 @@ public sealed class IpcCommandHandler
             IpcCommands.GetStatus,
             IpcCommands.SetConfig,
             IpcCommands.SetLicenseKey,
+            IpcCommands.RequestLicenseTransfer,
             IpcCommands.UpdateWhitelist,
             IpcCommands.StartProxy,
             IpcCommands.StopProxy,
@@ -121,6 +123,13 @@ public sealed class IpcCommandHandler
         return new IpcResponse(true);
     }
 
+    private IpcResponse HandleRequestLicenseTransfer()
+    {
+        _runtime.RequestLicenseTransfer();
+        _fileLog.Info("License transfer requested via IPC.");
+        return new IpcResponse(true);
+    }
+
     private IpcResponse HandleStartProxy()
     {
         _runtime.RequestProxyStart();
@@ -138,16 +147,28 @@ public sealed class IpcCommandHandler
     private async Task<IpcResponse> HandleVerifyLicenseAsync(CancellationToken cancellationToken)
     {
         var config = _runtime.GetConfigSnapshot();
+        var transferRequested = _runtime.ConsumeLicenseTransferRequest();
         using var verifyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         verifyCts.CancelAfter(TimeSpan.FromMinutes(2));
-        var result = await _licenseValidator.ValidateAsync(config, forceOnline: true, verifyCts.Token);
+        var result = await _licenseValidator.ValidateAsync(
+            config,
+            forceOnline: true,
+            transferRequested: transferRequested,
+            cancellationToken: verifyCts.Token);
         _runtime.SetLicenseStatus(result);
 
         var response = new VerifyLicenseResponse(
             result.IsValid,
             result.ExpiresAtUtc,
             result.FromCache,
-            result.Error);
+            result.Error,
+            result.Reason,
+            result.TransferRequired,
+            result.TransferLimitPerRollingYear,
+            result.TransfersUsedInWindow,
+            result.TransfersRemainingInWindow,
+            result.TransferWindowStartAt,
+            result.ActiveDeviceIdHint);
 
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
     }

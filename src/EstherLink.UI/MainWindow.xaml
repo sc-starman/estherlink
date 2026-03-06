@@ -21,6 +21,22 @@
                 BorderBrush="{DynamicResource Brush.Border}"
                 BorderThickness="0,0,1,0">
             <DockPanel>
+                <Border DockPanel.Dock="Bottom"
+                        Margin="20,0,20,20"
+                        Padding="10,8"
+                        CornerRadius="8"
+                        BorderBrush="{DynamicResource Brush.Border}"
+                        BorderThickness="1">
+                    <TextBlock FontSize="11"
+                               Foreground="{DynamicResource Brush.MutedText}"
+                               TextAlignment="Center">
+                        <Run Text="© 2026 OmniRelay"/>
+                        <LineBreak/>
+                        <Hyperlink NavigateUri="https://omnirelay.net"
+                                   RequestNavigate="FooterLink_RequestNavigate">OmniRelay.net</Hyperlink>
+                    </TextBlock>
+                </Border>
+
                 <!-- <Border DockPanel.Dock="Bottom"
                         Margin="20"
                         Padding="14"

@@ -35,6 +35,8 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="Tunnel Host" Style="{StaticResource FormLabelStyle}"/>
@@ -124,6 +126,11 @@
                         <TextBox Width="180" Margin="0,6,8,6" Text="{Binding State.GatewayPublicPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
                         <TextBox Width="180" Margin="0,6,0,6" Text="{Binding State.GatewayPanelPortText, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FormTextBoxStyle}"/>
                     </StackPanel>
+
+                                        <WrapPanel Grid.Row="11" Grid.Column="1">
+                        <Button Content="Apply Gateway Config" Command="{Binding ApplyGatewayConfigCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0"/>
+                        <Button Content="Test Tunnel" Command="{Binding TestTunnelConnectionCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                        </WrapPanel>
                 </Grid>
             </Border>
 
@@ -137,6 +144,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="Gateway DNS Mode" Style="{StaticResource FormLabelStyle}"/>
@@ -160,24 +168,27 @@
                               IsChecked="{Binding State.GatewayDnsUdpOnly}"
                               Content="Allow only UDP/53 and block other UDP"
                               Margin="0,6,0,6"/>
+
+                                                  <WrapPanel  Grid.Row="3" Grid.Column="1">
+                                                <Button Content="Apply DNS Config" Command="{Binding ApplyGatewayDnsCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                        <Button Content="Check DNS Path" Command="{Binding CheckGatewayDnsCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                        <Button Content="Repair DNS" Command="{Binding RepairGatewayDnsCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+
+</WrapPanel>
                 </Grid>
+
             </Border>
 
             <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
                 <StackPanel>
                     <TextBlock Text="Gateway Operations" FontWeight="SemiBold" Margin="0,0,0,10"/>
                     <WrapPanel Margin="0,0,0,10">
-                        <Button Content="Apply Gateway Config" Command="{Binding ApplyGatewayConfigCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0"/>
-                        <Button Content="Test Tunnel" Command="{Binding TestTunnelConnectionCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Bootstrap Check" Command="{Binding GatewayBootstrapCheckCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Install Gateway" Command="{Binding InstallGatewayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Start" Command="{Binding StartGatewayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Stop" Command="{Binding StopGatewayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Uninstall" Command="{Binding UninstallGatewayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Health Check" Command="{Binding HealthCheckGatewayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
-                        <Button Content="Apply DNS Config" Command="{Binding ApplyGatewayDnsCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
-                        <Button Content="Check DNS Path" Command="{Binding CheckGatewayDnsCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
-                        <Button Content="Repair DNS" Command="{Binding RepairGatewayDnsCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Clear Session Sudo" Command="{Binding ClearCachedSudoPasswordCommand}" Style="{StaticResource SecondaryButtonStyle}"/>
                     </WrapPanel>

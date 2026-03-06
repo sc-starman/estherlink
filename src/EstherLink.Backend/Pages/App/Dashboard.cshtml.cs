@@ -1,11 +1,9 @@
-using EstherLink.Backend.Configuration;
 using EstherLink.Backend.Data;
 using EstherLink.Backend.Services.Commerce;
 using EstherLink.Backend.Utilities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 
 namespace EstherLink.Backend.Pages.App;
 
@@ -14,13 +12,11 @@ public sealed class DashboardModel : PageModel
 {
     private readonly AppDbContext _dbContext;
     private readonly IDownloadCatalogService _downloadCatalogService;
-    private readonly IOptions<WebOptions> _webOptions;
 
-    public DashboardModel(AppDbContext dbContext, IDownloadCatalogService downloadCatalogService, IOptions<WebOptions> webOptions)
+    public DashboardModel(AppDbContext dbContext, IDownloadCatalogService downloadCatalogService)
     {
         _dbContext = dbContext;
         _downloadCatalogService = downloadCatalogService;
-        _webOptions = webOptions;
     }
 
     public string Email { get; private set; } = string.Empty;
@@ -28,12 +24,10 @@ public sealed class DashboardModel : PageModel
     public bool HasTrial { get; private set; }
     public bool HasPaid { get; private set; }
     public string LatestVersion { get; private set; } = "n/a";
-    public string DocumentationUrl { get; private set; } = string.Empty;
+    public string DocumentationUrl { get; private set; } = "/docs";
 
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
-        DocumentationUrl = _webOptions.Value.DocumentationUrl;
-
         var userId = User.GetUserId();
         if (userId is null)
         {

@@ -11,10 +11,15 @@
     {
         <div class="mb-4 rounded border border-red-500/50 bg-red-500/10 p-3 text-red-200">@Model.ErrorMessage</div>
     }
+    @if (!string.IsNullOrWhiteSpace(Model.SuccessMessage))
+    {
+        <div class="mb-4 rounded border border-green-500/50 bg-green-500/10 p-3 text-green-200">@Model.SuccessMessage</div>
+    }
 
-    <form method="post" class="space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-6">
+    <form id="loginForm" method="post" class="space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-6">
         @Html.AntiForgeryToken()
         <input type="hidden" asp-for="ReturnUrl" />
+        <input asp-for="Input.RecaptchaToken" type="hidden" id="loginRecaptchaToken" />
 
         <div>
             <label asp-for="Input.Email" class="block text-sm mb-1">Email</label>
@@ -39,4 +44,28 @@
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+    @if (Model.RecaptchaEnabled && !string.IsNullOrWhiteSpace(Model.RecaptchaSiteKey))
+    {
+        <script src="https://www.google.com/recaptcha/api.js?render=@Model.RecaptchaSiteKey"></script>
+        <script>
+            (function () {
+                const form = document.getElementById("loginForm");
+                if (!form || !window.grecaptcha) return;
+
+                form.addEventListener("submit", function (event) {
+                    if (form.dataset.recaptchaReady === "true") return;
+                    event.preventDefault();
+
+                    grecaptcha.ready(function () {
+                        grecaptcha.execute("@Model.RecaptchaSiteKey", { action: "login_form" })
+                            .then(function (token) {
+                                document.getElementById("loginRecaptchaToken").value = token || "";
+                                form.dataset.recaptchaReady = "true";
+                                form.submit();
+                            });
+                    });
+                });
+            })();
+        </script>
+    }
 }

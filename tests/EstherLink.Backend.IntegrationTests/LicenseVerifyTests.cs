@@ -15,7 +15,7 @@ public sealed class LicenseVerifyTests : IClassFixture<IntegrationTestWebApplica
     }
 
     [Fact]
-    public async Task Verify_ShouldReturnValidAndThenDeviceLimit_WhenMaxDevicesExceeded()
+    public async Task Verify_ShouldRequireTransfer_AndAllowConfirmedDeviceMove()
     {
         await _factory.ResetDatabaseAsync();
         await _factory.ExecuteDbContextAsync(async dbContext =>
@@ -69,10 +69,32 @@ public sealed class LicenseVerifyTests : IClassFixture<IntegrationTestWebApplica
 
         Assert.NotNull(secondBody);
         Assert.False(secondBody.Valid);
-        Assert.Equal("DEVICE_LIMIT", secondBody.Reason);
+        Assert.Equal("TRANSFER_REQUIRED", secondBody.Reason);
+        Assert.True(secondBody.TransferRequired);
+        Assert.Equal(3, secondBody.TransferLimitPerRollingYear);
+        Assert.Equal(3, secondBody.TransfersRemainingInWindow);
         Assert.Equal("Ed25519", secondBody.SignatureAlg);
         Assert.False(string.IsNullOrWhiteSpace(secondBody.KeyId));
         Assert.False(string.IsNullOrWhiteSpace(secondBody.Signature));
+
+        var transferRequest = new LicenseVerifyRequest
+        {
+            LicenseKey = "TEST-LIC-001",
+            AppVersion = "1.2.4",
+            Nonce = "nonce-c",
+            TransferRequested = true,
+            Fingerprint = ParseJson("""{"machineGuid":"m2","nicMac":"cc-dd","osVersion":"win11"}""")
+        };
+
+        var transferResponse = await client.PostAsJsonAsync("/api/license/verify", transferRequest);
+        transferResponse.EnsureSuccessStatusCode();
+        var transferBody = await transferResponse.Content.ReadFromJsonAsync<LicenseVerifyResponse>();
+
+        Assert.NotNull(transferBody);
+        Assert.True(transferBody.Valid);
+        Assert.Equal("OK", transferBody.Reason);
+        Assert.Equal(1, transferBody.TransfersUsedInWindow);
+        Assert.Equal(2, transferBody.TransfersRemainingInWindow);
 
         var keys = await client.GetFromJsonAsync<LicensePublicKeysResponse>("/api/license/public-keys");
         Assert.NotNull(keys);

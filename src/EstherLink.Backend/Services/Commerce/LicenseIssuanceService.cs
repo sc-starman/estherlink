@@ -43,7 +43,7 @@ public sealed class LicenseIssuanceService : ILicenseIssuanceService
             Status = LicenseStatus.Active,
             Plan = _options.Value.PaidLicensePlan,
             ExpiresAt = null,
-            MaxDevices = _options.Value.PaidMaxDevices,
+            MaxDevices = 1,
             CreatedAt = now,
             UpdatedAt = now
         };

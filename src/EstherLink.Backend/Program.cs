@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Globalization;
 using System.Threading.RateLimiting;
 using EstherLink.Backend.Configuration;
 using EstherLink.Backend.Contracts.App;
@@ -12,13 +13,16 @@ using EstherLink.Backend.Models;
 using EstherLink.Backend.Security;
 using EstherLink.Backend.Services;
 using EstherLink.Backend.Services.Commerce;
+using EstherLink.Backend.Services.Installers;
 using EstherLink.Backend.Swagger;
 using EstherLink.Backend.Utilities;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
+using NuGet.Versioning;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,6 +34,30 @@ builder.Services.Configure<LicensingOptions>(builder.Configuration.GetSection("L
 builder.Services.Configure<PayKryptOptions>(builder.Configuration.GetSection("PayKrypt"));
 builder.Services.Configure<CommerceOptions>(builder.Configuration.GetSection("Commerce"));
 builder.Services.Configure<WebOptions>(builder.Configuration.GetSection("Web"));
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+builder.Services.Configure<InstallerStorageOptions>(builder.Configuration.GetSection("InstallerStorage"));
+builder.Services.AddOptions<SpamProtectionOptions>()
+    .Configure<IConfiguration>((options, configuration) =>
+    {
+        var section = configuration.GetSection("SpamProtection");
+        options.EnableRecaptcha = ParseBooleanOrDefault(section["EnableRecaptcha"], false);
+        options.RecaptchaSiteKey = section["RecaptchaSiteKey"] ?? string.Empty;
+        options.RecaptchaSecretKey = section["RecaptchaSecretKey"] ?? string.Empty;
+        options.RecaptchaVerifyUrl = ParseStringOrDefault(
+            section["RecaptchaVerifyUrl"],
+            "https://www.google.com/recaptcha/api/siteverify");
+        options.RecaptchaExpectedAction = ParseStringOrDefault(section["RecaptchaExpectedAction"], "contact_form");
+        options.RecaptchaMinimumScore = ParseDoubleOrDefault(section["RecaptchaMinimumScore"], 0.5);
+    });
+
+var installerMaxUploadMb = builder.Configuration.GetValue<int?>("InstallerStorage:MaxUploadMb");
+if (installerMaxUploadMb.HasValue && installerMaxUploadMb.Value > 0)
+{
+    builder.Services.Configure<FormOptions>(options =>
+    {
+        options.MultipartBodyLengthLimit = installerMaxUploadMb.Value * 1024L * 1024L;
+    });
+}
 
 var postgresConnection =
     builder.Configuration.GetConnectionString("Postgres") ??
@@ -61,6 +89,7 @@ builder.Services
         options.Password.RequireNonAlphanumeric = false;
 
         options.User.RequireUniqueEmail = true;
+        options.SignIn.RequireConfirmedEmail = true;
 
         options.Lockout.MaxFailedAccessAttempts = 5;
         options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
@@ -81,12 +110,16 @@ builder.Services.ConfigureApplicationCookie(options =>
 });
 
 builder.Services.AddHttpClient(nameof(PayKryptClient));
+builder.Services.AddHttpClient<IRecaptchaVerifier, RecaptchaVerifier>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddRazorPages(options =>
 {
     options.Conventions.AuthorizeFolder("/App");
     options.Conventions.AllowAnonymousToFolder("/Account");
     options.Conventions.AllowAnonymousToPage("/Index");
+    options.Conventions.AllowAnonymousToPage("/Docs");
+    options.Conventions.AllowAnonymousToPage("/Contact");
+    options.Conventions.AllowAnonymousToPage("/Download");
 });
 
 builder.Services.AddScoped<LicenseService>();
@@ -101,6 +134,10 @@ builder.Services.AddScoped<ICommerceService, CommerceService>();
 builder.Services.AddScoped<ILicenseIssuanceService, LicenseIssuanceService>();
 builder.Services.AddScoped<ITrialPolicyService, TrialPolicyService>();
 builder.Services.AddScoped<IDownloadCatalogService, DownloadCatalogService>();
+builder.Services.AddScoped<IEmailDeliveryService, SmtpEmailDeliveryService>();
+builder.Services.AddScoped<IContactEmailSender, SmtpContactEmailSender>();
+builder.Services.AddSingleton<IInstallerStorageService, FileSystemInstallerStorageService>();
+builder.Services.AddSingleton<IInstallerVersionResolver, WindowsInstallerVersionResolver>();
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -230,6 +267,45 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     }
 });
 
+app.MapGet("/download/windows", async (
+        AppReleaseService appReleaseService,
+        IInstallerStorageService installerStorageService,
+        CancellationToken cancellationToken) =>
+    {
+        var latest = await appReleaseService.GetLatestAsync("stable", null, cancellationToken);
+        if (latest is null)
+        {
+            return Results.NotFound(new { message = "No stable Windows installer release is available yet." });
+        }
+
+        var installerPath = installerStorageService.GetWindowsInstallerPath("stable", latest.LatestVersion);
+        if (!File.Exists(installerPath))
+        {
+            return Results.NotFound(new
+            {
+                message = "Installer artifact for latest stable release was not found in storage.",
+                version = latest.LatestVersion
+            });
+        }
+
+        var downloadFileName = installerStorageService.GetWindowsDownloadFileName(latest.LatestVersion);
+        return Results.File(installerPath, "application/x-msi", downloadFileName);
+    })
+    .RequireRateLimiting("public");
+
+app.MapMethods("/app", new[] { "GET", "HEAD" }, () =>
+        Results.Redirect("/dashboard", permanent: true, preserveMethod: true))
+    .AllowAnonymous();
+app.MapMethods("/app/dashboard", new[] { "GET", "HEAD" }, () =>
+        Results.Redirect("/dashboard", permanent: true, preserveMethod: true))
+    .AllowAnonymous();
+app.MapMethods("/app/licenses", new[] { "GET", "HEAD" }, () =>
+        Results.Redirect("/dashboard/licenses", permanent: true, preserveMethod: true))
+    .AllowAnonymous();
+app.MapMethods("/app/billing", new[] { "GET", "HEAD" }, () =>
+        Results.Redirect("/dashboard/billing", permanent: true, preserveMethod: true))
+    .AllowAnonymous();
+
 app.MapRazorPages();
 
 var appApi = app.MapGroup("/app/api")
@@ -316,6 +392,186 @@ app.MapPost("/webhooks/paykrypt", async (
 .RequireRateLimiting("public");
 
 var api = app.MapGroup("/api");
+
+var installerApi = api.MapGroup("/installer")
+    .WithMetadata(new AdminEndpointMetadata())
+    .AddEndpointFilter<AdminApiKeyEndpointFilter>()
+    .AddEndpointFilter<AdminAuditEndpointFilter>();
+
+installerApi.MapPost("/upload-windows", async (
+        HttpRequest request,
+        IInstallerStorageService installerStorageService,
+        IInstallerVersionResolver installerVersionResolver,
+        AppReleaseService appReleaseService,
+        CancellationToken cancellationToken) =>
+    {
+        if (!request.HasFormContentType)
+        {
+            return Results.BadRequest(new { message = "Content-Type must be multipart/form-data." });
+        }
+
+        var form = await request.ReadFormAsync(cancellationToken);
+        var installer = form.Files.GetFile("installer");
+        if (installer is null)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["installer"] = ["installer (.msi) file is required."]
+            });
+        }
+
+        if (installer.Length <= 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["installer"] = ["installer file must not be empty."]
+            });
+        }
+
+        if (!string.Equals(Path.GetExtension(installer.FileName), ".msi", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["installer"] = ["installer file extension must be .msi."]
+            });
+        }
+
+        if (installer.Length > installerStorageService.MaxUploadBytes)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["installer"] =
+                [
+                    $"installer file exceeds max upload size of {installerStorageService.MaxUploadBytes / (1024L * 1024L)} MB."
+                ]
+            });
+        }
+
+        var channel = (form["channel"].FirstOrDefault() ?? "stable").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(channel))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["channel"] = ["channel is required."]
+            });
+        }
+
+        var providedVersion = (form["version"].FirstOrDefault() ?? string.Empty).Trim();
+        var resolvedVersion = providedVersion;
+        var minSupportedVersion = (form["minSupportedVersion"].FirstOrDefault() ?? string.Empty).Trim();
+        var notes = (form["notes"].FirstOrDefault() ?? string.Empty).Trim();
+        var publishedAtRaw = (form["publishedAt"].FirstOrDefault() ?? string.Empty).Trim();
+
+        DateTimeOffset? publishedAt = null;
+        if (!string.IsNullOrWhiteSpace(publishedAtRaw))
+        {
+            if (!DateTimeOffset.TryParse(
+                    publishedAtRaw,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var parsedPublishedAt))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["publishedAt"] = ["publishedAt must be a valid ISO-8601 datetime."]
+                });
+            }
+
+            publishedAt = parsedPublishedAt;
+        }
+
+        var tempPath = Path.Combine(
+            Path.GetTempPath(),
+            $"omnirelay-upload-{Guid.NewGuid():N}.msi");
+
+        try
+        {
+            await using (var tempStream = new FileStream(
+                             tempPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             128 * 1024,
+                             FileOptions.Asynchronous))
+            {
+                await installer.CopyToAsync(tempStream, cancellationToken);
+            }
+
+            if (string.IsNullOrWhiteSpace(resolvedVersion))
+            {
+                if (!installerVersionResolver.TryResolveWindowsMsiVersion(tempPath, out resolvedVersion, out var versionError))
+                {
+                    return Results.ValidationProblem(new Dictionary<string, string[]>
+                    {
+                        ["version"] = [versionError]
+                    });
+                }
+            }
+
+            if (!IsValidSemVer(resolvedVersion))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["version"] = ["version must be valid semver."]
+                });
+            }
+
+            if (string.IsNullOrWhiteSpace(minSupportedVersion))
+            {
+                minSupportedVersion = resolvedVersion;
+            }
+
+            if (!IsValidSemVer(minSupportedVersion))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["minSupportedVersion"] = ["minSupportedVersion must be valid semver."]
+                });
+            }
+
+            var saveResult = await installerStorageService.SaveWindowsInstallerAsync(
+                tempPath,
+                channel,
+                resolvedVersion,
+                cancellationToken);
+
+            var release = await appReleaseService.UpsertReleaseAsync(
+                channel: channel,
+                version: resolvedVersion,
+                minSupportedVersion: minSupportedVersion,
+                downloadUrl: "/download/windows",
+                sha256: saveResult.Sha256,
+                notes: notes,
+                publishedAt: publishedAt,
+                cancellationToken: cancellationToken);
+
+            return Results.Ok(new
+            {
+                message = "Windows installer uploaded successfully.",
+                channel = release.Channel,
+                version = release.Version,
+                minSupportedVersion = release.MinSupportedVersion,
+                sha256 = release.Sha256,
+                downloadUrl = release.DownloadUrl,
+                publishedAt = release.PublishedAt,
+                fileSizeBytes = saveResult.FileSizeBytes
+            });
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Best-effort temp cleanup.
+                }
+            }
+        }
+    });
 
 api.MapPost("/license/verify", async (
         LicenseVerifyRequest request,
@@ -608,6 +864,38 @@ static Guid? GetUserId(ClaimsPrincipal principal)
 {
     var value = principal.FindFirstValue(ClaimTypes.NameIdentifier);
     return Guid.TryParse(value, out var parsed) ? parsed : null;
+}
+
+static bool IsValidSemVer(string value)
+{
+    return !string.IsNullOrWhiteSpace(value) && NuGetVersion.TryParse(value.Trim(), out _);
+}
+
+static bool ParseBooleanOrDefault(string? value, bool defaultValue)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultValue;
+    }
+
+    return bool.TryParse(value, out var parsed) ? parsed : defaultValue;
+}
+
+static double ParseDoubleOrDefault(string? value, double defaultValue)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultValue;
+    }
+
+    return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+        ? parsed
+        : defaultValue;
+}
+
+static string ParseStringOrDefault(string? value, string defaultValue)
+{
+    return string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
 }
 
 public partial class Program;

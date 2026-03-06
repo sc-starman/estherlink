@@ -303,6 +303,54 @@ namespace EstherLink.Backend.Data.Migrations
                     b.ToTable("licenses", "public");
                 });
 
+            modelBuilder.Entity("EstherLink.Backend.Data.Entities.LicenseTransferEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AppVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("app_version");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("FromFingerprintHash")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("from_fingerprint_hash");
+
+                    b.Property<Guid>("LicenseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("license_id");
+
+                    b.Property<string>("MetaJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("meta_json");
+
+                    b.Property<string>("RequestId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("request_id");
+
+                    b.Property<string>("ToFingerprintHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("to_fingerprint_hash");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LicenseId", "CreatedAt");
+
+                    b.ToTable("license_transfers", "public");
+                });
+
             modelBuilder.Entity("EstherLink.Backend.Data.Entities.PayKryptIntentEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -786,6 +834,17 @@ namespace EstherLink.Backend.Data.Migrations
                     b.Navigation("License");
                 });
 
+            modelBuilder.Entity("EstherLink.Backend.Data.Entities.LicenseTransferEntity", b =>
+                {
+                    b.HasOne("EstherLink.Backend.Data.Entities.LicenseEntity", "License")
+                        .WithMany("Transfers")
+                        .HasForeignKey("LicenseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("License");
+                });
+
             modelBuilder.Entity("EstherLink.Backend.Data.Entities.PayKryptIntentEntity", b =>
                 {
                     b.HasOne("EstherLink.Backend.Data.Entities.CommerceOrderEntity", "Order")
@@ -888,6 +947,8 @@ namespace EstherLink.Backend.Data.Migrations
                     b.Navigation("Activations");
 
                     b.Navigation("IssuedByOrders");
+
+                    b.Navigation("Transfers");
 
                     b.Navigation("UserLicenses");
                 });

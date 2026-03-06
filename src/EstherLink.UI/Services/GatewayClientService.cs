@@ -22,6 +22,11 @@ public sealed class GatewayClientService : IGatewayClientService
         return SendAsync(IpcCommands.SetLicenseKey, new SetLicenseKeyRequest(licenseKey ?? string.Empty), cancellationToken, TimeSpan.FromSeconds(15));
     }
 
+    public Task<IpcResponse?> RequestLicenseTransferAsync(CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.RequestLicenseTransfer, null, cancellationToken, TimeSpan.FromSeconds(15));
+    }
+
     public Task<IpcResponse?> SetConfigAsync(ServiceConfig config, CancellationToken cancellationToken = default)
     {
         return SendAsync(IpcCommands.SetConfig, new SetConfigRequest(config), cancellationToken, TimeSpan.FromSeconds(15));

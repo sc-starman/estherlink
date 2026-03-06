@@ -16,6 +16,13 @@ public sealed class GatewayStatus
     public bool LicenseFromCache { get; set; }
     public DateTimeOffset? LicenseCheckedAtUtc { get; set; }
     public DateTimeOffset? LicenseExpiresAtUtc { get; set; }
+    public string? LicenseReason { get; set; }
+    public bool LicenseTransferRequired { get; set; }
+    public int LicenseTransferLimitPerRollingYear { get; set; }
+    public int LicenseTransfersUsedInWindow { get; set; }
+    public int LicenseTransfersRemainingInWindow { get; set; }
+    public DateTimeOffset? LicenseTransferWindowStartAt { get; set; }
+    public string? LicenseActiveDeviceHint { get; set; }
     public string? WhitelistAdapterIp { get; set; }
     public string? DefaultAdapterIp { get; set; }
     public int WhitelistCount { get; set; }

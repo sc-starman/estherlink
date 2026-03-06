@@ -66,18 +66,41 @@ public partial class LicenseViewModel : ObservableObject
     [ObservableProperty]
     private string serviceCompatibilityMessage = "Checking relay service compatibility...";
 
+    [ObservableProperty]
+    private bool transferRequired;
+
+    [ObservableProperty]
+    private string activeDeviceHint = string.Empty;
+
+    [ObservableProperty]
+    private int transfersUsedInWindow;
+
+    [ObservableProperty]
+    private int transfersRemainingInWindow;
+
+    [ObservableProperty]
+    private int transferLimitPerRollingYear;
+
     private bool CanActivate() => !IsBusy && IsServiceCompatible;
+    private bool CanTransfer() => !IsBusy && IsServiceCompatible && TransferRequired;
     private bool CanRefreshCompatibility() => !IsBusy;
 
     partial void OnIsBusyChanged(bool value)
     {
         ActivateLicenseCommand.NotifyCanExecuteChanged();
+        TransferLicenseCommand.NotifyCanExecuteChanged();
         RefreshServiceCompatibilityCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnIsServiceCompatibleChanged(bool value)
     {
         ActivateLicenseCommand.NotifyCanExecuteChanged();
+        TransferLicenseCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnTransferRequiredChanged(bool value)
+    {
+        TransferLicenseCommand.NotifyCanExecuteChanged();
     }
 
     [RelayCommand(CanExecute = nameof(CanActivate))]
@@ -99,6 +122,33 @@ public partial class LicenseViewModel : ObservableObject
             }
 
             var result = await _orchestrator.VerifyLicenseAsync();
+            Feedback = result.Message;
+            await _orchestrator.RefreshStatusAsync();
+            RefreshCards();
+
+            if (LicenseActive)
+            {
+                _navigationService.Navigate(RelayRoute);
+            }
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanTransfer))]
+    private async Task TransferLicenseAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            var result = await _orchestrator.RequestLicenseTransferAndVerifyAsync();
             Feedback = result.Message;
             await _orchestrator.RefreshStatusAsync();
             RefreshCards();
@@ -146,6 +196,12 @@ public partial class LicenseViewModel : ObservableObject
             ? "--"
             : expiresAt.Value.LocalDateTime.ToString("MMM dd, yyyy");
 
+        TransferRequired = status?.LicenseTransferRequired == true;
+        ActiveDeviceHint = status?.LicenseActiveDeviceHint ?? string.Empty;
+        TransfersUsedInWindow = status?.LicenseTransfersUsedInWindow ?? 0;
+        TransfersRemainingInWindow = status?.LicenseTransfersRemainingInWindow ?? 0;
+        TransferLimitPerRollingYear = status?.LicenseTransferLimitPerRollingYear ?? 0;
+
         if (LicenseActive)
         {
             BannerTitle = "Professional License is Active";
@@ -156,7 +212,9 @@ public partial class LicenseViewModel : ObservableObject
         else
         {
             BannerTitle = "No Active License";
-            BannerDescription = "Activate a valid license to unlock professional routing, security features, and support.";
+            BannerDescription = TransferRequired
+                ? $"License is active on {(string.IsNullOrWhiteSpace(ActiveDeviceHint) ? "another device" : ActiveDeviceHint)}. Confirm transfer to activate here."
+                : "Activate a valid license to unlock professional routing, security features, and support.";
             BannerActionText = "Activation Required";
             BannerActionEnabled = false;
         }

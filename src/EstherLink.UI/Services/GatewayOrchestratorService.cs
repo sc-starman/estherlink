@@ -241,6 +241,13 @@ public sealed class GatewayOrchestratorService
         status.LicenseCheckedAtUtc = DateTimeOffset.UtcNow;
         status.LicenseValid = payload.IsValid;
         status.LicenseExpiresAtUtc = payload.ExpiresAtUtc;
+        status.LicenseReason = payload.Reason;
+        status.LicenseTransferRequired = payload.TransferRequired;
+        status.LicenseTransferLimitPerRollingYear = payload.TransferLimitPerRollingYear;
+        status.LicenseTransfersUsedInWindow = payload.TransfersUsedInWindow;
+        status.LicenseTransfersRemainingInWindow = payload.TransfersRemainingInWindow;
+        status.LicenseTransferWindowStartAt = payload.TransferWindowStartAt;
+        status.LicenseActiveDeviceHint = payload.ActiveDeviceIdHint;
 
         _state.LicenseActivated = payload.IsValid;
         _state.LicenseActivatedExpiresAtUtc = payload.ExpiresAtUtc;
@@ -250,6 +257,16 @@ public sealed class GatewayOrchestratorService
             return SetAction(true, $"License valid. Expires: {payload.ExpiresAtUtc:O}. Source: {(payload.FromCache ? "cache" : "online")}.");
         }
 
+        if (payload.TransferRequired)
+        {
+            var hint = string.IsNullOrWhiteSpace(payload.ActiveDeviceIdHint)
+                ? "another device"
+                : payload.ActiveDeviceIdHint;
+            return SetAction(
+                false,
+                $"License transfer required. Active on {hint}. Remaining transfers: {payload.TransfersRemainingInWindow}/{payload.TransferLimitPerRollingYear}.");
+        }
+
         var error = payload.Error ?? "unknown error";
         if (IsTransientLicenseError(error))
         {
@@ -257,6 +274,17 @@ public sealed class GatewayOrchestratorService
         }
 
         return SetAction(false, $"License invalid: {error}");
+    }
+
+    public async Task<OperationResult> RequestLicenseTransferAndVerifyAsync(CancellationToken cancellationToken = default)
+    {
+        var transferResponse = await _gatewayClient.RequestLicenseTransferAsync(cancellationToken);
+        if (transferResponse?.Success != true)
+        {
+            return SetAction(false, $"License transfer request failed: {transferResponse?.Error ?? "service unavailable"}");
+        }
+
+        return await VerifyLicenseAsync(cancellationToken);
     }
 
     public async Task<OperationResult> CheckLicenseServiceCompatibilityAsync(CancellationToken cancellationToken = default)

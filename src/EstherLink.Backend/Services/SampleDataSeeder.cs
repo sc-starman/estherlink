@@ -34,7 +34,7 @@ public sealed class SampleDataSeeder
                 Status = LicenseStatus.Active,
                 Plan = "pro",
                 ExpiresAt = now.AddYears(1),
-                MaxDevices = 2,
+                MaxDevices = 1,
                 CreatedAt = now,
                 UpdatedAt = now
             };
@@ -95,7 +95,7 @@ public sealed class SampleDataSeeder
                     Version = "1.2.0",
                     PublishedAt = now.AddDays(-10),
                     Notes = "Initial stable release.",
-                    DownloadUrl = "https://downloads.example.com/estherlink/1.2.0/EstherLink.msi",
+                    DownloadUrl = "/download/windows",
                     Sha256 = Sha256Util.HashHex("estherlink-1.2.0"),
                     MinSupportedVersion = "1.0.0"
                 },
@@ -106,7 +106,7 @@ public sealed class SampleDataSeeder
                     Version = "1.3.0",
                     PublishedAt = now.AddDays(-1),
                     Notes = "Improved routing policy and stability fixes.",
-                    DownloadUrl = "https://downloads.example.com/estherlink/1.3.0/EstherLink.msi",
+                    DownloadUrl = "/download/windows",
                     Sha256 = Sha256Util.HashHex("estherlink-1.3.0"),
                     MinSupportedVersion = "1.1.0"
                 });

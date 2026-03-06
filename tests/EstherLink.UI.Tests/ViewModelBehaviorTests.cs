@@ -126,6 +126,11 @@ public class ViewModelBehaviorTests
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
 
+        public Task<IpcResponse?> RequestLicenseTransferAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
         public Task<IpcResponse?> UpdateWhitelistAsync(IReadOnlyList<string> entries, CancellationToken cancellationToken = default)
         {
             UpdateWhitelistCallCount++;

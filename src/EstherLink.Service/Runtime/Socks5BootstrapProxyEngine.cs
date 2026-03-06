@@ -73,7 +73,7 @@ public sealed class Socks5BootstrapProxyEngine
         cts?.Dispose();
     }
 
-    private async Task RestartAsync(int port, CancellationToken cancellationToken)
+    public async Task RestartAsync(int port, CancellationToken cancellationToken)
     {
         await StopAsync(cancellationToken);
 
@@ -303,4 +303,3 @@ public sealed class Socks5BootstrapProxyEngine
         return ipv4;
     }
 }
-

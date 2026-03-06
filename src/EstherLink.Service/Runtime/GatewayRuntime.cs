@@ -16,7 +16,9 @@ public sealed class GatewayRuntime
     private IReadOnlyList<string> _whitelistEntries;
     private WhitelistSet _whitelist;
     private bool _proxyRequested;
+    private bool _licenseTransferRequested;
     private GatewayStatus _status;
+    private long _tunnelRestartRequestVersion;
 
     public GatewayRuntime(ConfigStore configStore, FileLogWriter log)
     {
@@ -86,7 +88,26 @@ public sealed class GatewayRuntime
         lock (_sync)
         {
             _config.LicenseKey = licenseKey ?? string.Empty;
+            _licenseTransferRequested = false;
             PersistLocked();
+        }
+    }
+
+    public void RequestLicenseTransfer()
+    {
+        lock (_sync)
+        {
+            _licenseTransferRequested = true;
+        }
+    }
+
+    public bool ConsumeLicenseTransferRequest()
+    {
+        lock (_sync)
+        {
+            var requested = _licenseTransferRequested;
+            _licenseTransferRequested = false;
+            return requested;
         }
     }
 
@@ -187,6 +208,24 @@ public sealed class GatewayRuntime
         }
     }
 
+    public void RequestTunnelRestart(string reason)
+    {
+        lock (_sync)
+        {
+            _tunnelRestartRequestVersion++;
+            _status.TunnelLastError = reason;
+            _status.BootstrapSocksLastError = reason;
+        }
+    }
+
+    public long GetTunnelRestartRequestVersion()
+    {
+        lock (_sync)
+        {
+            return _tunnelRestartRequestVersion;
+        }
+    }
+
     public void SetLicenseStatus(LicenseValidationResult result)
     {
         lock (_sync)
@@ -195,6 +234,13 @@ public sealed class GatewayRuntime
             _status.LicenseFromCache = result.FromCache;
             _status.LicenseCheckedAtUtc = result.CheckedAtUtc;
             _status.LicenseExpiresAtUtc = result.ExpiresAtUtc;
+            _status.LicenseReason = result.Reason;
+            _status.LicenseTransferRequired = result.TransferRequired;
+            _status.LicenseTransferLimitPerRollingYear = result.TransferLimitPerRollingYear;
+            _status.LicenseTransfersUsedInWindow = result.TransfersUsedInWindow;
+            _status.LicenseTransfersRemainingInWindow = result.TransfersRemainingInWindow;
+            _status.LicenseTransferWindowStartAt = result.TransferWindowStartAt;
+            _status.LicenseActiveDeviceHint = result.ActiveDeviceIdHint;
             _status.LastError = result.Error;
         }
     }
@@ -227,6 +273,13 @@ public sealed class GatewayRuntime
                 LicenseFromCache = _status.LicenseFromCache,
                 LicenseCheckedAtUtc = _status.LicenseCheckedAtUtc,
                 LicenseExpiresAtUtc = _status.LicenseExpiresAtUtc,
+                LicenseReason = _status.LicenseReason,
+                LicenseTransferRequired = _status.LicenseTransferRequired,
+                LicenseTransferLimitPerRollingYear = _status.LicenseTransferLimitPerRollingYear,
+                LicenseTransfersUsedInWindow = _status.LicenseTransfersUsedInWindow,
+                LicenseTransfersRemainingInWindow = _status.LicenseTransfersRemainingInWindow,
+                LicenseTransferWindowStartAt = _status.LicenseTransferWindowStartAt,
+                LicenseActiveDeviceHint = _status.LicenseActiveDeviceHint,
                 WhitelistAdapterIp = _status.WhitelistAdapterIp,
                 DefaultAdapterIp = _status.DefaultAdapterIp,
                 WhitelistCount = _status.WhitelistCount,

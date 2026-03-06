@@ -17,6 +17,7 @@ public sealed class TunnelSupervisorWorker : BackgroundService
     private int _reconnectCount;
     private DateTimeOffset? _lastConnectedAtUtc;
     private string? _lastError;
+    private long _handledRestartVersion;
 
     public TunnelSupervisorWorker(
         GatewayRuntime runtime,
@@ -35,6 +36,15 @@ public sealed class TunnelSupervisorWorker : BackgroundService
             try
             {
                 var config = _runtime.GetConfigSnapshot();
+                var requestedRestartVersion = _runtime.GetTunnelRestartRequestVersion();
+                if (requestedRestartVersion > _handledRestartVersion)
+                {
+                    _handledRestartVersion = requestedRestartVersion;
+                    _lastError = "Automatic tunnel recovery requested by SOCKS watchdog.";
+                    _fileLog.Warn(_lastError);
+                    await StopTunnelProcessAsync();
+                }
+
                 if (string.IsNullOrWhiteSpace(config.TunnelHost))
                 {
                     await StopTunnelProcessAsync();

@@ -92,9 +92,10 @@ Capabilities:
   - `GET|POST /account/login`
   - `POST /account/logout`
 - Protected dashboard pages:
-  - `GET /app/dashboard`
-  - `GET /app/licenses`
-  - `GET /app/billing`
+  - `GET /dashboard`
+  - `GET /dashboard/trial`
+  - `GET /dashboard/licenses`
+  - `GET /dashboard/billing`
   - `GET /app/downloads`
   - `GET /app/account`
 - Internal dashboard APIs:
@@ -104,8 +105,9 @@ Capabilities:
   - `POST /webhooks/paykrypt`
 
 Behavior:
-- Trial: one per account, 2-day TTL, `max_devices=1`.
-- Paid: one-time purchase, perpetual license (`expires_at=null`) + 1 year update entitlement.
+- Trial: one per account, 2-day TTL, single-device.
+- Paid: one-time purchase, perpetual license (`expires_at=null`) + 1 year update entitlement, single-device.
+- Device transfer: explicit transfer required when moving to another device, up to 3 transfers per rolling 365 days.
 - Payment flow: PayKrypt webhook + polling reconciliation, idempotent license issuance.
 
 New DB objects:

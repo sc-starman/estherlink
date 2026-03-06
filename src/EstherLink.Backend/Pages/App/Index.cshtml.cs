@@ -9,6 +9,6 @@ public sealed class IndexModel : PageModel
 {
     public IActionResult OnGet()
     {
-        return RedirectToPage("/App/Dashboard");
+        return RedirectPermanentPreserveMethod("/dashboard");
     }
 }
