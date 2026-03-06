@@ -38,7 +38,7 @@
 4. Confirm remote port forwarding is accepted for `estherlink` user.
 
 ### Gateway Deployment Failures (VPS from UI)
-1. In UI `Service Status`, review operation log and failing phase (`upload`, `gateway_install`, `gateway_health`).
+1. In UI `Gateway Management`, review operation log and failing phase (`gateway_bootstrap`, `gateway_install`, `gateway_health`).
 2. Confirm session sudo password is set (clear/re-enter if auth fails).
 3. Confirm tunnel user has shell + sudo permissions.
 4. Validate bundled script exists on VPS:
@@ -46,8 +46,24 @@
 5. Validate gateway status/health directly:
    - `sudo /usr/local/sbin/omnirelay-gatewayctl status --json`
    - `sudo /usr/local/sbin/omnirelay-gatewayctl health --json`
-6. If bundle integrity error appears, rebuild:
-   - `bash scripts/build_omnirelay_vps_bundle.sh ...`
+6. If gateway install fails before service creation, rerun `Gateway Bootstrap Check` then retry install.
+
+### DNS Through Tunnel (Hybrid UDP + DoH)
+1. Validate DNS profile and path:
+   - `sudo /usr/local/sbin/omnirelay-gatewayctl dns-status`
+   - `sudo /usr/local/sbin/omnirelay-gatewayctl health --json`
+2. If `dnsPathHealthy=false`, run repair:
+   - `sudo /usr/local/sbin/omnirelay-gatewayctl dns-repair --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true`
+3. If apps work but browser fails (`DNS_PROBE_*`):
+   - Confirm `dnsConfigPresent=true` and `dnsRuleActive=true`.
+   - Confirm `dohReachableViaTunnel=true`.
+   - Confirm `udp53PathReady=true` when running hybrid mode.
+4. If DoH is blocked but UDP 53 works:
+   - Temporarily switch to UDP mode for diagnosis:
+   - `sudo /usr/local/sbin/omnirelay-gatewayctl dns-apply --dns-mode udp --dns-udp-only true`
+5. If neither DoH nor UDP 53 is available:
+   - Check tunnel state on relay side (`TunnelConnected`, `Bootstrap SOCKS Forward`).
+   - Check VPS firewall/provider egress policy for DNS/HTTPS.
 
 ## Rollback
 - Backend:

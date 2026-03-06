@@ -7,7 +7,7 @@ namespace EstherLink.Service.Runtime;
 
 public sealed class ConfigStore
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -56,7 +56,16 @@ public sealed class ConfigStore
 
             if (stored.SchemaVersion < 3)
             {
-                stored.SchemaVersion = CurrentSchemaVersion;
+                stored.SchemaVersion = 3;
+                migrated = true;
+            }
+
+            if (stored.SchemaVersion < 4)
+            {
+                stored.BootstrapSocksLocalPort = 19081;
+                stored.BootstrapSocksRemotePort = 16080;
+                stored.GatewayOnlineInstallEnabled = true;
+                stored.SchemaVersion = 4;
                 migrated = true;
             }
 
@@ -65,6 +74,9 @@ public sealed class ConfigStore
                 {
                     SchemaVersion = CurrentSchemaVersion,
                     LocalProxyListenPort = stored.LocalProxyListenPort,
+                    BootstrapSocksLocalPort = stored.BootstrapSocksLocalPort <= 0 ? 19081 : stored.BootstrapSocksLocalPort,
+                    BootstrapSocksRemotePort = stored.BootstrapSocksRemotePort <= 0 ? 16080 : stored.BootstrapSocksRemotePort,
+                    GatewayOnlineInstallEnabled = stored.GatewayOnlineInstallEnabled,
                     WhitelistAdapterIfIndex = stored.WhitelistAdapterIfIndex,
                     DefaultAdapterIfIndex = stored.DefaultAdapterIfIndex,
                     TunnelHost = stored.TunnelHost ?? string.Empty,
@@ -103,6 +115,9 @@ public sealed class ConfigStore
             {
                 SchemaVersion = CurrentSchemaVersion,
                 LocalProxyListenPort = config.LocalProxyListenPort,
+                BootstrapSocksLocalPort = config.BootstrapSocksLocalPort,
+                BootstrapSocksRemotePort = config.BootstrapSocksRemotePort,
+                GatewayOnlineInstallEnabled = config.GatewayOnlineInstallEnabled,
                 WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
                 DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
                 TunnelHost = config.TunnelHost,
@@ -157,6 +172,9 @@ public sealed class ConfigStore
     {
         public int SchemaVersion { get; set; }
         public int LocalProxyListenPort { get; set; } = 19080;
+        public int BootstrapSocksLocalPort { get; set; } = 19081;
+        public int BootstrapSocksRemotePort { get; set; } = 16080;
+        public bool GatewayOnlineInstallEnabled { get; set; } = true;
         public int WhitelistAdapterIfIndex { get; set; } = -1;
         public int DefaultAdapterIfIndex { get; set; } = -1;
         public bool TunnelEnabled { get; set; }

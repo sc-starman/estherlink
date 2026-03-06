@@ -13,6 +13,8 @@ public static class IpcCommands
     public const string StartProxy = "start_proxy";
     public const string StopProxy = "stop_proxy";
     public const string VerifyLicense = "verify_license";
+    public const string SetLicenseKey = "set_license_key";
+    public const string GetCapabilities = "get_capabilities";
     public const string TestTunnelConnection = "test_tunnel_connection";
 }
 
@@ -27,6 +29,10 @@ public sealed record UpdateWhitelistRequest(IReadOnlyList<string> Entries);
 public sealed record StatusResponse(GatewayStatus Status);
 
 public sealed record VerifyLicenseResponse(bool IsValid, DateTimeOffset? ExpiresAtUtc, bool FromCache, string? Error);
+
+public sealed record SetLicenseKeyRequest(string LicenseKey);
+
+public sealed record CapabilitiesResponse(string ServiceVersion, IReadOnlyList<string> Capabilities);
 
 public sealed record TestTunnelConnectionRequest(ServiceConfig Config);
 

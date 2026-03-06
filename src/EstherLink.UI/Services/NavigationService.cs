@@ -9,20 +9,20 @@ public sealed class NavigationService : INavigationService
     private readonly List<NavigationItemModel> _items =
     [
         new() { Route = "dashboard", Title = "Dashboard", IconGlyph = "\uE80F" },
-        new() { Route = "network", Title = "Network Configuration", IconGlyph = "\uE968" },
-        new() { Route = "whitelist", Title = "Whitelist Rules", IconGlyph = "\uE73E" },
-        new() { Route = "service", Title = "Service Status", IconGlyph = "\uE9D9" },
+        new() { Route = "relay", Title = "Relay Management", IconGlyph = "\uE968" },
+        new() { Route = "gateway", Title = "Gateway Management", IconGlyph = "\uE9D9" },
+        new() { Route = "whitelist", Title = "Whitelists", IconGlyph = "\uE73E" },
         new() { Route = "license", Title = "License", IconGlyph = "\uE8A7" },
-        new() { Route = "logs", Title = "Logs", IconGlyph = "\uE8A5" },
-        new() { Route = "settings", Title = "Settings", IconGlyph = "\uE713" }
+        new() { Route = "settings", Title = "Settings", IconGlyph = "\uE713" },
+        new() { Route = "logs", Title = "Logs", IconGlyph = "\uE8A5" }
     ];
 
     private readonly Dictionary<string, Type> _routes = new(StringComparer.OrdinalIgnoreCase)
     {
         ["dashboard"] = typeof(DashboardPage),
-        ["network"] = typeof(NetworkConfigPage),
+        ["relay"] = typeof(RelayManagementPage),
+        ["gateway"] = typeof(GatewayManagementPage),
         ["whitelist"] = typeof(WhitelistPage),
-        ["service"] = typeof(ServiceStatusPage),
         ["license"] = typeof(LicensePage),
         ["logs"] = typeof(LogsPage),
         ["settings"] = typeof(SettingsPage)

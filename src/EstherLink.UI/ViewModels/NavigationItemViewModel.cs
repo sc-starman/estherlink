@@ -14,4 +14,7 @@ public partial class NavigationItemViewModel : ObservableObject
 
     [ObservableProperty]
     private bool isActive;
+
+    [ObservableProperty]
+    private bool isEnabled = true;
 }

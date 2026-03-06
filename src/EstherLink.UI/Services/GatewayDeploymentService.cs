@@ -4,20 +4,88 @@ using Renci.SshNet;
 using Renci.SshNet.Common;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace EstherLink.UI.Services;
 
 public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatewayHealthService
 {
     private const string GatewayCtlPath = "/usr/local/sbin/omnirelay-gatewayctl";
+    private const string RemoteInstallScriptPath = "/tmp/omnirelay-gatewayctl.sh";
 
     private readonly ISshHostKeyTrustStore _hostKeyTrustStore;
 
     public GatewayDeploymentService(ISshHostKeyTrustStore hostKeyTrustStore)
     {
         _hostKeyTrustStore = hostKeyTrustStore;
+    }
+
+    public async Task<GatewayOperationResult> CheckGatewayBootstrapAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            ValidateRequest(request);
+            EnsureSudoPassword(sudoPassword);
+
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayBootstrap,
+                Percent = 10,
+                Message = "Checking SOCKS bootstrap endpoint"
+            });
+
+            var command =
+                "set -euo pipefail; " +
+                $"ss -lnt '( sport = :{request.Config.BootstrapSocksRemotePort} )' 2>/dev/null | awk 'NR>1 {{print $0}}' | grep -q . || {{ echo 'SOCKS listener is not present on 127.0.0.1:{request.Config.BootstrapSocksRemotePort}'; exit 41; }}; " +
+                "ok=0; " +
+                "for i in 1 2 3; do " +
+                $"  if curl --fail --silent --show-error --max-time 45 --connect-timeout 20 --retry 0 --socks5-hostname 127.0.0.1:{request.Config.BootstrapSocksRemotePort} https://deb.debian.org/ >/dev/null; then ok=1; break; fi; " +
+                "  echo \"SOCKS egress probe attempt ${i}/3 failed, retrying...\"; " +
+                "  sleep 3; " +
+                "done; " +
+                "if [ \"$ok\" != \"1\" ]; then echo 'SOCKS egress probe failed after retries.'; exit 42; fi; " +
+                "echo 'Gateway bootstrap SOCKS check passed.'";
+
+            var result = await ExecuteCommandAsync(
+                request.Config,
+                command,
+                sudoPassword,
+                line =>
+                {
+                    var clean = SanitizeTerminalLine(line);
+                    if (!string.IsNullOrWhiteSpace(clean))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayBootstrap,
+                            Percent = 0,
+                            Message = $"[vps] {clean}"
+                        });
+                    }
+                },
+                cancellationToken);
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayBootstrap,
+                Percent = result.Success ? 100 : 0,
+                Message = result.Success ? "SOCKS bootstrap check passed" : "SOCKS bootstrap check failed"
+            });
+
+            return result.Success
+                ? new GatewayOperationResult(true, "Gateway bootstrap check passed.")
+                : new GatewayOperationResult(false, result.ErrorMessage);
+        }
+        catch (Exception ex)
+        {
+            return new GatewayOperationResult(false, $"Gateway bootstrap check failed: {ex.Message}");
+        }
     }
 
     public async Task<GatewayOperationResult> InstallGatewayAsync(
@@ -31,29 +99,32 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             ValidateRequest(request);
             EnsureSudoPassword(sudoPassword);
 
-            var remoteRoot = GetRemoteRoot(request.Config);
-            var remoteBundleTar = $"{remoteRoot}/omnirelay-vps-bundle-x64.tar.gz";
+            var bootstrap = await CheckGatewayBootstrapAsync(request, sudoPassword, progress, cancellationToken);
+            if (!bootstrap.Success)
+            {
+                return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrap.Message}");
+            }
 
             progress?.Report(new DeploymentProgressSnapshot
             {
-                Phase = DeploymentPhases.Upload,
-                Percent = 0,
-                Message = "Connecting to VPS for upload"
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 5,
+                Message = "Uploading gateway installer script"
             });
 
-            await UploadBundleAsync(request, remoteRoot, remoteBundleTar, progress, cancellationToken);
+            await UploadInstallerScriptAsync(request, cancellationToken);
 
-            var installArgs = BuildInstallArgs(request, remoteRoot);
+            var panelUser = $"omniadmin_{RandomAlphaNum(6)}";
+            var panelPassword = RandomAlphaNum(24);
+            var panelBasePath = $"omni{RandomAlphaNum(14).ToLowerInvariant()}";
+            var installArgs = BuildInstallArgs(request, panelUser, panelPassword, panelBasePath);
             var command =
-                $"set -euo pipefail; " +
-                $"mkdir -p {ShellQuote(remoteRoot)}; " +
-                $"cd {ShellQuote(remoteRoot)}; " +
-                $"calc=$(sha256sum {ShellQuote(remoteBundleTar)} | awk '{{print $1}}'); " +
-                $"if [ \"$calc\" != {ShellQuote(request.BundleSha256)} ]; then echo 'Bundle checksum mismatch.'; exit 20; fi; " +
-                $"rm -rf bundle; " +
-                $"tar -xzf {ShellQuote(remoteBundleTar)}; " +
-                $"chmod +x bundle/scripts/setup_omnirelay_vps_3xui.sh; " +
-                $"bundle/scripts/setup_omnirelay_vps_3xui.sh {installArgs}";
+                "set -euo pipefail; " +
+                $"chmod +x {ShellQuote(RemoteInstallScriptPath)}; " +
+                $"{ShellQuote(RemoteInstallScriptPath)} {installArgs}";
+
+            using var installTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            installTimeoutCts.CancelAfter(TimeSpan.FromMinutes(20));
 
             var result = await ExecuteCommandAsync(
                 request.Config,
@@ -61,7 +132,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 sudoPassword,
                 line =>
                 {
-                    if (TryParseProgressLine(line, out var pct, out var message))
+                    var clean = SanitizeTerminalLine(line);
+                    if (TryParseProgressLine(clean, out var pct, out var message))
                     {
                         progress?.Report(new DeploymentProgressSnapshot
                         {
@@ -70,15 +142,27 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                             Message = message
                         });
                     }
+                    else if (!string.IsNullOrWhiteSpace(clean))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayInstall,
+                            Percent = 0,
+                            Message = $"[vps] {clean}"
+                        });
+                    }
                 },
-                cancellationToken);
+                installTimeoutCts.Token);
 
             if (!result.Success)
             {
                 return new GatewayOperationResult(false, result.ErrorMessage);
             }
 
-            return new GatewayOperationResult(true, "Gateway install completed.");
+            var panelUrl = $"http://{request.Config.TunnelHost}:{request.GatewayPanelPort}/{panelBasePath}/";
+            return new GatewayOperationResult(
+                true,
+                $"Gateway install completed. Panel URL: {panelUrl} | Username: {panelUser} | Password: {panelPassword}");
         }
         catch (Exception ex)
         {
@@ -113,6 +197,85 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return RunSimpleGatewayCommandAsync(request, sudoPassword, "uninstall", DeploymentPhases.GatewayCommand, progress, cancellationToken);
     }
 
+    public Task<GatewayOperationResult> ApplyGatewayDnsAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return RunSimpleGatewayCommandAsync(request, sudoPassword, "dns-apply", DeploymentPhases.GatewayCommand, progress, cancellationToken);
+    }
+
+    public async Task<GatewayOperationResult> CheckGatewayDnsAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            ValidateRequest(request);
+            EnsureSudoPassword(sudoPassword);
+
+            var args = BuildCommonArgs(request) + " --json";
+            var command =
+                "set -euo pipefail; " +
+                $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo 'Gateway control script is not installed on VPS. Run Install Gateway first.'; exit 31; }}; " +
+                $"{ShellQuote(GatewayCtlPath)} dns-status {args}";
+
+            var result = await ExecuteCommandAsync(
+                request.Config,
+                command,
+                sudoPassword,
+                line =>
+                {
+                    var clean = SanitizeTerminalLine(line);
+                    if (TryParseProgressLine(clean, out var pct, out var message))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayHealth,
+                            Percent = pct,
+                            Message = message
+                        });
+                    }
+                    else if (!string.IsNullOrWhiteSpace(clean) && !clean.StartsWith("{", StringComparison.Ordinal))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayHealth,
+                            Percent = 0,
+                            Message = $"[vps] {clean}"
+                        });
+                    }
+                },
+                cancellationToken);
+
+            if (!result.Success)
+            {
+                return new GatewayOperationResult(false, result.ErrorMessage);
+            }
+
+            var json = ExtractLastJsonLine(result.Output) ?? "{}";
+            var dto = JsonSerializer.Deserialize<GatewayHealthDto>(json, JsonOptions) ?? new GatewayHealthDto();
+            var ok = dto.DnsConfigPresent && dto.DnsRuleActive && dto.DohReachableViaTunnel;
+            return new GatewayOperationResult(ok, ok ? "Gateway DNS path check passed." : "Gateway DNS path check failed.");
+        }
+        catch (Exception ex)
+        {
+            return new GatewayOperationResult(false, $"Gateway DNS check failed: {ex.Message}");
+        }
+    }
+
+    public Task<GatewayOperationResult> RepairGatewayDnsAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return RunSimpleGatewayCommandAsync(request, sudoPassword, "dns-repair", DeploymentPhases.GatewayCommand, progress, cancellationToken);
+    }
+
     public async Task<GatewayServiceStatus> GetStatusAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
@@ -123,8 +286,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
         var args = BuildCommonArgs(request) + " --json";
         var command =
-            $"set -euo pipefail; " +
-            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"sshState\":\"missing\",\"xuiState\":\"missing\",\"fail2banState\":\"missing\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false}}'; exit 0; }}; " +
+            "set -euo pipefail; " +
+            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"sshState\":\"missing\",\"xuiState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false}}'; exit 0; }}; " +
             $"{ShellQuote(GatewayCtlPath)} status {args}";
 
         var result = await ExecuteCommandAsync(request.Config, command, sudoPassword, null, cancellationToken);
@@ -154,8 +317,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
         var args = BuildCommonArgs(request) + " --json";
         var command =
-            $"set -euo pipefail; " +
-            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"healthy\":false,\"sshState\":\"missing\",\"xuiState\":\"missing\",\"fail2banState\":\"missing\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false}}'; exit 0; }}; " +
+            "set -euo pipefail; " +
+            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"healthy\":false,\"sshState\":\"missing\",\"xuiState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false}}'; exit 0; }}; " +
             $"{ShellQuote(GatewayCtlPath)} health {args}";
 
         var result = await ExecuteCommandAsync(
@@ -181,6 +344,49 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return dto.ToModel(json);
     }
 
+    private async Task UploadInstallerScriptAsync(GatewayDeploymentRequest request, CancellationToken cancellationToken)
+    {
+        var localScript = ResolveInstallerScriptPath();
+
+        await Task.Run(() =>
+        {
+            using var sftp = new SftpClient(CreateConnectionInfo(request.Config));
+            AttachHostKeyTrust(sftp, request.Config);
+            sftp.Connect();
+            try
+            {
+                using var fs = File.OpenRead(localScript);
+                sftp.UploadFile(fs, RemoteInstallScriptPath, canOverride: true);
+            }
+            finally
+            {
+                if (sftp.IsConnected)
+                {
+                    sftp.Disconnect();
+                }
+            }
+        }, cancellationToken);
+    }
+
+    private static string ResolveInstallerScriptPath()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "GatewayScripts", "setup_omnirelay_vps_3xui.sh"),
+            Path.Combine(baseDir, "setup_omnirelay_vps_3xui.sh"),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", "setup_omnirelay_vps_3xui.sh"))
+        };
+
+        var path = candidates.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException("Gateway installer script not found. Expected setup_omnirelay_vps_3xui.sh in app GatewayScripts content.");
+        }
+
+        return path;
+    }
+
     private async Task<GatewayOperationResult> RunSimpleGatewayCommandAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
@@ -196,8 +402,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
             var args = BuildCommonArgs(request);
             var command =
-                $"set -euo pipefail; " +
-                $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo 'Gateway control script is not installed on VPS.'; exit 31; }}; " +
+                "set -euo pipefail; " +
+                $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo 'Gateway control script is not installed on VPS. Run Install Gateway first.'; exit 31; }}; " +
                 $"{ShellQuote(GatewayCtlPath)} {operation} {args}";
 
             var result = await ExecuteCommandAsync(
@@ -206,13 +412,23 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 sudoPassword,
                 line =>
                 {
-                    if (TryParseProgressLine(line, out var pct, out var message))
+                    var clean = SanitizeTerminalLine(line);
+                    if (TryParseProgressLine(clean, out var pct, out var message))
                     {
                         progress?.Report(new DeploymentProgressSnapshot
                         {
                             Phase = phase,
                             Percent = pct,
                             Message = message
+                        });
+                    }
+                    else if (!string.IsNullOrWhiteSpace(clean))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = phase,
+                            Percent = 0,
+                            Message = $"[vps] {clean}"
                         });
                     }
                 },
@@ -226,47 +442,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             return new GatewayOperationResult(false, $"Gateway {operation} failed: {ex.Message}");
         }
-    }
-
-    private async Task UploadBundleAsync(
-        GatewayDeploymentRequest request,
-        string remoteRoot,
-        string remoteBundleTar,
-        IProgress<DeploymentProgressSnapshot>? progress,
-        CancellationToken cancellationToken)
-    {
-        await Task.Run(() =>
-        {
-            using var sftp = new SftpClient(CreateConnectionInfo(request.Config));
-            AttachHostKeyTrust(sftp, request.Config);
-
-            sftp.Connect();
-            try
-            {
-                EnsureRemoteDirectory(sftp, remoteRoot);
-
-                using var fs = File.OpenRead(request.BundleLocalPath);
-                var totalBytes = fs.Length <= 0 ? 1L : fs.Length;
-
-                sftp.UploadFile(fs, remoteBundleTar, uploaded =>
-                {
-                    var pct = (int)Math.Clamp(Math.Round(uploaded * 100d / totalBytes, MidpointRounding.AwayFromZero), 0, 100);
-                    progress?.Report(new DeploymentProgressSnapshot
-                    {
-                        Phase = DeploymentPhases.Upload,
-                        Percent = pct,
-                        Message = $"Uploading gateway bundle ({pct}%)"
-                    });
-                });
-            }
-            finally
-            {
-                if (sftp.IsConnected)
-                {
-                    sftp.Disconnect();
-                }
-            }
-        }, cancellationToken);
     }
 
     private async Task<CommandExecutionResult> ExecuteCommandAsync(
@@ -401,52 +576,34 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return connection;
     }
 
-    private static void EnsureRemoteDirectory(SftpClient sftp, string absolutePath)
-    {
-        var normalized = absolutePath.Replace('\\', '/').Trim();
-        if (string.IsNullOrWhiteSpace(normalized) || normalized == "/")
-        {
-            return;
-        }
-
-        var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var current = normalized.StartsWith('/') ? "/" : string.Empty;
-
-        foreach (var part in parts)
-        {
-            current = current.Length == 0 || current == "/"
-                ? $"/{part}"
-                : $"{current}/{part}";
-
-            if (!sftp.Exists(current))
-            {
-                sftp.CreateDirectory(current);
-            }
-        }
-    }
-
-    private static string BuildInstallArgs(GatewayDeploymentRequest request, string remoteRoot)
+    private static string BuildInstallArgs(
+        GatewayDeploymentRequest request,
+        string panelUser,
+        string panelPassword,
+        string panelBasePath)
     {
         return
-            $"install --bundle-dir {ShellQuote($"{remoteRoot}/bundle")} {BuildCommonArgs(request)} --tunnel-auth {ShellQuote(MapTunnelAuth(request.Config))}";
+            $"install {BuildCommonArgs(request)} " +
+            $"--tunnel-auth {ShellQuote(MapTunnelAuth(request.Config))} " +
+            $"--panel-user {ShellQuote(panelUser)} " +
+            $"--panel-password {ShellQuote(panelPassword)} " +
+            $"--panel-base-path {ShellQuote(panelBasePath)} " +
+            $"--bootstrap-socks-port {request.Config.BootstrapSocksRemotePort}";
     }
 
     private static string BuildCommonArgs(GatewayDeploymentRequest request)
     {
         return string.Join(" ", new[]
         {
-            "--public-port", ShellQuote(request.GatewayPublicPort.ToString()),
-            "--panel-port", ShellQuote(request.GatewayPanelPort.ToString()),
-            "--backend-port", ShellQuote(request.Config.TunnelRemotePort.ToString()),
-            "--ssh-port", ShellQuote(request.Config.TunnelSshPort.ToString()),
-            "--tunnel-user", ShellQuote(request.Config.TunnelUser.Trim())
+            "--public-port", request.GatewayPublicPort.ToString(),
+            "--panel-port", request.GatewayPanelPort.ToString(),
+            "--backend-port", request.Config.TunnelRemotePort.ToString(),
+            "--ssh-port", request.Config.TunnelSshPort.ToString(),
+            "--tunnel-user", ShellQuote(request.Config.TunnelUser.Trim()),
+            "--dns-mode", ShellQuote(request.GatewayDnsMode.Trim().ToLowerInvariant()),
+            "--doh-endpoints", ShellQuote(request.GatewayDohEndpoints.Trim()),
+            "--dns-udp-only", request.GatewayDnsUdpOnly ? "true" : "false"
         });
-    }
-
-    private static string GetRemoteRoot(ServiceConfig config)
-    {
-        var user = (config.TunnelUser ?? string.Empty).Trim();
-        return $"/home/{user}/omnirelay-gateway";
     }
 
     private static string MapTunnelAuth(ServiceConfig config)
@@ -487,19 +644,25 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             throw new InvalidOperationException("Tunnel remote port is invalid.");
         }
 
+        if (request.Config.BootstrapSocksRemotePort <= 0 || request.Config.BootstrapSocksRemotePort > 65535)
+        {
+            throw new InvalidOperationException("Bootstrap SOCKS remote port is invalid.");
+        }
+
         if (request.GatewayPublicPort == request.GatewayPanelPort)
         {
             throw new InvalidOperationException("Gateway public and panel ports must be different.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.BundleLocalPath) || !File.Exists(request.BundleLocalPath))
+        if (string.IsNullOrWhiteSpace(request.GatewayDohEndpoints))
         {
-            throw new InvalidOperationException($"Gateway bundle file is missing: {request.BundleLocalPath}");
+            throw new InvalidOperationException("Gateway DoH endpoints are required.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.BundleSha256))
+        var dnsMode = request.GatewayDnsMode?.Trim().ToLowerInvariant();
+        if (dnsMode is not ("hybrid" or "doh" or "udp"))
         {
-            throw new InvalidOperationException("Gateway bundle checksum is missing.");
+            throw new InvalidOperationException("Gateway DNS mode must be hybrid, doh, or udp.");
         }
     }
 
@@ -513,13 +676,27 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
     private static string WrapCommand(string command, string sudoPassword)
     {
-        var inner = $"printf '%s\\n' {ShellQuote(sudoPassword)} | sudo -S -p '' {command} 2>&1";
+        var rootShell = $"bash -lc {ShellQuote(command)}";
+        var inner = $"printf '%s\\n' {ShellQuote(sudoPassword)} | sudo -S -p '' {rootShell} 2>&1";
         return $"bash -lc {ShellQuote(inner)}";
     }
 
     private static string ShellQuote(string value)
     {
         return "'" + (value ?? string.Empty).Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
+
+    private static string RandomAlphaNum(int length)
+    {
+        const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        var bytes = RandomNumberGenerator.GetBytes(length);
+        var buffer = new char[length];
+        for (var i = 0; i < length; i++)
+        {
+            buffer[i] = chars[bytes[i] % chars.Length];
+        }
+
+        return new string(buffer);
     }
 
     private static bool TryParseProgressLine(string line, out int percent, out string message)
@@ -582,14 +759,39 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
     private static string FirstMeaningfulLine(string output, string error)
     {
-        var first = SplitLines(output).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
-        if (!string.IsNullOrWhiteSpace(first))
+        var outputLines = SplitLines(output)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Where(x => !x.StartsWith("OMNIRELAY_PROGRESS:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var errorLine = outputLines
+            .LastOrDefault(x => x.Contains("ERROR:", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(errorLine))
         {
-            return first.Trim();
+            return errorLine;
         }
 
-        first = SplitLines(error).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
-        return string.IsNullOrWhiteSpace(first) ? "Remote command failed." : first.Trim();
+        var firstOutput = outputLines.LastOrDefault();
+        if (!string.IsNullOrWhiteSpace(firstOutput))
+        {
+            return firstOutput;
+        }
+
+        var firstError = SplitLines(error)
+            .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        return string.IsNullOrWhiteSpace(firstError) ? "Remote command failed." : firstError.Trim();
+    }
+
+    private static string SanitizeTerminalLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return string.Empty;
+        }
+
+        var noAnsi = Regex.Replace(line, @"\x1B\[[0-9;?]*[ -/]*[@-~]", string.Empty);
+        return noAnsi.Trim();
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -610,6 +812,14 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         public bool BackendListener { get; set; }
         public bool PublicListener { get; set; }
         public bool PanelListener { get; set; }
+        public bool DnsConfigPresent { get; set; }
+        public bool DnsRuleActive { get; set; }
+        public bool DohReachableViaTunnel { get; set; }
+        public bool Udp53PathReady { get; set; }
+        public bool DnsPathHealthy { get; set; }
+        public string DnsMode { get; set; } = "unknown";
+        public bool DnsUdpOnly { get; set; }
+        public string DohEndpoints { get; set; } = string.Empty;
 
         public GatewayServiceStatus ToModel() => new()
         {
@@ -621,13 +831,22 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             PanelPort = PanelPort,
             BackendListener = BackendListener,
             PublicListener = PublicListener,
-            PanelListener = PanelListener
+            PanelListener = PanelListener,
+            DnsConfigPresent = DnsConfigPresent,
+            DnsRuleActive = DnsRuleActive,
+            DohReachableViaTunnel = DohReachableViaTunnel,
+            Udp53PathReady = Udp53PathReady,
+            DnsPathHealthy = DnsPathHealthy,
+            DnsMode = DnsMode,
+            DnsUdpOnly = DnsUdpOnly,
+            DohEndpoints = DohEndpoints
         };
     }
 
     private sealed class GatewayHealthDto : GatewayStatusDto
     {
         public bool Healthy { get; set; }
+        public string DnsLastError { get; set; } = string.Empty;
 
         public GatewayHealthReport ToModel(string rawJson)
         {
@@ -635,6 +854,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             return new GatewayHealthReport
             {
                 Healthy = Healthy,
+                DnsLastError = DnsLastError,
                 RawJson = rawJson,
                 CheckedAtUtc = DateTimeOffset.UtcNow,
                 SshState = baseModel.SshState,
@@ -645,7 +865,15 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 PanelPort = baseModel.PanelPort,
                 BackendListener = baseModel.BackendListener,
                 PublicListener = baseModel.PublicListener,
-                PanelListener = baseModel.PanelListener
+                PanelListener = baseModel.PanelListener,
+                DnsConfigPresent = baseModel.DnsConfigPresent,
+                DnsRuleActive = baseModel.DnsRuleActive,
+                DohReachableViaTunnel = baseModel.DohReachableViaTunnel,
+                Udp53PathReady = baseModel.Udp53PathReady,
+                DnsPathHealthy = baseModel.DnsPathHealthy,
+                DnsMode = baseModel.DnsMode,
+                DnsUdpOnly = baseModel.DnsUdpOnly,
+                DohEndpoints = baseModel.DohEndpoints
             };
         }
     }

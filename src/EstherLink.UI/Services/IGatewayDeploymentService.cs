@@ -4,7 +4,31 @@ namespace EstherLink.UI.Services;
 
 public interface IGatewayDeploymentService
 {
+    Task<GatewayOperationResult> CheckGatewayBootstrapAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default);
+
     Task<GatewayOperationResult> InstallGatewayAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default);
+
+    Task<GatewayOperationResult> ApplyGatewayDnsAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default);
+
+    Task<GatewayOperationResult> CheckGatewayDnsAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default);
+
+    Task<GatewayOperationResult> RepairGatewayDnsAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
         IProgress<DeploymentProgressSnapshot>? progress = null,

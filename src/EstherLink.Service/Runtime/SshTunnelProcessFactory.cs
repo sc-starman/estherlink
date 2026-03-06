@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Net;
 using EstherLink.Core.Configuration;
+using EstherLink.Core.Networking;
 
 namespace EstherLink.Service.Runtime;
 
@@ -23,6 +25,8 @@ internal static class SshTunnelProcessFactory
 
         args.Add("-R");
         args.Add($"127.0.0.1:{config.TunnelRemotePort}:127.0.0.1:{config.LocalProxyListenPort}");
+        args.Add("-R");
+        args.Add($"127.0.0.1:{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}");
 
         return TryCreateStartInfo(config, args, out startInfo, out error);
     }
@@ -55,6 +59,14 @@ internal static class SshTunnelProcessFactory
         {
             return false;
         }
+
+        if (!TryGetTunnelBindIp(config, out var bindIp, out error))
+        {
+            return false;
+        }
+
+        args.Add("-b");
+        args.Add(bindIp);
 
         args.Add("-o");
         args.Add("ConnectTimeout=10");
@@ -123,7 +135,44 @@ internal static class SshTunnelProcessFactory
             return "Local proxy listen port must be between 1 and 65535.";
         }
 
+        if (config.BootstrapSocksLocalPort <= 0 || config.BootstrapSocksLocalPort > 65535)
+        {
+            return "Bootstrap SOCKS local port must be between 1 and 65535.";
+        }
+
+        if (config.BootstrapSocksRemotePort <= 0 || config.BootstrapSocksRemotePort > 65535)
+        {
+            return "Bootstrap SOCKS remote port must be between 1 and 65535.";
+        }
+
         return null;
+    }
+
+    private static bool TryGetTunnelBindIp(ServiceConfig config, out string bindIp, out string? error)
+    {
+        bindIp = string.Empty;
+        error = null;
+
+        if (config.WhitelistAdapterIfIndex <= 0)
+        {
+            error = "VPS network adapter is not selected.";
+            return false;
+        }
+
+        if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(config.WhitelistAdapterIfIndex, out var ip) || ip is null)
+        {
+            error = $"VPS network adapter IfIndex {config.WhitelistAdapterIfIndex} has no usable IPv4 address.";
+            return false;
+        }
+
+        if (IPAddress.IsLoopback(ip))
+        {
+            error = "VPS network adapter cannot be a loopback interface.";
+            return false;
+        }
+
+        bindIp = ip.ToString();
+        return true;
     }
 
     private static bool TryConfigureAuthentication(

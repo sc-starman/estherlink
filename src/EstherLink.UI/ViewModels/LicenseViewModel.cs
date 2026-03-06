@@ -9,13 +9,20 @@ namespace EstherLink.UI.ViewModels;
 
 public partial class LicenseViewModel : ObservableObject
 {
+    private const string RelayRoute = "relay";
+
     private readonly GatewayOrchestratorService _orchestrator;
     private readonly GatewayStateStore _state;
+    private readonly INavigationService _navigationService;
 
-    public LicenseViewModel(GatewayOrchestratorService orchestrator, GatewayStateStore state)
+    public LicenseViewModel(
+        GatewayOrchestratorService orchestrator,
+        GatewayStateStore state,
+        INavigationService navigationService)
     {
         _orchestrator = orchestrator;
         _state = state;
+        _navigationService = navigationService;
         _state.PropertyChanged += OnStateChanged;
         DeviceFingerprint = CreateFingerprint();
         RefreshCards();
@@ -53,9 +60,22 @@ public partial class LicenseViewModel : ObservableObject
     [ObservableProperty]
     private bool isBusy;
 
-    private bool CanActivate() => !IsBusy;
+    [ObservableProperty]
+    private bool isServiceCompatible;
+
+    [ObservableProperty]
+    private string serviceCompatibilityMessage = "Checking relay service compatibility...";
+
+    private bool CanActivate() => !IsBusy && IsServiceCompatible;
+    private bool CanRefreshCompatibility() => !IsBusy;
 
     partial void OnIsBusyChanged(bool value)
+    {
+        ActivateLicenseCommand.NotifyCanExecuteChanged();
+        RefreshServiceCompatibilityCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsServiceCompatibleChanged(bool value)
     {
         ActivateLicenseCommand.NotifyCanExecuteChanged();
     }
@@ -71,10 +91,22 @@ public partial class LicenseViewModel : ObservableObject
         try
         {
             IsBusy = true;
+            await RefreshServiceCompatibilityAsync();
+            if (!IsServiceCompatible)
+            {
+                Feedback = ServiceCompatibilityMessage;
+                return;
+            }
+
             var result = await _orchestrator.VerifyLicenseAsync();
             Feedback = result.Message;
             await _orchestrator.RefreshStatusAsync();
             RefreshCards();
+
+            if (LicenseActive)
+            {
+                _navigationService.Navigate(RelayRoute);
+            }
         }
         finally
         {
@@ -82,9 +114,17 @@ public partial class LicenseViewModel : ObservableObject
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanRefreshCompatibility))]
+    private async Task RefreshServiceCompatibilityAsync()
+    {
+        var result = await _orchestrator.CheckLicenseServiceCompatibilityAsync();
+        IsServiceCompatible = result.Success;
+        ServiceCompatibilityMessage = result.Message;
+    }
+
     private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(GatewayStateStore.Status))
+        if (e.PropertyName is nameof(GatewayStateStore.Status) or nameof(GatewayStateStore.LicenseActivated) or nameof(GatewayStateStore.LicenseActivatedExpiresAtUtc))
         {
             RefreshCards();
         }
@@ -93,16 +133,18 @@ public partial class LicenseViewModel : ObservableObject
     private void RefreshCards()
     {
         var status = _state.Status;
-        LicenseActive = status?.LicenseValid == true;
+        LicenseActive = _state.LicenseActivated || status?.LicenseValid == true;
         LicenseStatus = status is null
-            ? "Unavailable"
-            : status.LicenseValid
+            ? (LicenseActive ? "Active (Pro)" : "Unavailable")
+            : LicenseActive
                 ? "Active (Pro)"
                 : "Inactive";
 
-        ExpirationDate = status?.LicenseExpiresAtUtc is null
+        var expiresAt = _state.LicenseActivatedExpiresAtUtc ?? status?.LicenseExpiresAtUtc;
+
+        ExpirationDate = expiresAt is null
             ? "--"
-            : status.LicenseExpiresAtUtc.Value.LocalDateTime.ToString("MMM dd, yyyy");
+            : expiresAt.Value.LocalDateTime.ToString("MMM dd, yyyy");
 
         if (LicenseActive)
         {
@@ -126,5 +168,10 @@ public partial class LicenseViewModel : ObservableObject
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
         var hex = Convert.ToHexString(bytes);
         return $"{hex[..4]}-{hex[4..8]}-{hex[8..12]}-XXXX";
+    }
+
+    public async Task InitializeAsync()
+    {
+        await RefreshServiceCompatibilityAsync();
     }
 }

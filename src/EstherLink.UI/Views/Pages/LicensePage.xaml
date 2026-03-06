@@ -15,6 +15,22 @@
 
             <Border Style="{StaticResource CardStyle}" Margin="0,0,0,18">
                 <StackPanel>
+                    <Border Padding="10" CornerRadius="8" Margin="0,0,0,10"
+                            Background="{DynamicResource Brush.InputBackground}"
+                            BorderBrush="{DynamicResource Brush.Border}"
+                            BorderThickness="1">
+                        <DockPanel LastChildFill="True">
+                            <Button Content="Refresh Check"
+                                    Command="{Binding RefreshServiceCompatibilityCommand}"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Margin="10,0,0,0"
+                                    DockPanel.Dock="Right"/>
+                            <TextBlock Text="{Binding ServiceCompatibilityMessage}"
+                                       Style="{StaticResource MutedTextStyle}"
+                                       VerticalAlignment="Center"/>
+                        </DockPanel>
+                    </Border>
+
                     <TextBlock Text="License Key" Style="{StaticResource FormLabelStyle}" Margin="0,0,0,6"/>
                     <DockPanel LastChildFill="False">
                         <TextBox Width="520"
@@ -23,6 +39,7 @@
                                  VerticalAlignment="Center"/>
                         <Button Content="Activate License"
                                 Command="{Binding ActivateLicenseCommand}"
+                                IsEnabled="{Binding IsServiceCompatible}"
                                 Style="{StaticResource PrimaryButtonStyle}"
                                 Margin="12,0,0,0"
                                 VerticalAlignment="Center"/>

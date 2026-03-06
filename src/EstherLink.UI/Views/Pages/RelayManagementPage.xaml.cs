@@ -3,9 +3,9 @@ using EstherLink.UI.ViewModels;
 
 namespace EstherLink.UI.Views.Pages;
 
-public partial class ServiceStatusPage : Page
+public partial class RelayManagementPage : Page
 {
-    public ServiceStatusPage(ServiceStatusViewModel viewModel)
+    public RelayManagementPage(RelayManagementViewModel viewModel)
     {
         InitializeComponent();
         DataContext = viewModel;

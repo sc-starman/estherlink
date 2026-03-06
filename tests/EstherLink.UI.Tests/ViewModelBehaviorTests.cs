@@ -31,7 +31,7 @@ public class ViewModelBehaviorTests
             ServiceState = "Running"
         };
 
-        var orchestrator = new GatewayOrchestratorService(state, gatewayClient, serviceControl);
+        var orchestrator = new GatewayOrchestratorService(state, gatewayClient, serviceControl, new FakeGatewayStatePersistenceService());
         var vm = new DashboardViewModel(orchestrator, state);
 
         Assert.True(vm.RefreshCommand.CanExecute(null));
@@ -61,7 +61,7 @@ public class ViewModelBehaviorTests
 
         var gatewayClient = new FakeGatewayClientService();
         var serviceControl = new FakeServiceControlService();
-        var orchestrator = new GatewayOrchestratorService(state, gatewayClient, serviceControl);
+        var orchestrator = new GatewayOrchestratorService(state, gatewayClient, serviceControl, new FakeGatewayStatePersistenceService());
         var vm = new WhitelistViewModel(orchestrator, state);
 
         await vm.UpdateWhitelistCommand.ExecuteAsync(null);
@@ -111,6 +111,17 @@ public class ViewModelBehaviorTests
         }
 
         public Task<IpcResponse?> SetConfigAsync(ServiceConfig config, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> GetCapabilitiesAsync(CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new CapabilitiesResponse("1.0.0", [IpcCommands.SetLicenseKey]));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> SetLicenseKeyAsync(string licenseKey, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
@@ -210,6 +221,15 @@ public class ViewModelBehaviorTests
             CurrentTheme = theme;
             LastAppliedTheme = theme;
             ThemeChanged?.Invoke(this, theme);
+        }
+    }
+
+    private sealed class FakeGatewayStatePersistenceService : IGatewayStatePersistenceService
+    {
+        public GatewayUiStateModel Load() => new();
+
+        public void Save(GatewayUiStateModel state)
+        {
         }
     }
 }

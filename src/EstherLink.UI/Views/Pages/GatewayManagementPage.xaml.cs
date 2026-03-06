@@ -3,9 +3,9 @@ using EstherLink.UI.ViewModels;
 
 namespace EstherLink.UI.Views.Pages;
 
-public partial class NetworkConfigPage : Page
+public partial class GatewayManagementPage : Page
 {
-    public NetworkConfigPage(NetworkConfigViewModel viewModel)
+    public GatewayManagementPage(GatewayManagementViewModel viewModel)
     {
         InitializeComponent();
         DataContext = viewModel;

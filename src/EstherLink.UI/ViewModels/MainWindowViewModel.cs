@@ -10,6 +10,8 @@ namespace EstherLink.UI.ViewModels;
 
 public partial class MainWindowViewModel : ObservableObject
 {
+    private const string LicenseRoute = "license";
+
     private readonly INavigationService _navigationService;
     private readonly GatewayOrchestratorService _orchestrator;
     private readonly GatewayStateStore _state;
@@ -63,8 +65,9 @@ public partial class MainWindowViewModel : ObservableObject
         var settings = _uiSettingsService.Load();
         CompactMode = settings.CompactMode;
 
-        _navigationService.Navigate("license");
         await _orchestrator.RefreshStatusAsync();
+        _navigationService.Navigate(IsLicenseActivated() ? "dashboard" : "license");
+        UpdateNavigationLockState();
         UpdateStatusSummary();
         _statusTimer.Interval = GetRefreshInterval();
         _statusTimer.Start();
@@ -75,6 +78,14 @@ public partial class MainWindowViewModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(route))
         {
+            return;
+        }
+
+        if (RequiresLicenseActivation(route) && !IsLicenseActivated())
+        {
+            _state.LastAction = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} License activation is required before accessing this page.";
+            _navigationService.Navigate(LicenseRoute);
+            UpdateStatusSummary();
             return;
         }
 
@@ -93,17 +104,28 @@ public partial class MainWindowViewModel : ObservableObject
 
     private void OnRouteChanged(object? sender, string route)
     {
+        if (RequiresLicenseActivation(route) && !IsLicenseActivated())
+        {
+            if (!string.Equals(_navigationService.CurrentRoute, LicenseRoute, StringComparison.OrdinalIgnoreCase))
+            {
+                _navigationService.Navigate(LicenseRoute);
+            }
+
+            route = LicenseRoute;
+        }
+
         foreach (var item in NavigationItems)
         {
             item.IsActive = string.Equals(item.Item.Route, route, StringComparison.OrdinalIgnoreCase);
         }
+        UpdateNavigationLockState();
 
         PageTitle = route switch
         {
             "dashboard" => "Dashboard",
-            "network" => "Network Configuration",
-            "whitelist" => "Whitelist Rules",
-            "service" => "Service Status",
+            "relay" => "Relay Management",
+            "gateway" => "Gateway Management",
+            "whitelist" => "Whitelists",
             "license" => "License Management",
             "logs" => "Logs",
             "settings" => "Settings",
@@ -113,18 +135,27 @@ public partial class MainWindowViewModel : ObservableObject
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(GatewayStateStore.Status) or nameof(GatewayStateStore.ServiceState) or nameof(GatewayStateStore.LastAction))
+        if (e.PropertyName is nameof(GatewayStateStore.Status) or nameof(GatewayStateStore.ServiceState) or nameof(GatewayStateStore.LastAction) or nameof(GatewayStateStore.LicenseActivated))
         {
             UpdateStatusSummary();
+            UpdateNavigationLockState();
+
+            if (e.PropertyName is nameof(GatewayStateStore.Status) &&
+                RequiresLicenseActivation(_navigationService.CurrentRoute) &&
+                !IsLicenseActivated())
+            {
+                _navigationService.Navigate(LicenseRoute);
+            }
         }
     }
 
     private void UpdateStatusSummary()
     {
         var status = _state.Status;
+        var licenseValid = IsLicenseActivated();
         StatusSummary = status is null
             ? $"Service: {_state.ServiceState} | IPC: offline | Last: {_state.LastAction}"
-            : $"Service: {_state.ServiceState} | Proxy: {(status.ProxyRunning ? "Running" : "Stopped")} | License: {(status.LicenseValid ? "Valid" : "Invalid")} | Tunnel: {(status.TunnelConnected ? "Connected" : "Disconnected")} | Last: {_state.LastAction}";
+            : $"Service: {_state.ServiceState} | Proxy: {(status.ProxyRunning ? "Running" : "Stopped")} | License: {(licenseValid ? "Valid" : "Invalid")} | Tunnel: {(status.TunnelConnected ? "Connected" : "Disconnected")} | Last: {_state.LastAction}";
     }
 
     private TimeSpan GetRefreshInterval()
@@ -138,5 +169,45 @@ public partial class MainWindowViewModel : ObservableObject
     {
         CompactMode = settings.CompactMode;
         _statusTimer.Interval = TimeSpan.FromSeconds(settings.RefreshIntervalSeconds <= 0 ? 5 : settings.RefreshIntervalSeconds);
+    }
+
+    private bool IsLicenseActivated()
+    {
+        var status = _state.Status;
+        if (status is not null &&
+            status.LicenseCheckedAtUtc is not null &&
+            status.LicenseValid)
+        {
+            return true;
+        }
+
+        if (!_state.LicenseActivated)
+        {
+            return false;
+        }
+
+        if (_state.LicenseActivatedExpiresAtUtc is null)
+        {
+            return true;
+        }
+
+        return _state.LicenseActivatedExpiresAtUtc > DateTimeOffset.UtcNow;
+    }
+
+    private static bool RequiresLicenseActivation(string route)
+    {
+        return !string.Equals(route, LicenseRoute, StringComparison.OrdinalIgnoreCase) &&
+               !string.Equals(route, "relay", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void UpdateNavigationLockState()
+    {
+        var unlocked = IsLicenseActivated();
+        foreach (var item in NavigationItems)
+        {
+            item.IsEnabled = unlocked ||
+                             string.Equals(item.Item.Route, LicenseRoute, StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(item.Item.Route, "relay", StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

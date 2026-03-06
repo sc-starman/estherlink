@@ -41,6 +41,10 @@ public sealed class GatewayRuntime
             ProxyListenPort = _config.LocalProxyListenPort,
             WhitelistCount = _whitelist.Rules.Count
         };
+
+        // Keep relay data-plane active by default after service startup.
+        // ProxyCoordinatorWorker will still stop listeners if license is invalid.
+        _proxyRequested = true;
     }
 
     public ServiceConfig GetConfigSnapshot()
@@ -73,6 +77,15 @@ public sealed class GatewayRuntime
         {
             _config = CloneConfig(config);
             _status.ProxyListenPort = _config.LocalProxyListenPort;
+            PersistLocked();
+        }
+    }
+
+    public void SetLicenseKey(string licenseKey)
+    {
+        lock (_sync)
+        {
+            _config.LicenseKey = licenseKey ?? string.Empty;
             PersistLocked();
         }
     }
@@ -164,6 +177,16 @@ public sealed class GatewayRuntime
         }
     }
 
+    public void SetBootstrapSocksStatus(bool listening, bool remoteForwardActive, string? error)
+    {
+        lock (_sync)
+        {
+            _status.BootstrapSocksListening = listening;
+            _status.BootstrapSocksRemoteForwardActive = remoteForwardActive;
+            _status.BootstrapSocksLastError = error;
+        }
+    }
+
     public void SetLicenseStatus(LicenseValidationResult result)
     {
         lock (_sync)
@@ -197,6 +220,9 @@ public sealed class GatewayRuntime
                 TunnelLastConnectedAtUtc = _status.TunnelLastConnectedAtUtc,
                 TunnelReconnectCount = _status.TunnelReconnectCount,
                 TunnelLastError = _status.TunnelLastError,
+                BootstrapSocksListening = _status.BootstrapSocksListening,
+                BootstrapSocksRemoteForwardActive = _status.BootstrapSocksRemoteForwardActive,
+                BootstrapSocksLastError = _status.BootstrapSocksLastError,
                 LicenseValid = _status.LicenseValid,
                 LicenseFromCache = _status.LicenseFromCache,
                 LicenseCheckedAtUtc = _status.LicenseCheckedAtUtc,
@@ -220,6 +246,9 @@ public sealed class GatewayRuntime
         {
             SchemaVersion = config.SchemaVersion,
             LocalProxyListenPort = config.LocalProxyListenPort,
+            BootstrapSocksLocalPort = config.BootstrapSocksLocalPort,
+            BootstrapSocksRemotePort = config.BootstrapSocksRemotePort,
+            GatewayOnlineInstallEnabled = config.GatewayOnlineInstallEnabled,
             WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
             DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
             TunnelHost = config.TunnelHost,

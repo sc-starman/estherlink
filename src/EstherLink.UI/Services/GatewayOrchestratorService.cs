@@ -1,5 +1,6 @@
 using EstherLink.Core.Configuration;
 using EstherLink.Core.Networking;
+using EstherLink.Core.Status;
 using EstherLink.Ipc;
 using EstherLink.UI.Models;
 using System.ComponentModel;
@@ -14,39 +15,84 @@ public sealed class GatewayOrchestratorService
     private readonly GatewayStateStore _state;
     private readonly IGatewayClientService _gatewayClient;
     private readonly IServiceControlService _serviceControl;
+    private readonly IGatewayStatePersistenceService _statePersistence;
+    private bool _suppressStatePersistence;
 
     public GatewayOrchestratorService(
         GatewayStateStore state,
         IGatewayClientService gatewayClient,
-        IServiceControlService serviceControl)
+        IServiceControlService serviceControl,
+        IGatewayStatePersistenceService statePersistence)
     {
         _state = state;
         _gatewayClient = gatewayClient;
         _serviceControl = serviceControl;
+        _statePersistence = statePersistence;
+        _state.PropertyChanged += OnStatePropertyChanged;
     }
 
     public GatewayStateStore State => _state;
 
     public void Initialize()
     {
-        _state.Adapters.Clear();
-        var adapters = NetworkAdapterCatalog.ListIpv4Adapters()
-            .Select(x => new AdapterChoiceModel
+        _suppressStatePersistence = true;
+        try
+        {
+            var persisted = _statePersistence.Load();
+
+            _state.Adapters.Clear();
+            var adapters = NetworkAdapterCatalog.ListIpv4Adapters()
+                .Select(x => new AdapterChoiceModel
+                {
+                    IfIndex = x.IfIndex,
+                    Display = $"{x.Name} (IfIndex={x.IfIndex}) | IPv4={string.Join(",", x.IPv4Addresses)} | GW={(x.HasDefaultGateway ? "Yes" : "No")}"
+                })
+                .ToList();
+
+            foreach (var adapter in adapters)
             {
-                IfIndex = x.IfIndex,
-                Display = $"{x.Name} (IfIndex={x.IfIndex}) | IPv4={string.Join(",", x.IPv4Addresses)} | GW={(x.HasDefaultGateway ? "Yes" : "No")}"
-            })
-            .ToList();
+                _state.Adapters.Add(adapter);
+            }
 
-        foreach (var adapter in adapters)
-        {
-            _state.Adapters.Add(adapter);
+            var persistedVps = adapters.FirstOrDefault(x => x.IfIndex == persisted.VpsAdapterIfIndex);
+            var persistedOutgoing = adapters.FirstOrDefault(x => x.IfIndex == persisted.OutgoingAdapterIfIndex);
+
+            if (adapters.Count > 0)
+            {
+                _state.VpsAdapter = persistedVps ?? adapters[0];
+                _state.OutgoingAdapter = persistedOutgoing ?? adapters[Math.Min(1, adapters.Count - 1)];
+            }
+            else
+            {
+                _state.VpsAdapter = null;
+                _state.OutgoingAdapter = null;
+            }
+
+            _state.ProxyPortText = NormalizeOrDefault(persisted.ProxyPortText, "19080");
+            _state.BootstrapSocksLocalPortText = NormalizeOrDefault(persisted.BootstrapSocksLocalPortText, "19081");
+            _state.BootstrapSocksRemotePortText = NormalizeOrDefault(persisted.BootstrapSocksRemotePortText, "16080");
+            _state.TunnelHost = NormalizeOrDefault(persisted.TunnelHost, "vps.example.com");
+            _state.TunnelSshPortText = NormalizeOrDefault(persisted.TunnelSshPortText, "22");
+            _state.TunnelRemotePortText = NormalizeOrDefault(persisted.TunnelRemotePortText, "15000");
+            _state.GatewayPublicPortText = NormalizeOrDefault(persisted.GatewayPublicPortText, "443");
+            _state.GatewayPanelPortText = NormalizeOrDefault(persisted.GatewayPanelPortText, "2054");
+            _state.GatewayBackendPortText = NormalizeOrDefault(persisted.GatewayBackendPortText, _state.TunnelRemotePortText);
+            _state.GatewayDnsMode = NormalizeDnsModeOrDefault(persisted.GatewayDnsMode, "hybrid");
+            _state.GatewayDohEndpointsText = NormalizeOrDefault(persisted.GatewayDohEndpointsText, "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query");
+            _state.GatewayDnsUdpOnly = persisted.GatewayDnsUdpOnly;
+            _state.TunnelUser = NormalizeOrDefault(persisted.TunnelUser, "estherlink");
+            _state.TunnelAuthMethod = TunnelAuthMethods.Normalize(persisted.TunnelAuthMethod);
+            _state.TunnelKeyPath = persisted.TunnelKeyPath ?? string.Empty;
+            _state.TunnelKeyPassphrase = GatewayStatePersistenceService.Unprotect(persisted.EncryptedTunnelKeyPassphrase);
+            _state.TunnelPassword = GatewayStatePersistenceService.Unprotect(persisted.EncryptedTunnelPassword);
+            _state.LicenseKey = GatewayStatePersistenceService.Unprotect(persisted.EncryptedLicenseKey);
+            _state.WhitelistText = persisted.WhitelistText ?? string.Empty;
+            _state.LicenseActivated = false;
+            _state.LicenseActivatedExpiresAtUtc = null;
         }
-
-        if (adapters.Count > 0)
+        finally
         {
-            _state.VpsAdapter = adapters[0];
-            _state.OutgoingAdapter = adapters[Math.Min(1, adapters.Count - 1)];
+            _suppressStatePersistence = false;
         }
     }
 
@@ -60,11 +106,22 @@ public sealed class GatewayOrchestratorService
             if (response?.Success == true)
             {
                 var payload = IpcJson.Deserialize<StatusResponse>(response.JsonPayload);
-                _state.Status = payload?.Status;
-            }
-            else
-            {
-                _state.Status = null;
+                if (payload?.Status is not null)
+                {
+                    _state.Status = payload.Status;
+                }
+                if (payload?.Status is not null)
+                {
+                    if (payload.Status.LicenseCheckedAtUtc is not null)
+                    {
+                        _state.LicenseActivated = payload.Status.LicenseValid;
+                    }
+
+                    if (payload.Status.LicenseExpiresAtUtc is not null)
+                    {
+                        _state.LicenseActivatedExpiresAtUtc = payload.Status.LicenseExpiresAtUtc;
+                    }
+                }
             }
 
             return SetAction(true, "Status refreshed.");
@@ -77,16 +134,38 @@ public sealed class GatewayOrchestratorService
 
     public async Task<OperationResult> ApplyConfigAsync(CancellationToken cancellationToken = default)
     {
+        return await ApplyConfigInternalAsync(requireTunnelAuthSecrets: true, cancellationToken);
+    }
+
+    public async Task<OperationResult> ApplyRelayConfigAsync(CancellationToken cancellationToken = default)
+    {
+        return await ApplyConfigInternalAsync(requireTunnelAuthSecrets: false, cancellationToken);
+    }
+
+    public async Task<OperationResult> ApplyGatewayConfigAsync(CancellationToken cancellationToken = default)
+    {
+        return await ApplyConfigInternalAsync(requireTunnelAuthSecrets: true, cancellationToken);
+    }
+
+    private async Task<OperationResult> ApplyConfigInternalAsync(bool requireTunnelAuthSecrets, CancellationToken cancellationToken = default)
+    {
         try
         {
-            var config = BuildConfig();
+            var config = BuildConfig(requireTunnelAuthSecrets);
             var response = await _gatewayClient.SetConfigAsync(config, cancellationToken);
             if (response?.Success == true)
             {
                 return SetAction(true, "Configuration updated.");
             }
 
-            return SetAction(false, $"Config update failed: {response?.Error ?? "service unavailable"}");
+            var error = response?.Error ?? "service unavailable";
+            if (error.Contains("access is denied", StringComparison.OrdinalIgnoreCase) ||
+                error.Contains("access to the path is denied", StringComparison.OrdinalIgnoreCase))
+            {
+                error = $"{error}. Relay service IPC permission denied. Reinstall the Relay service with the latest build.";
+            }
+
+            return SetAction(false, $"Config update failed: {error}");
         }
         catch (Exception ex)
         {
@@ -113,27 +192,101 @@ public sealed class GatewayOrchestratorService
 
     public async Task<OperationResult> VerifyLicenseAsync(CancellationToken cancellationToken = default)
     {
-        var configResult = await ApplyConfigAsync(cancellationToken);
-        if (!configResult.Success)
+        var readiness = await CheckLicenseServiceCompatibilityAsync(cancellationToken);
+        if (!readiness.Success)
         {
-            return configResult;
+            _state.LicenseActivated = false;
+            return readiness;
         }
 
-        var response = await _gatewayClient.VerifyLicenseAsync(cancellationToken);
-        if (response?.Success != true)
+        var licenseKey = (_state.LicenseKey ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(licenseKey))
         {
-            return SetAction(false, $"License verification failed: {response?.Error ?? "service unavailable"}");
+            return SetAction(false, "License key is required.");
         }
 
-        var payload = IpcJson.Deserialize<VerifyLicenseResponse>(response.JsonPayload);
+        var serviceState = await _serviceControl.QueryServiceStateAsync(cancellationToken);
+        if (!string.Equals(serviceState, "Running", StringComparison.OrdinalIgnoreCase))
+        {
+            _state.LicenseActivated = false;
+            return SetAction(false, $"Relay service is not running (state: {serviceState}). Start service, then verify license.");
+        }
+
+        var setLicenseKeyResponse = await _gatewayClient.SetLicenseKeyAsync(licenseKey, cancellationToken);
+        if (setLicenseKeyResponse?.Success != true)
+        {
+            var setKeyError = setLicenseKeyResponse?.Error ?? "service unavailable";
+            if (setKeyError.Contains("Unknown command", StringComparison.OrdinalIgnoreCase) &&
+                setKeyError.Contains(IpcCommands.SetLicenseKey, StringComparison.OrdinalIgnoreCase))
+            {
+                return SetAction(false, "Relay service is outdated and does not support set_license_key. Reinstall/update the Relay service, then retry.");
+            }
+
+            return SetAction(false, $"Set license key failed: {setKeyError}");
+        }
+
+        var verifyResponse = await _gatewayClient.VerifyLicenseAsync(cancellationToken);
+        if (verifyResponse?.Success != true)
+        {
+            return SetAction(false, $"License verification failed: {verifyResponse?.Error ?? "service unavailable"}");
+        }
+
+        var payload = IpcJson.Deserialize<VerifyLicenseResponse>(verifyResponse.JsonPayload);
         if (payload is null)
         {
             return SetAction(false, "License verification payload was invalid.");
         }
 
-        return payload.IsValid
-            ? SetAction(true, $"License valid. Expires: {payload.ExpiresAtUtc:O}. Source: {(payload.FromCache ? "cache" : "online")}.")
-            : SetAction(false, $"License invalid: {payload.Error ?? "unknown error"}");
+        var status = EnsureStatusObject();
+        status.LicenseCheckedAtUtc = DateTimeOffset.UtcNow;
+        status.LicenseValid = payload.IsValid;
+        status.LicenseExpiresAtUtc = payload.ExpiresAtUtc;
+
+        _state.LicenseActivated = payload.IsValid;
+        _state.LicenseActivatedExpiresAtUtc = payload.ExpiresAtUtc;
+
+        if (payload.IsValid)
+        {
+            return SetAction(true, $"License valid. Expires: {payload.ExpiresAtUtc:O}. Source: {(payload.FromCache ? "cache" : "online")}.");
+        }
+
+        var error = payload.Error ?? "unknown error";
+        if (IsTransientLicenseError(error))
+        {
+            return SetAction(false, $"License verification failed: {error}");
+        }
+
+        return SetAction(false, $"License invalid: {error}");
+    }
+
+    public async Task<OperationResult> CheckLicenseServiceCompatibilityAsync(CancellationToken cancellationToken = default)
+    {
+        var serviceState = await _serviceControl.QueryServiceStateAsync(cancellationToken);
+        if (!string.Equals(serviceState, "Running", StringComparison.OrdinalIgnoreCase))
+        {
+            return SetAction(false, $"Relay service is not running (state: {serviceState}).");
+        }
+
+        var capsResponse = await _gatewayClient.GetCapabilitiesAsync(cancellationToken);
+        if (capsResponse?.Success != true)
+        {
+            return SetAction(false, $"Relay service capabilities check failed: {capsResponse?.Error ?? "service unavailable"}");
+        }
+
+        var payload = IpcJson.Deserialize<CapabilitiesResponse>(capsResponse.JsonPayload);
+        if (payload is null)
+        {
+            return SetAction(false, "Relay service capabilities payload was invalid.");
+        }
+
+        var supportsSetLicenseKey = payload.Capabilities.Any(x =>
+            string.Equals(x, IpcCommands.SetLicenseKey, StringComparison.OrdinalIgnoreCase));
+        if (!supportsSetLicenseKey)
+        {
+            return SetAction(false, $"Relay service v{payload.ServiceVersion} is outdated and does not support '{IpcCommands.SetLicenseKey}'.");
+        }
+
+        return SetAction(true, $"Relay service compatible (v{payload.ServiceVersion}).");
     }
 
     public async Task<OperationResult> TestTunnelConnectionAsync(CancellationToken cancellationToken = default)
@@ -179,26 +332,47 @@ public sealed class GatewayOrchestratorService
         var installed = await _serviceControl.InstallOrStartWindowsServiceAsync(cancellationToken);
         if (!installed)
         {
-            return SetAction(false, "Service install/start canceled or failed.");
+            var state = await _serviceControl.QueryServiceStateAsync(cancellationToken);
+            return SetAction(false, $"Service install/start canceled or failed. Service state: {state}.");
         }
 
-        await Task.Delay(1200, cancellationToken);
-        var config = await ApplyConfigAsync(cancellationToken);
+        var running = await WaitForServiceRunningAsync(cancellationToken);
+        if (!running.Success)
+        {
+            return running;
+        }
+
+        var config = await RetryForServiceReadinessAsync(
+            ct => ApplyConfigAsync(ct),
+            stepName: "Configuration update",
+            maxAttempts: 20,
+            delayBetweenAttempts: TimeSpan.FromSeconds(1),
+            cancellationToken: cancellationToken);
         if (!config.Success)
         {
             return config;
         }
 
-        var whitelist = await UpdateWhitelistAsync(cancellationToken);
+        var whitelist = await RetryForServiceReadinessAsync(
+            ct => UpdateWhitelistAsync(ct),
+            stepName: "Whitelist update",
+            maxAttempts: 10,
+            delayBetweenAttempts: TimeSpan.FromSeconds(1),
+            cancellationToken: cancellationToken);
         if (!whitelist.Success)
         {
             return whitelist;
         }
 
-        var startResponse = await _gatewayClient.StartProxyAsync(cancellationToken);
-        if (startResponse?.Success != true)
+        var startProxy = await RetryForServiceReadinessAsync(
+            ct => StartProxyAsync(ct),
+            stepName: "Proxy start",
+            maxAttempts: 10,
+            delayBetweenAttempts: TimeSpan.FromSeconds(1),
+            cancellationToken: cancellationToken);
+        if (!startProxy.Success)
         {
-            return SetAction(false, $"Proxy start failed: {startResponse?.Error ?? "service unavailable"}");
+            return startProxy;
         }
 
         return SetAction(true, "Windows service started and proxy start requested.");
@@ -257,7 +431,7 @@ public sealed class GatewayOrchestratorService
         return errors;
     }
 
-    private ServiceConfig BuildConfig()
+    private ServiceConfig BuildConfig(bool requireTunnelAuthSecrets = true)
     {
         if (!int.TryParse(_state.ProxyPortText.Trim(), out var proxyPort) || proxyPort <= 0)
         {
@@ -275,12 +449,16 @@ public sealed class GatewayOrchestratorService
         }
 
         var authMethod = TunnelAuthMethods.Normalize(_state.TunnelAuthMethod);
-        if (authMethod == TunnelAuthMethods.Password && string.IsNullOrWhiteSpace(_state.TunnelPassword))
+        if (requireTunnelAuthSecrets &&
+            authMethod == TunnelAuthMethods.Password &&
+            string.IsNullOrWhiteSpace(_state.TunnelPassword))
         {
             throw new InvalidOperationException("Tunnel password is required when password authentication is selected.");
         }
 
-        if (authMethod == TunnelAuthMethods.HostKey && string.IsNullOrWhiteSpace(_state.TunnelKeyPath))
+        if (requireTunnelAuthSecrets &&
+            authMethod == TunnelAuthMethods.HostKey &&
+            string.IsNullOrWhiteSpace(_state.TunnelKeyPath))
         {
             throw new InvalidOperationException("Tunnel host key file path is required when host-key authentication is selected.");
         }
@@ -288,6 +466,9 @@ public sealed class GatewayOrchestratorService
         return new ServiceConfig
         {
             LocalProxyListenPort = proxyPort,
+            BootstrapSocksLocalPort = ParsePositivePort(_state.BootstrapSocksLocalPortText, "Bootstrap SOCKS local port"),
+            BootstrapSocksRemotePort = ParsePositivePort(_state.BootstrapSocksRemotePortText, "Bootstrap SOCKS remote port"),
+            GatewayOnlineInstallEnabled = true,
             WhitelistAdapterIfIndex = _state.VpsAdapter?.IfIndex ?? -1,
             DefaultAdapterIfIndex = _state.OutgoingAdapter?.IfIndex ?? -1,
             TunnelHost = _state.TunnelHost.Trim(),
@@ -306,6 +487,138 @@ public sealed class GatewayOrchestratorService
     {
         _state.LastAction = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} {message}";
         return new OperationResult(success, message);
+    }
+
+    private void OnStatePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_suppressStatePersistence)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(e.PropertyName))
+        {
+            PersistUiState();
+            return;
+        }
+
+        if (e.PropertyName is nameof(GatewayStateStore.ServiceState) or
+            nameof(GatewayStateStore.Status) or
+            nameof(GatewayStateStore.LastAction))
+        {
+            return;
+        }
+
+        PersistUiState();
+    }
+
+    private void PersistUiState()
+    {
+        var snapshot = new GatewayUiStateModel
+        {
+            VpsAdapterIfIndex = _state.VpsAdapter?.IfIndex,
+            OutgoingAdapterIfIndex = _state.OutgoingAdapter?.IfIndex,
+            ProxyPortText = _state.ProxyPortText,
+            BootstrapSocksLocalPortText = _state.BootstrapSocksLocalPortText,
+            BootstrapSocksRemotePortText = _state.BootstrapSocksRemotePortText,
+            TunnelHost = _state.TunnelHost,
+            TunnelSshPortText = _state.TunnelSshPortText,
+            TunnelRemotePortText = _state.TunnelRemotePortText,
+            GatewayPublicPortText = _state.GatewayPublicPortText,
+            GatewayPanelPortText = _state.GatewayPanelPortText,
+            GatewayBackendPortText = _state.GatewayBackendPortText,
+            GatewayDnsMode = _state.GatewayDnsMode,
+            GatewayDohEndpointsText = _state.GatewayDohEndpointsText,
+            GatewayDnsUdpOnly = _state.GatewayDnsUdpOnly,
+            TunnelUser = _state.TunnelUser,
+            TunnelAuthMethod = _state.TunnelAuthMethod,
+            TunnelKeyPath = _state.TunnelKeyPath,
+            EncryptedTunnelKeyPassphrase = GatewayStatePersistenceService.Protect(_state.TunnelKeyPassphrase),
+            EncryptedTunnelPassword = GatewayStatePersistenceService.Protect(_state.TunnelPassword),
+            EncryptedLicenseKey = GatewayStatePersistenceService.Protect(_state.LicenseKey),
+            WhitelistText = _state.WhitelistText
+        };
+
+        _statePersistence.Save(snapshot);
+    }
+
+    private static string NormalizeDnsModeOrDefault(string? value, string fallback)
+    {
+        var normalized = NormalizeOrDefault(value, fallback).Trim().ToLowerInvariant();
+        return normalized is "hybrid" or "doh" or "udp" ? normalized : fallback;
+    }
+
+    private GatewayStatus EnsureStatusObject()
+    {
+        if (_state.Status is null)
+        {
+            _state.Status = new GatewayStatus();
+        }
+
+        return _state.Status;
+    }
+
+    private static bool IsServiceUnavailable(string? error)
+    {
+        return string.IsNullOrWhiteSpace(error) ||
+               error.Contains("service unavailable", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("pipe", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("cannot connect", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("access is denied", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("access to the path is denied", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<OperationResult> WaitForServiceRunningAsync(CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 20;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var state = await _serviceControl.QueryServiceStateAsync(cancellationToken);
+            if (string.Equals(state, "Running", StringComparison.OrdinalIgnoreCase))
+            {
+                return SetAction(true, "Windows service is running.");
+            }
+
+            if (string.Equals(state, "Not Installed", StringComparison.OrdinalIgnoreCase))
+            {
+                return SetAction(false, "Windows service was not found after install/start.");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+
+        var finalState = await _serviceControl.QueryServiceStateAsync(cancellationToken);
+        return SetAction(false, $"Windows service did not reach running state in time (state: {finalState}).");
+    }
+
+    private async Task<OperationResult> RetryForServiceReadinessAsync(
+        Func<CancellationToken, Task<OperationResult>> action,
+        string stepName,
+        int maxAttempts,
+        TimeSpan delayBetweenAttempts,
+        CancellationToken cancellationToken)
+    {
+        OperationResult? last = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            last = await action(cancellationToken);
+            if (last.Success)
+            {
+                return last;
+            }
+
+            if (!IsServiceUnavailable(last.Message))
+            {
+                return last;
+            }
+
+            if (attempt < maxAttempts)
+            {
+                await Task.Delay(delayBetweenAttempts, cancellationToken);
+            }
+        }
+
+        return SetAction(false, $"{stepName} failed after {maxAttempts} attempts: {last?.Message ?? "unknown error"}");
     }
 
     private static async Task<bool> TestSshTcpConnectivityAsync(ServiceConfig config, CancellationToken cancellationToken)
@@ -565,4 +878,35 @@ public sealed class GatewayOrchestratorService
 
         return null;
     }
+
+    private static string NormalizeOrDefault(string? value, string defaultValue)
+    {
+        return string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
+    }
+
+    private static int ParsePositivePort(string text, string fieldName)
+    {
+        if (!int.TryParse((text ?? string.Empty).Trim(), out var port) || port <= 0 || port > 65535)
+        {
+            throw new InvalidOperationException($"{fieldName} must be a positive integer between 1 and 65535.");
+        }
+
+        return port;
+    }
+
+    private static bool IsTransientLicenseError(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return false;
+        }
+
+        return error.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("request was canceled", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("temporarily", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("http", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("network", StringComparison.OrdinalIgnoreCase);
+    }
+
 }

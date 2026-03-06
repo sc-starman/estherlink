@@ -20,6 +20,12 @@ public partial class GatewayStateStore : ObservableObject
     private string proxyPortText = "19080";
 
     [ObservableProperty]
+    private string bootstrapSocksLocalPortText = "19081";
+
+    [ObservableProperty]
+    private string bootstrapSocksRemotePortText = "16080";
+
+    [ObservableProperty]
     private string tunnelHost = "vps.example.com";
 
     [ObservableProperty]
@@ -32,10 +38,19 @@ public partial class GatewayStateStore : ObservableObject
     private string gatewayPublicPortText = "443";
 
     [ObservableProperty]
-    private string gatewayPanelPortText = "8443";
+    private string gatewayPanelPortText = "2054";
 
     [ObservableProperty]
     private string gatewayBackendPortText = "15000";
+
+    [ObservableProperty]
+    private string gatewayDnsMode = "hybrid";
+
+    [ObservableProperty]
+    private string gatewayDohEndpointsText = "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query";
+
+    [ObservableProperty]
+    private bool gatewayDnsUdpOnly = true;
 
     [ObservableProperty]
     private string tunnelUser = "estherlink";
@@ -60,6 +75,12 @@ public partial class GatewayStateStore : ObservableObject
 
     [ObservableProperty]
     private string serviceState = "Unknown";
+
+    [ObservableProperty]
+    private bool licenseActivated;
+
+    [ObservableProperty]
+    private DateTimeOffset? licenseActivatedExpiresAtUtc;
 
     [ObservableProperty]
     private GatewayStatus? status;

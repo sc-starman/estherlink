@@ -34,6 +34,8 @@ public sealed class IpcCommandHandler
                 IpcCommands.Ping => new IpcResponse(true),
                 IpcCommands.GetStatus => HandleGetStatus(),
                 IpcCommands.SetConfig => HandleSetConfig(request.JsonPayload),
+                IpcCommands.SetLicenseKey => HandleSetLicenseKey(request.JsonPayload),
+                IpcCommands.GetCapabilities => HandleGetCapabilities(),
                 IpcCommands.UpdateWhitelist => HandleUpdateWhitelist(request.JsonPayload),
                 IpcCommands.StartProxy => HandleStartProxy(),
                 IpcCommands.StopProxy => HandleStopProxy(),
@@ -55,6 +57,25 @@ public sealed class IpcCommandHandler
     {
         var status = _runtime.GetStatusSnapshot();
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(new StatusResponse(status)));
+    }
+
+    private IpcResponse HandleGetCapabilities()
+    {
+        var capabilities = new[]
+        {
+            IpcCommands.GetStatus,
+            IpcCommands.SetConfig,
+            IpcCommands.SetLicenseKey,
+            IpcCommands.UpdateWhitelist,
+            IpcCommands.StartProxy,
+            IpcCommands.StopProxy,
+            IpcCommands.VerifyLicense,
+            IpcCommands.TestTunnelConnection
+        };
+
+        var serviceVersion = typeof(IpcCommandHandler).Assembly.GetName().Version?.ToString() ?? "unknown";
+        var payload = new CapabilitiesResponse(serviceVersion, capabilities);
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(payload));
     }
 
     private IpcResponse HandleSetConfig(string? jsonPayload)
@@ -87,6 +108,19 @@ public sealed class IpcCommandHandler
         return new IpcResponse(true);
     }
 
+    private IpcResponse HandleSetLicenseKey(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<SetLicenseKeyRequest>(jsonPayload);
+        if (payload is null)
+        {
+            return new IpcResponse(false, "Invalid set-license-key payload.");
+        }
+
+        _runtime.SetLicenseKey(payload.LicenseKey?.Trim() ?? string.Empty);
+        _fileLog.Info("License key updated via IPC.");
+        return new IpcResponse(true);
+    }
+
     private IpcResponse HandleStartProxy()
     {
         _runtime.RequestProxyStart();
@@ -104,7 +138,9 @@ public sealed class IpcCommandHandler
     private async Task<IpcResponse> HandleVerifyLicenseAsync(CancellationToken cancellationToken)
     {
         var config = _runtime.GetConfigSnapshot();
-        var result = await _licenseValidator.ValidateAsync(config, forceOnline: true, cancellationToken);
+        using var verifyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        verifyCts.CancelAfter(TimeSpan.FromMinutes(2));
+        var result = await _licenseValidator.ValidateAsync(config, forceOnline: true, verifyCts.Token);
         _runtime.SetLicenseStatus(result);
 
         var response = new VerifyLicenseResponse(

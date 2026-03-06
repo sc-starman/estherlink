@@ -58,9 +58,9 @@ UI redesign (Tailwind-inspired WPF shell):
   - Footer status strip
 - Pages:
   - Dashboard
-  - Network Configuration
+  - Relay Management
+  - Gateway Management
   - Whitelist Rules
-  - Service Status
   - License
   - Logs
   - Settings
@@ -160,13 +160,12 @@ dotnet run --project src/EstherLink.UI
 
 In UI:
 1. Select `VPS Network (IC1)` and `Outgoing Network (IC2)` adapters.
-2. Enter tunnel host/user/auth settings and proxy listen port.
-3. Configure gateway public/panel ports in Network Configuration.
+2. Configure Relay page (proxy port + IC1/IC2 adapters) and apply relay config.
+3. Configure Gateway page (tunnel/auth + bootstrap socks + gateway ports) and apply gateway config.
 4. Update whitelist and verify license.
-5. Open `Service Status` and use:
-   - Relay controls (Install/Start/Stop/Uninstall)
-   - Gateway controls (Install/Start/Stop/Uninstall/Health Check)
-   - `Install/Start All` for end-to-end deployment.
+5. Use:
+   - `Relay Management` for relay install/start/stop/uninstall and relay monitoring.
+   - `Gateway Management` for bootstrap check, install/start/stop/uninstall/health and gateway monitoring.
 
 ## Publish Windows Service
 
@@ -180,15 +179,7 @@ dotnet publish src/EstherLink.Service -c Release -r win-x64 --self-contained fal
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_msi.ps1 -Configuration Release
 ```
 
-Release MSI requires offline gateway bundle files:
-- `src/EstherLink.UI/Assets/GatewayBundle/omnirelay-vps-bundle-x64.tar.gz`
-- `src/EstherLink.UI/Assets/GatewayBundle/omnirelay-vps-bundle-x64.tar.gz.sha256`
-
-Build the bundle first (Linux/macOS host with Docker):
-
-```bash
-bash scripts/build_omnirelay_vps_bundle.sh --output-dir src/EstherLink.UI/Assets/GatewayBundle --xui-version v2.6.5
-```
+MSI includes the VPS gateway setup script used by the UI for online gateway install over SOCKS bootstrap tunnel.
 
 Output:
 
@@ -313,14 +304,27 @@ Primary ingress path (current):
 
 Helper setup scripts:
 - Primary control script (command-mode): `scripts/setup_omnirelay_vps_3xui.sh`
-- Offline bundle builder: `scripts/build_omnirelay_vps_bundle.sh`
 - Rollback/legacy: `scripts/setup_estherlink_vps.sh`
 
-Example (manual offline install, if not using UI deploy):
+Example (manual online install using SOCKS bootstrap):
 
 ```bash
-sudo bash scripts/setup_omnirelay_vps_3xui.sh install --bundle-dir /opt/omnirelay/bundle --public-port 443 --panel-port 8443 --backend-port 15000 --ssh-port 22 --tunnel-user estherlink --tunnel-auth host_key
+sudo bash scripts/setup_omnirelay_vps_3xui.sh install --public-port 443 --panel-port 2054 --backend-port 15000 --ssh-port 22 --tunnel-user estherlink --tunnel-auth host_key --bootstrap-socks-port 16080 --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
 ```
+
+DNS-through-tunnel commands:
+
+```bash
+sudo /usr/local/sbin/omnirelay-gatewayctl dns-status
+sudo /usr/local/sbin/omnirelay-gatewayctl dns-apply --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
+sudo /usr/local/sbin/omnirelay-gatewayctl dns-repair --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
+sudo /usr/local/sbin/omnirelay-gatewayctl health --json
+```
+
+Gateway Management page exposes the same DNS controls:
+- DNS mode: `hybrid|doh|udp`
+- DoH endpoints list
+- `Allow DNS UDP only` policy toggle
 
 ## Notes
 

@@ -54,6 +54,7 @@
                             <DataTemplate>
                                 <Button Style="{StaticResource SidebarNavButtonStyle}"
                                         Margin="0,0,0,4"
+                                        IsEnabled="{Binding IsEnabled}"
                                         Command="{Binding DataContext.NavigateCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                         CommandParameter="{Binding Item.Route}">
                                     <StackPanel Orientation="Horizontal">

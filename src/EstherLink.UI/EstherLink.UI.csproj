@@ -11,14 +11,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Assets\GatewayBundle\omnirelay-vps-bundle-x64.tar.gz"
-             Condition="Exists('Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz')"
+    <Content Include="..\..\scripts\setup_omnirelay_vps_3xui.sh"
+             Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_3xui.sh')"
              CopyToOutputDirectory="PreserveNewest"
-             Link="GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz" />
-    <Content Include="Assets\GatewayBundle\omnirelay-vps-bundle-x64.tar.gz.sha256"
-             Condition="Exists('Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz.sha256')"
-             CopyToOutputDirectory="PreserveNewest"
-             Link="GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz.sha256" />
+             Link="GatewayScripts\\setup_omnirelay_vps_3xui.sh" />
   </ItemGroup>
 
   <ItemGroup>
@@ -35,12 +31,5 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
-
-  <Target Name="EnsureGatewayBundlePresentForRelease" BeforeTargets="Build;Publish" Condition="'$(Configuration)' == 'Release'">
-    <Error Condition="!Exists('Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz')"
-           Text="Release build requires Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz. Run scripts/build_omnirelay_vps_bundle.sh first." />
-    <Error Condition="!Exists('Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz.sha256')"
-           Text="Release build requires Assets\\GatewayBundle\\omnirelay-vps-bundle-x64.tar.gz.sha256. Run scripts/build_omnirelay_vps_bundle.sh first." />
-  </Target>
 
 </Project>

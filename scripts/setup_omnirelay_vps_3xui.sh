@@ -6,30 +6,29 @@ umask 027
 SCRIPT_NAME="$(basename "$0")"
 
 COMMAND="install"
-BUNDLE_DIR=""
 PUBLIC_PORT=443
-PANEL_PORT=8443
+PANEL_PORT=2054
 BACKEND_PORT=15000
 SSH_PORT=22
 TUNNEL_USER="estherlink"
 TUNNEL_AUTH_METHOD="both"
+BOOTSTRAP_SOCKS_PORT=16080
+PROXY_CHECK_URL="https://deb.debian.org/"
+DNS_MODE="hybrid"
+DOH_ENDPOINTS="https://1.1.1.1/dns-query,https://8.8.8.8/dns-query"
+DNS_UDP_ONLY="true"
 VPS_IP=""
 PUBKEY=""
 PUBKEY_FILE=""
 PANEL_USER=""
 PANEL_PASSWORD=""
 PANEL_BASE_PATH=""
-PANEL_CERT_FILE=""
-PANEL_KEY_FILE=""
 STATUS_JSON=0
 HEALTH_JSON=0
+SSH_SERVICE=""
 
 log() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"
-}
-
-warn() {
-  printf '[%s] WARNING: %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2
 }
 
 die() {
@@ -48,77 +47,88 @@ usage() {
 Usage: sudo ./${SCRIPT_NAME} <command> [options]
 
 Commands:
-  install      Install/configure offline 3x-ui gateway components
+  install      Install/configure online 3x-ui gateway components
   uninstall    Remove x-ui gateway components
   start        Start gateway services
   stop         Stop gateway services
   status       Show gateway service status
   health       Run gateway operational checks
+  dns-apply    Apply OmniRelay DNS-through-tunnel profile
+  dns-status   Check DNS profile presence/readiness
+  dns-repair   Restore/repair DNS profile
 
 Options:
-  --bundle-dir <path>        Extracted offline bundle root (contains apt/, xui/, manifest.json)
-  --public-port <port>       Public client ingress port for 3x-ui/Xray inbound (default: ${PUBLIC_PORT})
-  --panel-port <port>        3x-ui panel HTTPS port (default: ${PANEL_PORT})
-  --backend-port <port>      Loopback port for reverse tunnel endpoint (default: ${BACKEND_PORT})
-  --ssh-port <port>          SSH port exposed on VPS/UFW (default: ${SSH_PORT})
-  --tunnel-user <name>       SSH tunnel user (default: ${TUNNEL_USER})
-  --tunnel-auth <method>     host_key | password | both (default: ${TUNNEL_AUTH_METHOD})
-  --vps-ip <ip-or-host>      VPS IP/hostname for summary output
-  --pubkey '<ssh-pubkey>'    Add one SSH public key to tunnel user authorized_keys
-  --pubkey-file <path>       Read SSH public key from file and add it
-  --panel-user <name>        Panel username (default: generated)
-  --panel-password <value>   Panel password (default: generated)
-  --panel-base-path <path>   Panel base path (default: generated random path)
-  --panel-cert-file <path>   Existing panel TLS cert path (PEM). Requires --panel-key-file
-  --panel-key-file <path>    Existing panel TLS key path (PEM). Requires --panel-cert-file
-  --json                     For status/health commands output compact JSON
-  -h, --help                 Show this help
-
-Examples:
-  sudo ./${SCRIPT_NAME} install --bundle-dir /tmp/omnirelay/bundle --public-port 443 --panel-port 8443
-  sudo ./${SCRIPT_NAME} health --json --backend-port 15000
+  --public-port <port>          Public client ingress port for 3x-ui/Xray inbound (default: ${PUBLIC_PORT})
+  --panel-port <port>           3x-ui panel HTTP port (default: ${PANEL_PORT})
+  --backend-port <port>         Loopback port for reverse tunnel endpoint (default: ${BACKEND_PORT})
+  --ssh-port <port>             SSH port exposed on VPS (default: ${SSH_PORT})
+  --tunnel-user <name>          SSH tunnel user (default: ${TUNNEL_USER})
+  --tunnel-auth <method>        host_key | password | both (default: ${TUNNEL_AUTH_METHOD})
+  --bootstrap-socks-port <port> VPS loopback SOCKS5 port used for bootstrap install traffic (default: ${BOOTSTRAP_SOCKS_PORT})
+  --proxy-check-url <url>       URL used for SOCKS egress validation (default: ${PROXY_CHECK_URL})
+  --dns-mode <mode>             hybrid | doh | udp (default: ${DNS_MODE})
+  --doh-endpoints <csv>         Comma-separated DoH endpoints (default: ${DOH_ENDPOINTS})
+  --dns-udp-only <true|false>   Allow only DNS UDP/53 and block other UDP (default: ${DNS_UDP_ONLY})
+  --vps-ip <ip-or-host>         VPS IP/hostname for summary output
+  --pubkey '<ssh-pubkey>'       Add one SSH public key to tunnel user authorized_keys
+  --pubkey-file <path>          Read SSH public key from file and add it
+  --panel-user <name>           Panel username (default: generated)
+  --panel-password <value>      Panel password (default: generated)
+  --panel-base-path <path>      Panel base path (default: generated random path)
+  --json                        For status/health commands output compact JSON
+  -h, --help                    Show this help
 EOF
 }
 
 validate_port() {
   local value="$1"
   local name="$2"
-  [[ "$value" =~ ^[0-9]+$ ]] || die "${name} must be an integer."
+  value="$(printf '%s' "$value" | tr -d '\r\n' | xargs)"
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "${name} must be an integer (received: ${value})."
   (( value >= 1 && value <= 65535 )) || die "${name} must be between 1 and 65535."
+  printf '%s' "$value"
 }
 
 require_root() {
   (( EUID == 0 )) || die "This command requires root. Re-run with sudo."
 }
 
-random_string() {
-  local len="$1"
-  LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c "$len"
-}
-
-detect_arch() {
-  case "$(uname -m)" in
-    x86_64|amd64) echo "amd64" ;;
-    *) die "Unsupported architecture: $(uname -m). Offline bundle currently supports amd64 only." ;;
-  esac
-}
-
-detect_codename() {
-  local codename=""
-  if [[ -f /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    source /etc/os-release
-    codename="${VERSION_CODENAME:-}"
+detect_ssh_service() {
+  if systemctl cat ssh >/dev/null 2>&1; then
+    SSH_SERVICE="ssh"
+    return 0
   fi
 
-  case "$codename" in
-    jammy|noble)
-      echo "$codename"
-      ;;
-    *)
-      die "Unsupported Ubuntu codename '${codename:-unknown}'. Supported: jammy, noble."
-      ;;
-  esac
+  if systemctl cat sshd >/dev/null 2>&1; then
+    SSH_SERVICE="sshd"
+    return 0
+  fi
+
+  if systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx "ssh.service"; then
+    SSH_SERVICE="ssh"
+    return 0
+  fi
+
+  if systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx "sshd.service"; then
+    SSH_SERVICE="sshd"
+    return 0
+  fi
+
+  return 1
+}
+
+require_existing_sshd() {
+  command -v sshd >/dev/null 2>&1 || die "OpenSSH server is required but not installed. Install openssh-server first."
+  detect_ssh_service || die "OpenSSH service unit not found. Ensure sshd is installed and managed by systemd."
+}
+
+random_string() {
+  local len="$1"
+  LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c "$len" || true
 }
 
 backup_file() {
@@ -164,63 +174,93 @@ json_escape() {
   printf '%s' "$value"
 }
 
-bundle_default_dir() {
-  local script_dir
-  script_dir="$(cd "$(dirname "$0")" && pwd)"
-  printf '%s' "${script_dir}/bundle"
+validate_dns_mode() {
+  local value="$1"
+  case "$value" in
+    hybrid|doh|udp) printf '%s' "$value" ;;
+    *) die "--dns-mode must be one of: hybrid|doh|udp" ;;
+  esac
 }
 
-require_bundle() {
-  if [[ -z "$BUNDLE_DIR" ]]; then
-    BUNDLE_DIR="$(bundle_default_dir)"
-  fi
-
-  [[ -d "$BUNDLE_DIR" ]] || die "Bundle directory not found: $BUNDLE_DIR"
-  [[ -f "$BUNDLE_DIR/manifest.json" ]] || die "Bundle manifest missing: $BUNDLE_DIR/manifest.json"
-  [[ -d "$BUNDLE_DIR/xui" ]] || die "Bundle xui directory missing: $BUNDLE_DIR/xui"
-  [[ -d "$BUNDLE_DIR/apt" ]] || die "Bundle apt directory missing: $BUNDLE_DIR/apt"
+normalize_bool() {
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$value" in
+    true|1|yes|y) printf 'true' ;;
+    false|0|no|n) printf 'false' ;;
+    *) die "--dns-udp-only must be true or false" ;;
+  esac
 }
 
-apt_get_local() {
-  local apt_list="$1"
-  shift
-  apt-get \
-    -o Dir::Etc::sourcelist="$apt_list" \
-    -o Dir::Etc::sourceparts="-" \
-    -o APT::Get::List-Cleanup="0" \
-    "$@"
+configure_online_proxy_env() {
+  export ALL_PROXY="socks5h://127.0.0.1:${BOOTSTRAP_SOCKS_PORT}"
+  export HTTPS_PROXY="$ALL_PROXY"
+  export HTTP_PROXY="$ALL_PROXY"
 }
 
-install_packages_offline() {
-  local codename="$1"
-  local apt_repo_dir="$BUNDLE_DIR/apt/$codename"
-  local apt_list="/etc/apt/sources.list.d/omnirelay-offline.list"
+verify_bootstrap_socks() {
+  progress 8 "Checking bootstrap SOCKS endpoint"
+  local retries=24
+  local wait_sec=5
+  local listener_ok=0
+  local curl_ok=0
 
-  [[ -d "$apt_repo_dir" ]] || die "Offline apt repo for '${codename}' not found at ${apt_repo_dir}"
-  [[ -f "$apt_repo_dir/Packages" || -f "$apt_repo_dir/Packages.gz" ]] || die "Offline apt repo metadata missing in ${apt_repo_dir}"
+  for ((i=1; i<=retries; i++)); do
+    if ss -lnt "( sport = :${BOOTSTRAP_SOCKS_PORT} )" 2>/dev/null | awk 'NR>1 {print $0}' | grep -q .; then
+      listener_ok=1
+    else
+      listener_ok=0
+    fi
 
-  progress 12 "Configuring local offline apt source"
-  write_file_if_changed "$apt_list" 0644 root root "deb [trusted=yes] file:${apt_repo_dir} ./" || true
+    if (( listener_ok == 1 )); then
+      configure_online_proxy_env
+      if curl --fail --silent --show-error --max-time 20 --socks5-hostname "127.0.0.1:${BOOTSTRAP_SOCKS_PORT}" "$PROXY_CHECK_URL" >/dev/null; then
+        curl_ok=1
+        break
+      fi
+    fi
 
-  progress 18 "Updating apt index from local bundle"
-  apt_get_local "$apt_list" update
+    log "Bootstrap SOCKS not ready on 127.0.0.1:${BOOTSTRAP_SOCKS_PORT} (attempt ${i}/${retries}, listener_present=${listener_ok}), waiting ${wait_sec}s..."
+    sleep "$wait_sec"
+  done
 
-  progress 24 "Installing required packages from local bundle"
-  DEBIAN_FRONTEND=noninteractive apt_get_local "$apt_list" install -y --no-install-recommends \
-    openssh-server \
-    fail2ban \
-    ufw \
+  (( listener_ok == 1 )) || \
+    die "Bootstrap SOCKS endpoint is not reachable on 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}. Ensure Windows relay/tunnel are running and sshd permits remote forward for this port."
+  (( curl_ok == 1 )) || \
+    die "Bootstrap SOCKS listener exists on 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}, but internet egress check failed against ${PROXY_CHECK_URL}."
+
+  progress 14 "Validated internet egress over SOCKS"
+}
+
+configure_apt_proxy() {
+  local apt_proxy_file="/etc/apt/apt.conf.d/99-omnirelay-socks"
+  local content
+  content="Acquire::http::Proxy \"socks5h://127.0.0.1:${BOOTSTRAP_SOCKS_PORT}\";
+Acquire::https::Proxy \"socks5h://127.0.0.1:${BOOTSTRAP_SOCKS_PORT}\";"
+  write_file_if_changed "$apt_proxy_file" 0644 root root "$content" || true
+}
+
+install_packages_online() {
+  progress 20 "Configuring apt to use SOCKS bootstrap"
+  configure_apt_proxy
+
+  progress 26 "Updating apt indexes"
+  DEBIAN_FRONTEND=noninteractive apt-get update
+
+  progress 34 "Installing required packages"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     tar \
     gzip \
     jq \
     openssl \
-    python3
+    python3 \
+    sqlite3
 }
 
 setup_tunnel_user() {
-  progress 31 "Ensuring tunnel user exists and has shell access"
+  progress 40 "Ensuring tunnel user exists and has shell access"
 
   if ! id -u "$TUNNEL_USER" >/dev/null 2>&1; then
     useradd --create-home --home-dir "/home/${TUNNEL_USER}" --shell /bin/bash "$TUNNEL_USER"
@@ -235,7 +275,7 @@ setup_tunnel_user() {
 
   if [[ -n "$PUBKEY" ]]; then
     local restricted_key
-    restricted_key="restrict,port-forwarding,permitlisten=\"127.0.0.1:${BACKEND_PORT}\" ${PUBKEY}"
+    restricted_key="restrict,port-forwarding,permitlisten=\"127.0.0.1:${BACKEND_PORT}\",permitlisten=\"127.0.0.1:${BOOTSTRAP_SOCKS_PORT}\" ${PUBKEY}"
     if ! grep -Fqx "$restricted_key" "/home/${TUNNEL_USER}/.ssh/authorized_keys"; then
       printf '%s\n' "$restricted_key" >> "/home/${TUNNEL_USER}/.ssh/authorized_keys"
       log "Added provided SSH public key for ${TUNNEL_USER}."
@@ -248,7 +288,7 @@ setup_tunnel_user() {
 }
 
 configure_sshd() {
-  progress 38 "Configuring sshd for reverse tunnel"
+  progress 48 "Configuring sshd for reverse tunnel"
 
   local sshd_dropin="/etc/ssh/sshd_config.d/99-estherlink.conf"
   local auth_block=""
@@ -279,6 +319,7 @@ configure_sshd() {
 
   local content
   content="# Managed by ${SCRIPT_NAME}
+Port ${SSH_PORT}
 AllowTcpForwarding yes
 GatewayPorts no
 PermitTunnel no
@@ -295,53 +336,44 @@ ${auth_block}
     GatewayPorts no
     PermitTunnel no
     PermitListen 127.0.0.1:${BACKEND_PORT}
+    PermitListen 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}
 "
 
-  write_file_if_changed "$sshd_dropin" 0644 root root "$content" || true
+  local changed=0
+  if write_file_if_changed "$sshd_dropin" 0644 root root "$content"; then
+    changed=1
+  fi
 
   sshd -t
-  systemctl enable --now ssh
-  systemctl restart ssh
+  systemctl enable --now "$SSH_SERVICE"
+  if (( changed == 1 )); then
+    log "sshd configuration changed; restarting ${SSH_SERVICE}."
+    systemctl restart "$SSH_SERVICE"
+  else
+    log "sshd configuration unchanged; skipping ${SSH_SERVICE} restart."
+  fi
 }
 
-install_3xui_offline() {
-  progress 50 "Installing 3x-ui from offline bundle"
+install_3xui_online() {
+  progress 58 "Installing/updating 3x-ui via SOCKS egress"
+  configure_online_proxy_env
 
-  local tar_path="$BUNDLE_DIR/xui/x-ui-linux-amd64.tar.gz"
-  [[ -f "$tar_path" ]] || die "x-ui archive not found: ${tar_path}"
+  local installer="/tmp/3x-ui-install.sh"
+  curl --fail --silent --show-error --location \
+    "https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh" \
+    --output "$installer"
 
-  local tmp
-  tmp="$(mktemp -d)"
-  tar -xzf "$tar_path" -C "$tmp"
-  [[ -d "$tmp/x-ui" ]] || die "Extracted x-ui archive does not contain x-ui directory."
+  # Upstream installer runs interactive post-install panel/SSL bootstrap in config_after_install.
+  # We disable that step and manage panel settings ourselves (HTTP port/base path/user/password).
+  sed -i 's/^[[:space:]]*config_after_install[[:space:]]*$/# config_after_install disabled by omnirelay-gatewayctl/' "$installer"
 
-  systemctl disable --now x-ui >/dev/null 2>&1 || true
-  rm -rf /usr/local/x-ui
-  mkdir -p /usr/local
-  mv "$tmp/x-ui" /usr/local/x-ui
+  chmod +x "$installer"
+  bash "$installer" <<'EOF'
+y
+EOF
 
-  chmod +x /usr/local/x-ui/x-ui
-  chmod +x /usr/local/x-ui/x-ui.sh
-  find /usr/local/x-ui/bin -maxdepth 1 -type f -name 'xray-linux-*' -exec chmod +x {} \;
-
-  install -m 0755 /usr/local/x-ui/x-ui.sh /usr/bin/x-ui
-
-  local service_src="/usr/local/x-ui/x-ui.service.debian"
-  if [[ ! -f "$service_src" ]]; then
-    service_src="/usr/local/x-ui/x-ui.service"
-  fi
-  [[ -f "$service_src" ]] || die "No systemd service file found inside 3x-ui package."
-  install -m 0644 "$service_src" /etc/systemd/system/x-ui.service
-
-  mkdir -p /etc/x-ui
-  chmod 0750 /etc/x-ui
-  mkdir -p /var/log/x-ui
-
-  systemctl daemon-reload
   systemctl enable --now x-ui
   systemctl restart x-ui
-
-  rm -rf "$tmp"
 }
 
 detect_vps_ip() {
@@ -349,7 +381,7 @@ detect_vps_ip() {
 }
 
 configure_panel_credentials() {
-  progress 62 "Configuring 3x-ui panel credentials"
+  progress 68 "Configuring 3x-ui panel credentials"
 
   if [[ -z "$PANEL_USER" ]]; then
     PANEL_USER="omniadmin_$(random_string 6)"
@@ -373,52 +405,177 @@ configure_panel_credentials() {
     -listenIP "0.0.0.0" >/dev/null
 }
 
-generate_panel_self_signed_cert() {
-  local endpoint cn san
+disable_panel_tls() {
+  progress 75 "Disabling 3x-ui panel TLS (HTTP mode)"
 
-  endpoint="$VPS_IP"
-  if [[ -z "$endpoint" ]]; then
-    endpoint="$(detect_vps_ip || true)"
-  fi
-  [[ -n "$endpoint" ]] || endpoint="localhost"
+  local db_path="/etc/x-ui/x-ui.db"
+  if [[ -f "$db_path" ]]; then
+    python3 - "$db_path" <<'PY'
+import sqlite3
+import sys
 
-  PANEL_CERT_FILE="/etc/x-ui/panel.crt"
-  PANEL_KEY_FILE="/etc/x-ui/panel.key"
-
-  cn="$endpoint"
-  if [[ "$endpoint" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    san="IP:${endpoint}"
-  else
-    san="DNS:${endpoint}"
-  fi
-
-  openssl req -x509 -nodes -newkey rsa:3072 -sha256 -days 365 \
-    -keyout "$PANEL_KEY_FILE" \
-    -out "$PANEL_CERT_FILE" \
-    -subj "/CN=${cn}" \
-    -addext "subjectAltName=${san}" >/dev/null 2>&1
-
-  chmod 0600 "$PANEL_KEY_FILE"
-  chmod 0644 "$PANEL_CERT_FILE"
-}
-
-configure_panel_tls() {
-  progress 70 "Configuring 3x-ui panel TLS"
-
-  if [[ -n "$PANEL_CERT_FILE" || -n "$PANEL_KEY_FILE" ]]; then
-    [[ -n "$PANEL_CERT_FILE" && -n "$PANEL_KEY_FILE" ]] || die "Both --panel-cert-file and --panel-key-file are required together."
-    [[ -f "$PANEL_CERT_FILE" ]] || die "--panel-cert-file not found: ${PANEL_CERT_FILE}"
-    [[ -f "$PANEL_KEY_FILE" ]] || die "--panel-key-file not found: ${PANEL_KEY_FILE}"
-  else
-    generate_panel_self_signed_cert
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings';")
+if cur.fetchone() is not None:
+    for key in ("webCertFile", "webKeyFile"):
+        cur.execute("SELECT id FROM settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        if row:
+            cur.execute("UPDATE settings SET value = '' WHERE id = ?", (row[0],))
+conn.commit()
+conn.close()
+PY
   fi
 
-  /usr/local/x-ui/x-ui cert -webCert "$PANEL_CERT_FILE" -webCertKey "$PANEL_KEY_FILE" >/dev/null
   systemctl restart x-ui
 }
 
-write_xray_template() {
+reset_stale_xray_template_config() {
+  progress 82 "Cleaning stale Xray template settings"
+
+  local db_path="/etc/x-ui/x-ui.db"
+  if [[ ! -f "$db_path" ]]; then
+    return 0
+  fi
+
+  python3 - "$db_path" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings';")
+if cur.fetchone() is not None:
+    cur.execute("DELETE FROM settings WHERE key = ?", ("xrayTemplateConfig",))
+conn.commit()
+conn.close()
+PY
+
+  rm -f /etc/x-ui/omnirelay-xray-template.json || true
+  systemctl restart x-ui
+}
+
+build_dns_json_array() {
+  local csv="$1"
+  IFS=',' read -r -a parts <<< "$csv"
+  local out=""
+  local count=0
+  local item trimmed escaped
+
+  for item in "${parts[@]}"; do
+    trimmed="$(printf '%s' "$item" | xargs)"
+    [[ -n "$trimmed" ]] || continue
+    escaped="${trimmed//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    if (( count > 0 )); then
+      out="${out}, "
+    fi
+    out="${out}\"${escaped}\""
+    ((count++))
+  done
+
+  if (( count == 0 )); then
+    die "At least one DoH endpoint is required in --doh-endpoints."
+  fi
+
+  printf '%s' "$out"
+}
+
+render_xray_template() {
   local target="$1"
+  local doh_array
+  doh_array="$(build_dns_json_array "$DOH_ENDPOINTS")"
+
+  local dns_rule_block='
+      {
+        "type": "field",
+        "network": "udp",
+        "port": "53",
+        "outboundTag": "dns_out"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "port": "53",
+        "outboundTag": "dns_out"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "outboundTag": "to_windows_http"
+      }'
+
+  if [[ "$DNS_MODE" == "doh" ]]; then
+    dns_rule_block='
+      {
+        "type": "field",
+        "network": "tcp",
+        "port": "53",
+        "outboundTag": "dns_out"
+      },
+      {
+        "type": "field",
+        "network": "udp",
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "outboundTag": "to_windows_http"
+      }'
+  elif [[ "$DNS_MODE" == "udp" ]]; then
+    dns_rule_block='
+      {
+        "type": "field",
+        "network": "udp",
+        "port": "53",
+        "outboundTag": "dns_out"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "port": "53",
+        "outboundTag": "dns_out"
+      },
+      {
+        "type": "field",
+        "network": "udp",
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "outboundTag": "to_windows_http"
+      }'
+  elif [[ "$DNS_UDP_ONLY" == "true" ]]; then
+    dns_rule_block='
+      {
+        "type": "field",
+        "network": "udp",
+        "port": "53",
+        "outboundTag": "dns_out"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "port": "53",
+        "outboundTag": "dns_out"
+      },
+      {
+        "type": "field",
+        "network": "udp",
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "outboundTag": "to_windows_http"
+      }'
+  fi
+
   cat > "$target" <<EOF
 {
   "log": {
@@ -427,6 +584,10 @@ write_xray_template() {
     "error": "",
     "loglevel": "warning",
     "maskAddress": ""
+  },
+  "dns": {
+    "servers": [${doh_array}],
+    "queryStrategy": "UseIPv4"
   },
   "api": {
     "tag": "api",
@@ -441,7 +602,7 @@ write_xray_template() {
       "tag": "api",
       "listen": "127.0.0.1",
       "port": 62789,
-      "protocol": "tunnel",
+      "protocol": "dokodemo-door",
       "settings": {
         "address": "127.0.0.1"
       }
@@ -449,7 +610,7 @@ write_xray_template() {
   ],
   "outbounds": [
     {
-      "tag": "to_windows_tunnel_http",
+      "tag": "to_windows_http",
       "protocol": "http",
       "settings": {
         "servers": [
@@ -461,13 +622,23 @@ write_xray_template() {
       }
     },
     {
+      "tag": "dns_out",
+      "protocol": "dns",
+      "settings": {}
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+    {
       "tag": "blocked",
       "protocol": "blackhole",
       "settings": {}
     }
   ],
   "routing": {
-    "domainStrategy": "AsIs",
+    "domainStrategy": "IPIfNonMatch",
     "rules": [
       {
         "type": "field",
@@ -475,16 +646,7 @@ write_xray_template() {
           "api"
         ],
         "outboundTag": "api"
-      },
-      {
-        "type": "field",
-        "network": "udp",
-        "outboundTag": "blocked"
-      },
-      {
-        "type": "field",
-        "outboundTag": "to_windows_tunnel_http"
-      }
+      },${dns_rule_block}
     ]
   },
   "stats": {}
@@ -492,82 +654,165 @@ write_xray_template() {
 EOF
 }
 
-apply_fail_closed_xray_template() {
-  progress 78 "Applying fail-closed Xray template"
+read_setting_value() {
+  local db_path="$1"
+  local key="$2"
+  python3 - "$db_path" "$key" <<'PY'
+import sqlite3
+import sys
 
-  local db_path="/etc/x-ui/x-ui.db"
-  local template_path="/etc/x-ui/omnirelay-xray-template.json"
+db_path, key = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings';")
+if cur.fetchone() is None:
+    print("")
+    conn.close()
+    raise SystemExit(0)
+cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+row = cur.fetchone()
+print("" if row is None or row[0] is None else row[0])
+conn.close()
+PY
+}
 
-  write_xray_template "$template_path"
-
-  for _ in {1..20}; do
-    [[ -f "$db_path" ]] && break
-    sleep 1
-  done
-  [[ -f "$db_path" ]] || die "3x-ui DB not found at ${db_path}."
-
-  python3 - "$db_path" "$template_path" <<'PY'
+write_setting_value() {
+  local db_path="$1"
+  local key="$2"
+  local value_file="$3"
+  python3 - "$db_path" "$key" "$value_file" <<'PY'
 import sqlite3
 import sys
 from pathlib import Path
 
-db_path = sys.argv[1]
-template_path = sys.argv[2]
-value = Path(template_path).read_text(encoding="utf-8")
+db_path, key, value_file = sys.argv[1], sys.argv[2], sys.argv[3]
+value = Path(value_file).read_text(encoding="utf-8")
 
 conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings';")
 if cur.fetchone() is None:
-    raise SystemExit("settings table not found in 3x-ui database")
-
-cur.execute("SELECT id FROM settings WHERE key = ?", ("xrayTemplateConfig",))
+    raise SystemExit("settings table not found")
+cur.execute("SELECT id FROM settings WHERE key = ?", (key,))
 row = cur.fetchone()
 if row:
     cur.execute("UPDATE settings SET value = ? WHERE id = ?", (value, row[0]))
 else:
-    cur.execute("INSERT INTO settings(key, value) VALUES(?, ?)", ("xrayTemplateConfig", value))
-
+    cur.execute("INSERT INTO settings(key, value) VALUES(?, ?)", (key, value))
 conn.commit()
 conn.close()
 PY
+}
+
+apply_dns_profile() {
+  progress 82 "Applying DNS-through-tunnel profile"
+  local db_path="/etc/x-ui/x-ui.db"
+  local template_path="/etc/x-ui/omnirelay-xray-template.json"
+  local backup_dir="/etc/x-ui/backup"
+  local backup_path
+  local previous
+
+  [[ -f "$db_path" ]] || die "x-ui DB not found at ${db_path}."
+  mkdir -p "$backup_dir"
+
+  previous="$(read_setting_value "$db_path" "xrayTemplateConfig" || true)"
+  backup_path="${backup_dir}/xrayTemplateConfig.$(date +%Y%m%d%H%M%S).json"
+  printf '%s' "$previous" > "$backup_path"
+
+  render_xray_template "$template_path"
+
+  if ! write_setting_value "$db_path" "xrayTemplateConfig" "$template_path"; then
+    if [[ -f "$backup_path" ]]; then
+      write_setting_value "$db_path" "xrayTemplateConfig" "$backup_path" || true
+    fi
+    die "Failed to write DNS/Xray template configuration."
+  fi
 
   systemctl restart x-ui
 }
 
-configure_fail2ban() {
-  progress 84 "Configuring fail2ban"
+dns_status_json() {
+  local config_path="/usr/local/x-ui/bin/config.json"
+  local db_path="/etc/x-ui/x-ui.db"
+  local template_value dns_config_present dns_rule_active doh_reachable udp53_ready dns_path_healthy first_doh http_code
 
-  local jail_file="/etc/fail2ban/jail.d/estherlink-sshd.local"
-  local content
-  content="# Managed by ${SCRIPT_NAME}
-[sshd]
-enabled = true
-port = ${SSH_PORT}
-backend = systemd
-maxretry = 5
-findtime = 10m
-bantime = 1h
-bantime.increment = true
-banaction = ufw
-"
+  template_value="$(read_setting_value "$db_path" "xrayTemplateConfig" || true)"
+  dns_config_present=false
+  dns_rule_active=false
+  doh_reachable=false
+  udp53_ready=false
+  dns_path_healthy=false
 
-  write_file_if_changed "$jail_file" 0644 root root "$content" || true
-  systemctl enable --now fail2ban
-  systemctl restart fail2ban
+  if [[ "$template_value" == *"dns_out"* && "$template_value" == *"to_windows_http"* ]]; then
+    dns_config_present=true
+  fi
+
+  if [[ -f "$config_path" ]] && grep -q '"dns_out"' "$config_path" && grep -q '"to_windows_http"' "$config_path"; then
+    dns_rule_active=true
+  fi
+
+  if [[ -f "$config_path" ]] && grep -q '"network"[[:space:]]*:[[:space:]]*"udp"' "$config_path" && grep -q '"port"[[:space:]]*:[[:space:]]*"53"' "$config_path"; then
+    udp53_ready=true
+  fi
+
+  first_doh="$(printf '%s' "$DOH_ENDPOINTS" | cut -d',' -f1 | xargs)"
+  if [[ -n "$first_doh" ]]; then
+    configure_online_proxy_env
+    http_code="$(curl --silent --show-error --max-time 15 --connect-timeout 10 --output /dev/null --write-out '%{http_code}' --socks5-hostname "127.0.0.1:${BOOTSTRAP_SOCKS_PORT}" "$first_doh" 2>/dev/null || true)"
+    if [[ -n "$http_code" && "$http_code" != "000" ]]; then
+      doh_reachable=true
+    fi
+  fi
+
+  if [[ "$dns_config_present" == "true" && "$dns_rule_active" == "true" ]]; then
+    case "$DNS_MODE" in
+      hybrid)
+        [[ "$doh_reachable" == "true" && "$udp53_ready" == "true" ]] && dns_path_healthy=true
+        ;;
+      doh)
+        [[ "$doh_reachable" == "true" ]] && dns_path_healthy=true
+        ;;
+      udp)
+        [[ "$udp53_ready" == "true" ]] && dns_path_healthy=true
+        ;;
+    esac
+  fi
+
+  printf '{"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s}\n' \
+    "$(json_escape "$DNS_MODE")" \
+    "$DNS_UDP_ONLY" \
+    "$(json_escape "$DOH_ENDPOINTS")" \
+    "$dns_config_present" \
+    "$dns_rule_active" \
+    "$doh_reachable" \
+    "$udp53_ready" \
+    "$dns_path_healthy"
 }
 
-configure_firewall() {
-  progress 89 "Configuring firewall"
+dns_apply_impl() {
+  require_root
+  verify_bootstrap_socks
+  apply_dns_profile
+  progress 100 "DNS profile applied"
+}
 
-  ufw --force default deny incoming
-  ufw --force default allow outgoing
+dns_status_impl() {
+  local json
+  json="$(dns_status_json)"
+  if (( STATUS_JSON == 1 || HEALTH_JSON == 1 )); then
+    printf '%s\n' "$json"
+    return
+  fi
+  cat <<EOF
+DNS status:
+${json}
+EOF
+}
 
-  ufw allow "${SSH_PORT}/tcp" comment "SSH"
-  ufw allow "${PUBLIC_PORT}/tcp" comment "OmniRelay client ingress"
-  ufw allow "${PANEL_PORT}/tcp" comment "3x-ui panel"
-
-  ufw --force enable
+dns_repair_impl() {
+  require_root
+  progress 40 "Repairing DNS profile"
+  dns_apply_impl
 }
 
 disable_haproxy() {
@@ -585,26 +830,56 @@ check_listener() {
   fi
 }
 
+ensure_ssh_service_resolved() {
+  if [[ -n "$SSH_SERVICE" ]]; then
+    return 0
+  fi
+
+  detect_ssh_service || SSH_SERVICE="ssh"
+}
+
 status_impl() {
-  local ssh_state xui_state fail2ban_state tunnel_listener ingress_listener panel_listener
-  ssh_state="$(systemctl is-active ssh 2>/dev/null || echo inactive)"
+  ensure_ssh_service_resolved
+  local ssh_state xui_state fail2ban_state tunnel_listener ingress_listener panel_listener socks_listener dns_json
+  local dns_config_present dns_rule_active doh_reachable udp53_ready dns_path_healthy dns_mode dns_udp_only doh_endpoints
+  ssh_state="$(systemctl is-active "$SSH_SERVICE" 2>/dev/null || echo inactive)"
   xui_state="$(systemctl is-active x-ui 2>/dev/null || echo inactive)"
-  fail2ban_state="$(systemctl is-active fail2ban 2>/dev/null || echo inactive)"
+  fail2ban_state="disabled"
   tunnel_listener="$(check_listener "$BACKEND_PORT")"
   ingress_listener="$(check_listener "$PUBLIC_PORT")"
   panel_listener="$(check_listener "$PANEL_PORT")"
+  socks_listener="$(check_listener "$BOOTSTRAP_SOCKS_PORT")"
+  dns_json="$(dns_status_json)"
+  dns_config_present="$(printf '%s' "$dns_json" | grep -o '"dnsConfigPresent":[^,}]*' | cut -d: -f2)"
+  dns_rule_active="$(printf '%s' "$dns_json" | grep -o '"dnsRuleActive":[^,}]*' | cut -d: -f2)"
+  doh_reachable="$(printf '%s' "$dns_json" | grep -o '"dohReachableViaTunnel":[^,}]*' | cut -d: -f2)"
+  udp53_ready="$(printf '%s' "$dns_json" | grep -o '"udp53PathReady":[^,}]*' | cut -d: -f2)"
+  dns_path_healthy="$(printf '%s' "$dns_json" | grep -o '"dnsPathHealthy":[^,}]*' | cut -d: -f2)"
+  dns_mode="$(printf '%s' "$dns_json" | grep -o '"dnsMode":"[^"]*"' | sed 's/"dnsMode":"//;s/"$//')"
+  dns_udp_only="$(printf '%s' "$dns_json" | grep -o '"dnsUdpOnly":[^,}]*' | cut -d: -f2)"
+  doh_endpoints="$(printf '%s' "$dns_json" | grep -o '"dohEndpoints":"[^"]*"' | sed 's/"dohEndpoints":"//;s/"$//')"
 
   if (( STATUS_JSON == 1 )); then
-    printf '{"sshState":"%s","xuiState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s}\n' \
+    printf '{"sshState":"%s","xuiState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"bootstrapSocksListener":%s,"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' \
       "$(json_escape "$ssh_state")" \
       "$(json_escape "$xui_state")" \
       "$(json_escape "$fail2ban_state")" \
       "$BACKEND_PORT" \
       "$PUBLIC_PORT" \
       "$PANEL_PORT" \
+      "$BOOTSTRAP_SOCKS_PORT" \
       "$tunnel_listener" \
       "$ingress_listener" \
-      "$panel_listener"
+      "$panel_listener" \
+      "$socks_listener" \
+      "$dns_config_present" \
+      "$dns_rule_active" \
+      "$doh_reachable" \
+      "$udp53_ready" \
+      "$dns_path_healthy" \
+      "$(json_escape "$dns_mode")" \
+      "$dns_udp_only" \
+      "$(json_escape "$doh_endpoints")"
     return
   fi
 
@@ -616,33 +891,69 @@ Gateway status:
   backend listener 127.0.0.1:${BACKEND_PORT}: ${tunnel_listener}
   public listener 0.0.0.0:${PUBLIC_PORT}: ${ingress_listener}
   panel listener 0.0.0.0:${PANEL_PORT}: ${panel_listener}
+  bootstrap socks 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}: ${socks_listener}
+  dns mode: ${dns_mode}
+  dns udp only: ${dns_udp_only}
+  doh endpoints: ${doh_endpoints}
+  dns config present: ${dns_config_present}
+  dns rule active: ${dns_rule_active}
+  doh reachable via tunnel: ${doh_reachable}
+  udp53 path ready: ${udp53_ready}
 EOF
 }
 
 health_impl() {
+  ensure_ssh_service_resolved
   progress 5 "Running gateway health checks"
-  local ssh_state xui_state fail2ban_state tunnel_listener ingress_listener panel_listener healthy
+  local ssh_state xui_state fail2ban_state tunnel_listener ingress_listener panel_listener socks_listener healthy dns_json
+  local dns_config_present dns_rule_active doh_reachable udp53_ready dns_path_healthy dns_mode dns_udp_only doh_endpoints dns_last_error
 
-  ssh_state="$(systemctl is-active ssh 2>/dev/null || echo inactive)"
+  ssh_state="$(systemctl is-active "$SSH_SERVICE" 2>/dev/null || echo inactive)"
   xui_state="$(systemctl is-active x-ui 2>/dev/null || echo inactive)"
-  fail2ban_state="$(systemctl is-active fail2ban 2>/dev/null || echo inactive)"
+  fail2ban_state="disabled"
 
   progress 45 "Checking expected listeners"
   tunnel_listener="$(check_listener "$BACKEND_PORT")"
   ingress_listener="$(check_listener "$PUBLIC_PORT")"
   panel_listener="$(check_listener "$PANEL_PORT")"
+  socks_listener="$(check_listener "$BOOTSTRAP_SOCKS_PORT")"
+  dns_json="$(dns_status_json)"
+  dns_config_present="$(printf '%s' "$dns_json" | grep -o '"dnsConfigPresent":[^,}]*' | cut -d: -f2)"
+  dns_rule_active="$(printf '%s' "$dns_json" | grep -o '"dnsRuleActive":[^,}]*' | cut -d: -f2)"
+  doh_reachable="$(printf '%s' "$dns_json" | grep -o '"dohReachableViaTunnel":[^,}]*' | cut -d: -f2)"
+  udp53_ready="$(printf '%s' "$dns_json" | grep -o '"udp53PathReady":[^,}]*' | cut -d: -f2)"
+  dns_path_healthy="$(printf '%s' "$dns_json" | grep -o '"dnsPathHealthy":[^,}]*' | cut -d: -f2)"
+  dns_mode="$(printf '%s' "$dns_json" | grep -o '"dnsMode":"[^"]*"' | sed 's/"dnsMode":"//;s/"$//')"
+  dns_udp_only="$(printf '%s' "$dns_json" | grep -o '"dnsUdpOnly":[^,}]*' | cut -d: -f2)"
+  doh_endpoints="$(printf '%s' "$dns_json" | grep -o '"dohEndpoints":"[^"]*"' | sed 's/"dohEndpoints":"//;s/"$//')"
 
   healthy=true
   [[ "$ssh_state" == "active" ]] || healthy=false
   [[ "$xui_state" == "active" ]] || healthy=false
-  [[ "$fail2ban_state" == "active" ]] || healthy=false
-  [[ "$ingress_listener" == "true" ]] || healthy=false
   [[ "$panel_listener" == "true" ]] || healthy=false
+  [[ "$tunnel_listener" == "true" ]] || healthy=false
+  [[ "$socks_listener" == "true" ]] || healthy=false
+  [[ "$dns_path_healthy" == "true" ]] || healthy=false
+  dns_last_error=""
+  [[ "$dns_config_present" == "true" ]] || dns_last_error="dnsConfigMissing"
+  if [[ "$dns_rule_active" != "true" ]]; then dns_last_error="dnsRuleInactive"; fi
+  case "$dns_mode" in
+    hybrid)
+      if [[ "$doh_reachable" != "true" ]]; then dns_last_error="dohUnreachableViaTunnel"; fi
+      if [[ "$udp53_ready" != "true" ]]; then dns_last_error="udp53PathNotReady"; fi
+      ;;
+    doh)
+      if [[ "$doh_reachable" != "true" ]]; then dns_last_error="dohUnreachableViaTunnel"; fi
+      ;;
+    udp)
+      if [[ "$udp53_ready" != "true" ]]; then dns_last_error="udp53PathNotReady"; fi
+      ;;
+  esac
 
   progress 100 "Health checks completed"
 
   if (( HEALTH_JSON == 1 )); then
-    printf '{"healthy":%s,"sshState":"%s","xuiState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s}\n' \
+    printf '{"healthy":%s,"sshState":"%s","xuiState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"bootstrapSocksListener":%s,"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsLastError":"%s"}\n' \
       "$healthy" \
       "$(json_escape "$ssh_state")" \
       "$(json_escape "$xui_state")" \
@@ -650,9 +961,20 @@ health_impl() {
       "$BACKEND_PORT" \
       "$PUBLIC_PORT" \
       "$PANEL_PORT" \
+      "$BOOTSTRAP_SOCKS_PORT" \
       "$tunnel_listener" \
       "$ingress_listener" \
-      "$panel_listener"
+      "$panel_listener" \
+      "$socks_listener" \
+      "$dns_config_present" \
+      "$dns_rule_active" \
+      "$doh_reachable" \
+      "$udp53_ready" \
+      "$dns_path_healthy" \
+      "$(json_escape "$dns_mode")" \
+      "$dns_udp_only" \
+      "$(json_escape "$doh_endpoints")" \
+      "$(json_escape "$dns_last_error")"
     return
   fi
 
@@ -664,15 +986,20 @@ Gateway health: ${healthy}
   backend listener 127.0.0.1:${BACKEND_PORT}: ${tunnel_listener}
   public listener 0.0.0.0:${PUBLIC_PORT}: ${ingress_listener}
   panel listener 0.0.0.0:${PANEL_PORT}: ${panel_listener}
+  bootstrap socks 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}: ${socks_listener}
+  dns config present: ${dns_config_present}
+  dns rule active: ${dns_rule_active}
+  doh reachable via tunnel: ${doh_reachable}
+  udp53 path ready: ${udp53_ready}
+  dns last error: ${dns_last_error}
 EOF
 }
 
 start_impl() {
   require_root
+  ensure_ssh_service_resolved
   progress 12 "Starting sshd"
-  systemctl start ssh
-  progress 45 "Starting fail2ban"
-  systemctl start fail2ban
+  systemctl start "$SSH_SERVICE"
   progress 75 "Starting x-ui"
   systemctl start x-ui
   progress 100 "Gateway services started"
@@ -698,12 +1025,15 @@ uninstall_impl() {
   progress 70 "Cleaning managed sshd drop-in"
   rm -f /etc/ssh/sshd_config.d/99-estherlink.conf
   sshd -t || true
-  systemctl restart ssh || true
+  if [[ -n "$SSH_SERVICE" ]]; then
+    systemctl restart "$SSH_SERVICE" || true
+  fi
 
   progress 100 "Gateway uninstall completed"
 }
 
 print_summary() {
+  ensure_ssh_service_resolved
   local endpoint panel_url
   endpoint="$VPS_IP"
   if [[ -z "$endpoint" ]]; then
@@ -713,17 +1043,17 @@ print_summary() {
     endpoint="<VPS_IP_OR_HOSTNAME>"
   fi
 
-  panel_url="https://${endpoint}:${PANEL_PORT}/${PANEL_BASE_PATH}/"
+  panel_url="http://${endpoint}:${PANEL_PORT}/${PANEL_BASE_PATH}/"
 
   cat <<EOF
 
 ============================================================
-OmniRelay VPS 3x-ui offline install complete.
+OmniRelay VPS 3x-ui online install complete.
 
 Services:
-  - sshd:      $(systemctl is-active ssh || true)
+  - sshd:      $(systemctl is-active "$SSH_SERVICE" || true)
   - x-ui:      $(systemctl is-active x-ui || true)
-  - fail2ban:  $(systemctl is-active fail2ban || true)
+  - fail2ban:  disabled
 
 Panel:
   URL:      ${panel_url}
@@ -739,23 +1069,19 @@ EOF
 
 install_impl() {
   require_root
-  require_bundle
+  require_existing_sshd
 
   progress 3 "Validating platform"
-  detect_arch >/dev/null
-  local codename
-  codename="$(detect_codename)"
-
-  install_packages_offline "$codename"
   setup_tunnel_user
   configure_sshd
+  progress 8 "Bootstrap SOCKS pre-check skipped; using live online install checks"
+  install_packages_online
   disable_haproxy
-  install_3xui_offline
+  install_3xui_online
   configure_panel_credentials
-  configure_panel_tls
-  apply_fail_closed_xray_template
-  configure_fail2ban
-  configure_firewall
+  disable_panel_tls
+  reset_stale_xray_template_config
+  apply_dns_profile
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
 
   progress 100 "Gateway install completed"
@@ -770,10 +1096,6 @@ parse_args() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --bundle-dir)
-        BUNDLE_DIR="${2:-}"
-        shift 2
-        ;;
       --public-port)
         PUBLIC_PORT="${2:-}"
         shift 2
@@ -796,6 +1118,26 @@ parse_args() {
         ;;
       --tunnel-auth)
         TUNNEL_AUTH_METHOD="${2:-}"
+        shift 2
+        ;;
+      --bootstrap-socks-port)
+        BOOTSTRAP_SOCKS_PORT="${2:-}"
+        shift 2
+        ;;
+      --proxy-check-url)
+        PROXY_CHECK_URL="${2:-}"
+        shift 2
+        ;;
+      --dns-mode)
+        DNS_MODE="${2:-}"
+        shift 2
+        ;;
+      --doh-endpoints)
+        DOH_ENDPOINTS="${2:-}"
+        shift 2
+        ;;
+      --dns-udp-only)
+        DNS_UDP_ONLY="${2:-}"
         shift 2
         ;;
       --vps-ip)
@@ -822,14 +1164,6 @@ parse_args() {
         PANEL_BASE_PATH="${2:-}"
         shift 2
         ;;
-      --panel-cert-file)
-        PANEL_CERT_FILE="${2:-}"
-        shift 2
-        ;;
-      --panel-key-file)
-        PANEL_KEY_FILE="${2:-}"
-        shift 2
-        ;;
       --json)
         STATUS_JSON=1
         HEALTH_JSON=1
@@ -847,22 +1181,32 @@ parse_args() {
 }
 
 validate_common() {
-  validate_port "$PUBLIC_PORT" "--public-port"
-  validate_port "$PANEL_PORT" "--panel-port"
-  validate_port "$BACKEND_PORT" "--backend-port"
-  validate_port "$SSH_PORT" "--ssh-port"
+  PUBLIC_PORT="$(validate_port "$PUBLIC_PORT" "--public-port")"
+  PANEL_PORT="$(validate_port "$PANEL_PORT" "--panel-port")"
+  BACKEND_PORT="$(validate_port "$BACKEND_PORT" "--backend-port")"
+  SSH_PORT="$(validate_port "$SSH_PORT" "--ssh-port")"
+  BOOTSTRAP_SOCKS_PORT="$(validate_port "$BOOTSTRAP_SOCKS_PORT" "--bootstrap-socks-port")"
+  DNS_MODE="$(validate_dns_mode "$DNS_MODE")"
+  DNS_UDP_ONLY="$(normalize_bool "$DNS_UDP_ONLY")"
+  DOH_ENDPOINTS="$(printf '%s' "$DOH_ENDPOINTS" | tr -d '\r\n' | xargs)"
+  [[ -n "$DOH_ENDPOINTS" ]] || die "--doh-endpoints cannot be empty."
+  PROXY_CHECK_URL="$(printf '%s' "$PROXY_CHECK_URL" | tr -d '\r\n' | xargs)"
+  PROXY_CHECK_URL="${PROXY_CHECK_URL#\"}"
+  PROXY_CHECK_URL="${PROXY_CHECK_URL%\"}"
+  PROXY_CHECK_URL="${PROXY_CHECK_URL#\'}"
+  PROXY_CHECK_URL="${PROXY_CHECK_URL%\'}"
 
   if [[ "$PUBLIC_PORT" == "$PANEL_PORT" ]]; then
     die "--public-port and --panel-port must be different."
   fi
 
+  if [[ "$BACKEND_PORT" == "$BOOTSTRAP_SOCKS_PORT" ]]; then
+    die "--backend-port and --bootstrap-socks-port must be different."
+  fi
+
   if [[ -n "$PUBKEY_FILE" ]]; then
     [[ -f "$PUBKEY_FILE" ]] || die "--pubkey-file not found: ${PUBKEY_FILE}"
     PUBKEY="$(tr -d '\r' < "$PUBKEY_FILE" | head -n1 | xargs)"
-  fi
-
-  if [[ -n "$PUBKEY" ]] && [[ ! "$PUBKEY" =~ ^ssh-(rsa|ed25519|ecdsa)\  ]]; then
-    warn "Public key does not look like a standard SSH key. Continuing anyway."
   fi
 
   case "$TUNNEL_AUTH_METHOD" in
@@ -894,8 +1238,17 @@ main() {
     health)
       health_impl
       ;;
+    dns-apply)
+      dns_apply_impl
+      ;;
+    dns-status)
+      dns_status_impl
+      ;;
+    dns-repair)
+      dns_repair_impl
+      ;;
     *)
-      die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|status|health"
+      die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair"
       ;;
   esac
 }

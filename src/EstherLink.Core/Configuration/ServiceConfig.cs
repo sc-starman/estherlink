@@ -2,8 +2,11 @@ namespace EstherLink.Core.Configuration;
 
 public sealed class ServiceConfig
 {
-    public int SchemaVersion { get; set; } = 3;
+    public int SchemaVersion { get; set; } = 4;
     public int LocalProxyListenPort { get; set; } = 19080;
+    public int BootstrapSocksLocalPort { get; set; } = 19081;
+    public int BootstrapSocksRemotePort { get; set; } = 16080;
+    public bool GatewayOnlineInstallEnabled { get; set; } = true;
     public int WhitelistAdapterIfIndex { get; set; } = -1;
     public int DefaultAdapterIfIndex { get; set; } = -1;
     public string TunnelHost { get; set; } = string.Empty;

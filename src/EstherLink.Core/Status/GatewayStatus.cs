@@ -9,6 +9,9 @@ public sealed class GatewayStatus
     public DateTimeOffset? TunnelLastConnectedAtUtc { get; set; }
     public int TunnelReconnectCount { get; set; }
     public string? TunnelLastError { get; set; }
+    public bool BootstrapSocksListening { get; set; }
+    public bool BootstrapSocksRemoteForwardActive { get; set; }
+    public string? BootstrapSocksLastError { get; set; }
     public bool LicenseValid { get; set; }
     public bool LicenseFromCache { get; set; }
     public DateTimeOffset? LicenseCheckedAtUtc { get; set; }
