@@ -21,7 +21,6 @@ public sealed class IntegrationTestWebApplicationFactory : WebApplicationFactory
             configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ConnectionStrings:Postgres"] = "Host=unused;Port=5432;Database=unused;Username=unused;Password=unused",
-                ["ConnectionStrings:Redis"] = string.Empty,
                 ["Database:ApplyMigrationsOnStartup"] = "false",
                 ["Admin:ApiKeys:0"] = "dev-admin-key",
                 ["Admin:ApiKeyPepper"] = "test-admin-pepper",

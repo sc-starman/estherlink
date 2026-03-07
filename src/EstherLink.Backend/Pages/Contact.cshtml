@@ -29,7 +29,7 @@
             <input asp-for="Input.Website" tabindex="-1" autocomplete="off" />
         </div>
 
-        <input asp-for="Input.RecaptchaToken" type="hidden" id="recaptchaToken" />
+        <input type="hidden" id="recaptchaToken" name="Input.RecaptchaToken" value="" />
 
         <div>
             <label asp-for="Input.Name" class="block text-sm mb-2"></label>
@@ -66,22 +66,27 @@
         <script src="https://www.google.com/recaptcha/api.js?render=@Model.RecaptchaSiteKey"></script>
         <script>
             (function () {
-                const form = document.getElementById("contactForm");
-                if (!form || !window.grecaptcha) return;
+                const tokenInput = document.getElementById("recaptchaToken");
+                if (!tokenInput || !window.grecaptcha) return;
 
-                form.addEventListener("submit", function (event) {
-                    if (form.dataset.recaptchaReady === "true") return;
-                    event.preventDefault();
+                const refreshToken = function () {
+                    try {
+                        grecaptcha.ready(function () {
+                            grecaptcha.execute("@Model.RecaptchaSiteKey", { action: "contact_form" })
+                                .then(function (token) {
+                                    tokenInput.value = token || "";
+                                })
+                                .catch(function () {
+                                    tokenInput.value = "";
+                                });
+                        });
+                    } catch {
+                        tokenInput.value = "";
+                    }
+                };
 
-                    grecaptcha.ready(function () {
-                        grecaptcha.execute("@Model.RecaptchaSiteKey", { action: "contact_form" })
-                            .then(function (token) {
-                                document.getElementById("recaptchaToken").value = token || "";
-                                form.dataset.recaptchaReady = "true";
-                                form.submit();
-                            });
-                    });
-                });
+                refreshToken();
+                window.setInterval(refreshToken, 90000);
             })();
         </script>
     }

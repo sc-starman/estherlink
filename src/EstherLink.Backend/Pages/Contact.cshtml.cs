@@ -54,6 +54,8 @@ public sealed class ContactModel : PageModel
 
         if (!ModelState.IsValid)
         {
+            _logger.LogWarning("Contact form model validation failed. Errors: {Errors}", string.Join(" | ", GetModelStateErrors()));
+            ErrorMessage = "Form validation failed. Please refresh the page and try again.";
             return Page();
         }
 
@@ -65,7 +67,7 @@ public sealed class ContactModel : PageModel
         }
 
         var recaptchaResult = await _recaptchaVerifier.VerifyAsync(
-            Input.RecaptchaToken,
+            Input.RecaptchaToken ?? string.Empty,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken,
             expectedAction: "contact_form");
@@ -112,6 +114,22 @@ public sealed class ContactModel : PageModel
         RecaptchaSiteKey = options.RecaptchaSiteKey;
     }
 
+    private IEnumerable<string> GetModelStateErrors()
+    {
+        foreach (var item in ModelState)
+        {
+            if (item.Value?.Errors is not { Count: > 0 })
+            {
+                continue;
+            }
+
+            foreach (var error in item.Value.Errors)
+            {
+                yield return $"{item.Key}: {error.ErrorMessage}";
+            }
+        }
+    }
+
     public sealed class ContactInputModel
     {
         [Required]
@@ -132,9 +150,9 @@ public sealed class ContactModel : PageModel
         public string Message { get; set; } = string.Empty;
 
         [StringLength(128)]
-        public string Website { get; set; } = string.Empty;
+        public string? Website { get; set; }
 
         [StringLength(4096)]
-        public string RecaptchaToken { get; set; } = string.Empty;
+        public string? RecaptchaToken { get; set; }
     }
 }

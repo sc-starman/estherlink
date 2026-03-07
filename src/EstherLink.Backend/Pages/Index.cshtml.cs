@@ -26,19 +26,19 @@ public sealed class IndexModel : PageModel
         var configured = options.LandingContent ?? new LandingContentOptions();
         var landing = new LandingContentOptions
         {
-            HeroHeadline = FirstNonEmpty(configured.HeroHeadline, "Give your team reliable access without exposing your network design."),
-            HeroSubheadline = FirstNonEmpty(configured.HeroSubheadline, "OmniRelay helps operators launch stable gateway access fast, keep traffic under control, and reduce daily troubleshooting overhead."),
+            HeroHeadline = FirstNonEmpty(configured.HeroHeadline, "Secure Connectivity Across Stratified Internet"),
+            HeroSubheadline = FirstNonEmpty(configured.HeroSubheadline, "OmniRelay helps you maintain reliable, private internet routing across layered and restricted network environments."),
             PrimaryCtaText = FirstNonEmpty(configured.PrimaryCtaText, "Start Free Trial"),
             PrimaryCtaUrl = FirstNonEmpty(configured.PrimaryCtaUrl, "/account/register"),
-            SecondaryCtaText = FirstNonEmpty(configured.SecondaryCtaText, "See How It Works"),
+            SecondaryCtaText = FirstNonEmpty(configured.SecondaryCtaText, "View Deployment Guide"),
             SecondaryCtaUrl = FirstNonEmpty(configured.SecondaryCtaUrl, "#how-it-works"),
 
             BenefitBlocks = NonEmptyOrDefault(configured.BenefitBlocks, [
-                "Launch new gateway access in minutes, not days.",
-                "Keep user access stable during network disruptions.",
-                "Give operations a clear control surface and fewer support escalations.",
-                "Reduce risk with policy-driven routing and fail-closed behavior.",
-                "Scale access confidently as your team and traffic grow."
+                "Layered connectivity orchestration across segmented access environments.",
+                "Private relay control so you are not dependent on public VPN providers.",
+                "Policy-based operation for predictable behavior during network changes.",
+                "Fast recovery and resilience during outages and route disruptions.",
+                "Operational visibility for path health, readiness, and continuity decisions."
             ]),
 
             ResultCards = NonEmptyResultCards(configured.ResultCards, [
@@ -62,18 +62,18 @@ public sealed class IndexModel : PageModel
                 }
             ]),
 
-            TrustBarText = FirstNonEmpty(configured.TrustBarText, "Used by engineering and operations teams across SaaS, hosting, and enterprise IT workloads."),
+            TrustBarText = FirstNonEmpty(configured.TrustBarText, "Used by operations and infrastructure teams managing restricted network environments."),
 
             HowItWorksSteps = NonEmptyOrDefault(configured.HowItWorksSteps, [
-                "Create your account and activate a 2-day trial.",
-                "Connect your environment using the guided setup flow.",
-                "Apply policy controls and go live with monitored access."
+                "Define the available network links in your environment.",
+                "Apply your routing policy and let OmniRelay establish secure relay paths.",
+                "Monitor health, validate access, and maintain continuity as conditions change."
             ]),
 
-            OfferTitle = FirstNonEmpty(configured.OfferTitle, "What you get with OmniRelay"),
-            OfferSummary = FirstNonEmpty(configured.OfferSummary, "A complete Relay + Gateway control experience designed for operational clarity, faster rollout, and lower risk."),
-            OfferPriceAnchor = FirstNonEmpty(configured.OfferPriceAnchor, "$299 one-time after trial"),
-            OfferRiskReducer = FirstNonEmpty(configured.OfferRiskReducer, "Start with a 2-day free trial. No long commitment up front."),
+            OfferTitle = FirstNonEmpty(configured.OfferTitle, "One-Time License"),
+            OfferSummary = FirstNonEmpty(configured.OfferSummary, "Get full OmniRelay capabilities with a single purchase and predictable ownership cost."),
+            OfferPriceAnchor = FirstNonEmpty(configured.OfferPriceAnchor, "$299 one-time license"),
+            OfferRiskReducer = FirstNonEmpty(configured.OfferRiskReducer, "Start with a 2-day free trial before purchase."),
             MidCtaText = FirstNonEmpty(configured.MidCtaText, "Start Free Trial"),
             MidCtaUrl = FirstNonEmpty(configured.MidCtaUrl, "/account/register"),
 
@@ -105,8 +105,8 @@ public sealed class IndexModel : PageModel
                 }
             ]),
 
-            ClosingHeadline = FirstNonEmpty(configured.ClosingHeadline, "Get your gateway live this week."),
-            ClosingBody = FirstNonEmpty(configured.ClosingBody, "Start your trial today and move from fragile access workarounds to a controlled, repeatable operating model."),
+            ClosingHeadline = FirstNonEmpty(configured.ClosingHeadline, "Build your own anti-censorship connectivity layer."),
+            ClosingBody = FirstNonEmpty(configured.ClosingBody, "Start your free trial, validate OmniRelay in your environment, and move to controlled private routing with a one-time license."),
             FinalCtaText = FirstNonEmpty(configured.FinalCtaText, "Start Free Trial"),
             FinalCtaUrl = FirstNonEmpty(configured.FinalCtaUrl, "/account/register")
         };

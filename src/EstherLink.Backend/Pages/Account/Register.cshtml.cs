@@ -58,16 +58,19 @@ public sealed class RegisterModel : PageModel
 
         if (!ModelState.IsValid)
         {
+            _logger.LogWarning("Register form model validation failed. Errors: {Errors}", string.Join(" | ", GetModelStateErrors()));
+            ErrorMessage = "Form validation failed. Please refresh the page and try again.";
             return Page();
         }
 
         var recaptchaResult = await _recaptchaVerifier.VerifyAsync(
-            Input.RecaptchaToken,
+            Input.RecaptchaToken ?? string.Empty,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             HttpContext.RequestAborted,
             expectedAction: "register_form");
         if (!recaptchaResult.IsValid)
         {
+            _logger.LogWarning("Registration blocked by reCAPTCHA verification: {Reason}", recaptchaResult.ErrorMessage);
             ErrorMessage = "Verification failed. Please refresh and try again.";
             return Page();
         }
@@ -135,6 +138,22 @@ public sealed class RegisterModel : PageModel
         RecaptchaSiteKey = options.RecaptchaSiteKey;
     }
 
+    private IEnumerable<string> GetModelStateErrors()
+    {
+        foreach (var item in ModelState)
+        {
+            if (item.Value?.Errors is not { Count: > 0 })
+            {
+                continue;
+            }
+
+            foreach (var error in item.Value.Errors)
+            {
+                yield return $"{item.Key}: {error.ErrorMessage}";
+            }
+        }
+    }
+
     public sealed class RegisterInputModel
     {
         [Required]
@@ -152,6 +171,6 @@ public sealed class RegisterModel : PageModel
         public string ConfirmPassword { get; set; } = string.Empty;
 
         [StringLength(4096)]
-        public string RecaptchaToken { get; set; } = string.Empty;
+        public string? RecaptchaToken { get; set; }
     }
 }

@@ -14,7 +14,7 @@
 
     <form id="registerForm" method="post" class="space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-6">
         @Html.AntiForgeryToken()
-        <input asp-for="Input.RecaptchaToken" type="hidden" id="registerRecaptchaToken" />
+        <input type="hidden" id="registerRecaptchaToken" name="Input.RecaptchaToken" value="" />
         <div>
             <label asp-for="Input.Email" class="block text-sm mb-1">Email</label>
             <input asp-for="Input.Email" class="w-full rounded bg-slate-800 border border-slate-700 px-3 py-2" />
@@ -44,22 +44,27 @@
         <script src="https://www.google.com/recaptcha/api.js?render=@Model.RecaptchaSiteKey"></script>
         <script>
             (function () {
-                const form = document.getElementById("registerForm");
-                if (!form || !window.grecaptcha) return;
+                const tokenInput = document.getElementById("registerRecaptchaToken");
+                if (!tokenInput || !window.grecaptcha) return;
 
-                form.addEventListener("submit", function (event) {
-                    if (form.dataset.recaptchaReady === "true") return;
-                    event.preventDefault();
+                const refreshToken = function () {
+                    try {
+                        grecaptcha.ready(function () {
+                            grecaptcha.execute("@Model.RecaptchaSiteKey", { action: "register_form" })
+                                .then(function (token) {
+                                    tokenInput.value = token || "";
+                                })
+                                .catch(function () {
+                                    tokenInput.value = "";
+                                });
+                        });
+                    } catch {
+                        tokenInput.value = "";
+                    }
+                };
 
-                    grecaptcha.ready(function () {
-                        grecaptcha.execute("@Model.RecaptchaSiteKey", { action: "register_form" })
-                            .then(function (token) {
-                                document.getElementById("registerRecaptchaToken").value = token || "";
-                                form.dataset.recaptchaReady = "true";
-                                form.submit();
-                            });
-                    });
-                });
+                refreshToken();
+                window.setInterval(refreshToken, 90000);
             })();
         </script>
     }

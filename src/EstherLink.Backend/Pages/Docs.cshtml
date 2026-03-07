@@ -2,283 +2,194 @@
 @model EstherLink.Backend.Pages.DocsModel
 @{
     ViewData["Title"] = "Documentation";
-    ViewData["DocumentationUrl"] = Model.DocumentationUrl;
 }
 
-<section class="max-w-7xl mx-auto px-4 py-10 space-y-8">
+<section class="max-w-7xl mx-auto px-4 py-10 space-y-10">
     <header class="space-y-3">
-        <h1 class="text-4xl font-bold">OmniRelay Windows UI Setup Guide</h1>
+        <h1 class="text-4xl font-bold">OmniRelay Operator Guide</h1>
         <p class="text-slate-300 max-w-4xl">
-            End-to-end operator documentation for setting up Relay and Gateway using the Windows UI.
-            This guide is implementation-aligned and designed for first deploy, recovery, and daily operations.
+            UI-focused documentation for installing, configuring, and operating OmniRelay in production environments.
+            This guide intentionally focuses on what users see and do in the interface.
         </p>
-        <p class="text-sm text-slate-400">Last updated from implementation: @Model.LastUpdated</p>
+        <p class="text-sm text-slate-400">Last updated: @Model.LastUpdated</p>
     </header>
 
     <nav class="rounded-xl border border-slate-800 bg-slate-900 p-4">
-        <p class="text-sm uppercase tracking-wide text-slate-400 mb-3">Quick Navigation</p>
+        <p class="text-sm uppercase tracking-wide text-slate-400 mb-3">Sections</p>
         <div class="flex flex-wrap gap-3 text-sm">
-            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#prerequisites">Prerequisites</a>
-            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#quick-start">Quick Start</a>
-            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#detailed-start">Detailed Start</a>
-            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#config-reference">Config Reference</a>
-            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#actions">Actions</a>
-            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#validation">Validation</a>
-            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#troubleshooting">Troubleshooting</a>
-            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#scenarios">Scenarios</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#introduction">1. Introduction</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#requirements">2. System Requirements</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#installation">3. Installation</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#first-launch">4. First Launch</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#activation">5. License Activation</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#relay-config">6. Relay Configuration</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#start-relay">7. Starting a Relay</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#monitoring">8. Monitoring Status</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#troubleshooting">9. Troubleshooting</a>
+            <a class="px-3 py-1 rounded border border-slate-700 hover:border-cyan-400" href="#updating">10. Updating</a>
         </div>
     </nav>
 
-    <section id="prerequisites" class="space-y-4">
-        <h2 class="text-3xl font-bold">Environment Prerequisites</h2>
+    <section id="introduction" class="space-y-4">
+        <h2 class="text-3xl font-bold">1. Introduction</h2>
+        <div class="space-y-3 text-slate-200">
+            @foreach (var line in Model.Introduction)
+            {
+                <p>@line</p>
+            }
+        </div>
+        <p class="text-sm text-slate-400">Screenshot placeholder: Application home or dashboard overview.</p>
+    </section>
+
+    <section id="requirements" class="space-y-4">
+        <h2 class="text-3xl font-bold">2. System Requirements</h2>
         <ul class="list-disc pl-6 text-slate-200 space-y-2">
-            @foreach (var item in Model.Prerequisites)
+            @foreach (var item in Model.SystemRequirements)
             {
                 <li>@item</li>
             }
         </ul>
+        <p class="text-sm text-slate-400">Screenshot placeholder: System/network prerequisites checklist.</p>
     </section>
 
-    <section id="quick-start" class="space-y-4">
-        <h2 class="text-3xl font-bold">Quick Start</h2>
-        <p class="text-slate-300">Minimal path to first successful deployment.</p>
+    <section id="installation" class="space-y-4">
+        <h2 class="text-3xl font-bold">3. Installation</h2>
         <ol class="list-decimal pl-6 text-slate-200 space-y-2">
-            @foreach (var step in Model.QuickStartSteps)
+            @foreach (var step in Model.InstallationSteps)
             {
                 <li>@step</li>
             }
         </ol>
+        <p class="text-sm text-slate-400">Screenshot placeholder: Installer wizard screens.</p>
     </section>
 
-    <section id="detailed-start" class="space-y-4">
-        <h2 class="text-3xl font-bold">Detailed Start Guidance</h2>
-        <div class="space-y-4">
-            @foreach (var step in Model.DetailedFlow)
+    <section id="first-launch" class="space-y-4">
+        <h2 class="text-3xl font-bold">4. First Launch</h2>
+        <ol class="list-decimal pl-6 text-slate-200 space-y-2">
+            @foreach (var step in Model.FirstLaunchSteps)
             {
-                <article class="rounded-xl border border-slate-800 bg-slate-900 p-5 space-y-2">
-                    <h3 class="text-xl font-semibold">@step.Title</h3>
-                    <p><span class="font-semibold text-slate-300">Actions:</span> @step.Actions</p>
-                    <p><span class="font-semibold text-slate-300">Validation:</span> @step.Validation</p>
-                </article>
+                <li>@step</li>
             }
-        </div>
+        </ol>
+        <p class="text-sm text-slate-400">Screenshot placeholder: First-run UI and navigation sidebar.</p>
     </section>
 
-    <section id="config-reference" class="space-y-6">
-        <h2 class="text-3xl font-bold">Complete Configuration Reference</h2>
-
-        <div class="space-y-3">
-            <h3 class="text-2xl font-semibold">Relay Management</h3>
-            <div class="overflow-auto rounded-xl border border-slate-800">
-                <table class="min-w-full text-sm">
-                    <thead class="bg-slate-900 text-slate-300">
-                        <tr>
-                            <th class="text-left p-3">Field</th>
-                            <th class="text-left p-3">Default</th>
-                            <th class="text-left p-3">Valid Values</th>
-                            <th class="text-left p-3">Notes</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var row in Model.RelayConfigRows)
-                        {
-                            <tr class="border-t border-slate-800 bg-slate-950/40">
-                                <td class="p-3 font-semibold">@row.Field</td>
-                                <td class="p-3 font-mono">@row.DefaultValue</td>
-                                <td class="p-3">@row.ValidValues</td>
-                                <td class="p-3">@row.Notes</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="space-y-3">
-            <h3 class="text-2xl font-semibold">Gateway Management</h3>
-            <div class="overflow-auto rounded-xl border border-slate-800">
-                <table class="min-w-full text-sm">
-                    <thead class="bg-slate-900 text-slate-300">
-                        <tr>
-                            <th class="text-left p-3">Field</th>
-                            <th class="text-left p-3">Default</th>
-                            <th class="text-left p-3">Valid Values</th>
-                            <th class="text-left p-3">Notes</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var row in Model.GatewayConfigRows)
-                        {
-                            <tr class="border-t border-slate-800 bg-slate-950/40">
-                                <td class="p-3 font-semibold">@row.Field</td>
-                                <td class="p-3 font-mono">@row.DefaultValue</td>
-                                <td class="p-3">@row.ValidValues</td>
-                                <td class="p-3">@row.Notes</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="space-y-3">
-            <h3 class="text-2xl font-semibold">Gateway DNS Configuration</h3>
-            <div class="overflow-auto rounded-xl border border-slate-800">
-                <table class="min-w-full text-sm">
-                    <thead class="bg-slate-900 text-slate-300">
-                        <tr>
-                            <th class="text-left p-3">Field</th>
-                            <th class="text-left p-3">Default</th>
-                            <th class="text-left p-3">Valid Values</th>
-                            <th class="text-left p-3">Impact</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var row in Model.DnsRows)
-                        {
-                            <tr class="border-t border-slate-800 bg-slate-950/40">
-                                <td class="p-3 font-semibold">@row.Field</td>
-                                <td class="p-3 font-mono">@row.DefaultValue</td>
-                                <td class="p-3">@row.ValidValues</td>
-                                <td class="p-3">@row.Notes</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="space-y-3">
-            <h3 class="text-2xl font-semibold">Whitelist Rules</h3>
-            <div class="overflow-auto rounded-xl border border-slate-800">
-                <table class="min-w-full text-sm">
-                    <thead class="bg-slate-900 text-slate-300">
-                        <tr>
-                            <th class="text-left p-3">Rule</th>
-                            <th class="text-left p-3">Default</th>
-                            <th class="text-left p-3">Valid Values</th>
-                            <th class="text-left p-3">Notes</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var row in Model.WhitelistRows)
-                        {
-                            <tr class="border-t border-slate-800 bg-slate-950/40">
-                                <td class="p-3 font-semibold">@row.Field</td>
-                                <td class="p-3 font-mono">@row.DefaultValue</td>
-                                <td class="p-3">@row.ValidValues</td>
-                                <td class="p-3">@row.Notes</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="space-y-3">
-            <h3 class="text-2xl font-semibold">Settings Page</h3>
-            <div class="overflow-auto rounded-xl border border-slate-800">
-                <table class="min-w-full text-sm">
-                    <thead class="bg-slate-900 text-slate-300">
-                        <tr>
-                            <th class="text-left p-3">Setting</th>
-                            <th class="text-left p-3">Default</th>
-                            <th class="text-left p-3">Valid Values</th>
-                            <th class="text-left p-3">Notes</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var row in Model.SettingsRows)
-                        {
-                            <tr class="border-t border-slate-800 bg-slate-950/40">
-                                <td class="p-3 font-semibold">@row.Field</td>
-                                <td class="p-3 font-mono">@row.DefaultValue</td>
-                                <td class="p-3">@row.ValidValues</td>
-                                <td class="p-3">@row.Notes</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
+    <section id="activation" class="space-y-4">
+        <h2 class="text-3xl font-bold">5. License Activation</h2>
+        <ol class="list-decimal pl-6 text-slate-200 space-y-2">
+            @foreach (var step in Model.LicenseActivationSteps)
+            {
+                <li>@step</li>
+            }
+        </ol>
+        <p class="text-sm text-slate-400">Screenshot placeholder: License entry and activation success message.</p>
     </section>
 
-    <section id="actions" class="space-y-4">
-        <h2 class="text-3xl font-bold">Action Workflows Reference</h2>
+    <section id="relay-config" class="space-y-4">
+        <h2 class="text-3xl font-bold">6. Creating a Relay Configuration</h2>
+        <p class="text-slate-300">
+            Configure relay behavior from <strong>Relay Management</strong>. Use the table below to map each field to its purpose.
+        </p>
         <div class="overflow-auto rounded-xl border border-slate-800">
             <table class="min-w-full text-sm">
                 <thead class="bg-slate-900 text-slate-300">
                     <tr>
-                        <th class="text-left p-3">Area</th>
-                        <th class="text-left p-3">Action</th>
-                        <th class="text-left p-3">What It Does</th>
-                        <th class="text-left p-3">Expected Success Signal</th>
-                        <th class="text-left p-3">Typical Failure Signal</th>
+                        <th class="text-left p-3">UI Field</th>
+                        <th class="text-left p-3">What You Set</th>
+                        <th class="text-left p-3">Valid Values</th>
+                        <th class="text-left p-3">Operator Notes</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var row in Model.ActionRows)
+                    @foreach (var row in Model.RelayConfigRows)
                     {
                         <tr class="border-t border-slate-800 bg-slate-950/40 align-top">
-                            <td class="p-3 font-semibold">@row.Area</td>
-                            <td class="p-3">@row.Action</td>
-                            <td class="p-3">@row.WhatItDoes</td>
-                            <td class="p-3">@row.SuccessSignal</td>
-                            <td class="p-3">@row.TypicalFailure</td>
+                            <td class="p-3 font-semibold">@row.Field</td>
+                            <td class="p-3">@row.Description</td>
+                            <td class="p-3">@row.ValidValues</td>
+                            <td class="p-3">@row.OperatorNotes</td>
                         </tr>
                     }
                 </tbody>
             </table>
         </div>
+        <p class="text-sm text-slate-400">Screenshot placeholder: Relay Management page with field labels.</p>
     </section>
 
-    <section id="validation" class="space-y-4">
-        <h2 class="text-3xl font-bold">Validation Checklist</h2>
-        <ul class="list-disc pl-6 text-slate-200 space-y-2">
-            @foreach (var item in Model.ValidationChecklist)
+    <section id="start-relay" class="space-y-4">
+        <h2 class="text-3xl font-bold">7. Starting a Relay</h2>
+        <ol class="list-decimal pl-6 text-slate-200 space-y-2">
+            @foreach (var step in Model.StartingRelaySteps)
             {
-                <li>@item</li>
+                <li>@step</li>
             }
-        </ul>
+        </ol>
+        <p class="text-sm text-slate-400">Screenshot placeholder: Install/Start button flow and successful state.</p>
     </section>
 
-    <section id="troubleshooting" class="space-y-4">
-        <h2 class="text-3xl font-bold">Troubleshooting Matrix</h2>
+    <section id="monitoring" class="space-y-4">
+        <h2 class="text-3xl font-bold">8. Monitoring Status</h2>
+        <p class="text-slate-300">
+            Use the status panels in Relay Management and Gateway Management to confirm operational readiness.
+        </p>
         <div class="overflow-auto rounded-xl border border-slate-800">
             <table class="min-w-full text-sm">
                 <thead class="bg-slate-900 text-slate-300">
                     <tr>
-                        <th class="text-left p-3">Symptom</th>
-                        <th class="text-left p-3">Likely Cause</th>
-                        <th class="text-left p-3">Operator Action</th>
+                        <th class="text-left p-3">Indicator</th>
+                        <th class="text-left p-3">Meaning</th>
+                        <th class="text-left p-3">Expected Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in Model.MonitoringRows)
+                    {
+                        <tr class="border-t border-slate-800 bg-slate-950/40 align-top">
+                            <td class="p-3 font-semibold">@row.Indicator</td>
+                            <td class="p-3">@row.Meaning</td>
+                            <td class="p-3">@row.ExpectedValue</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <p class="text-sm text-slate-400">Screenshot placeholder: Health/status cards and operation log panel.</p>
+    </section>
+
+    <section id="troubleshooting" class="space-y-4">
+        <h2 class="text-3xl font-bold">9. Troubleshooting</h2>
+        <div class="overflow-auto rounded-xl border border-slate-800">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-900 text-slate-300">
+                    <tr>
+                        <th class="text-left p-3">Problem</th>
+                        <th class="text-left p-3">What to Do</th>
+                        <th class="text-left p-3">How to Confirm Fix</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach (var row in Model.TroubleshootingRows)
                     {
                         <tr class="border-t border-slate-800 bg-slate-950/40 align-top">
-                            <td class="p-3 font-semibold">@row.Symptom</td>
-                            <td class="p-3">@row.LikelyCause</td>
+                            <td class="p-3 font-semibold">@row.Problem</td>
                             <td class="p-3">@row.Action</td>
+                            <td class="p-3">@row.SuccessCheck</td>
                         </tr>
                     }
                 </tbody>
             </table>
         </div>
+        <p class="text-sm text-slate-400">Screenshot placeholder: Example warning/error states in UI.</p>
     </section>
 
-    <section id="scenarios" class="space-y-4">
-        <h2 class="text-3xl font-bold">Use-Case Scenarios</h2>
-        <div class="grid md:grid-cols-2 gap-4">
-            @foreach (var scenario in Model.Scenarios)
+    <section id="updating" class="space-y-4">
+        <h2 class="text-3xl font-bold">10. Updating the Application</h2>
+        <ol class="list-decimal pl-6 text-slate-200 space-y-2">
+            @foreach (var step in Model.UpdateSteps)
             {
-                <article class="rounded-xl border border-slate-800 bg-slate-900 p-5 space-y-2">
-                    <h3 class="text-xl font-semibold">@scenario.Name</h3>
-                    <p><span class="font-semibold text-slate-300">When to use:</span> @scenario.WhenToUse</p>
-                    <p><span class="font-semibold text-slate-300">Workflow:</span> @scenario.Workflow</p>
-                    <p><span class="font-semibold text-slate-300">Expected outcome:</span> @scenario.ExpectedOutcome</p>
-                </article>
+                <li>@step</li>
             }
-        </div>
+        </ol>
+        <p class="text-sm text-slate-400">Screenshot placeholder: Download page and post-update validation view.</p>
     </section>
 </section>

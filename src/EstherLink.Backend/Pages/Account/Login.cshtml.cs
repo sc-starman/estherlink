@@ -16,15 +16,18 @@ public sealed class LoginModel : PageModel
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IOptions<SpamProtectionOptions> _spamOptions;
     private readonly IRecaptchaVerifier _recaptchaVerifier;
+    private readonly ILogger<LoginModel> _logger;
 
     public LoginModel(
         SignInManager<ApplicationUser> signInManager,
         IOptions<SpamProtectionOptions> spamOptions,
-        IRecaptchaVerifier recaptchaVerifier)
+        IRecaptchaVerifier recaptchaVerifier,
+        ILogger<LoginModel> logger)
     {
         _signInManager = signInManager;
         _spamOptions = spamOptions;
         _recaptchaVerifier = recaptchaVerifier;
+        _logger = logger;
     }
 
     [BindProperty]
@@ -53,16 +56,19 @@ public sealed class LoginModel : PageModel
 
         if (!ModelState.IsValid)
         {
+            _logger.LogWarning("Login form model validation failed. Errors: {Errors}", string.Join(" | ", GetModelStateErrors()));
+            ErrorMessage = "Form validation failed. Please refresh the page and try again.";
             return Page();
         }
 
         var recaptchaResult = await _recaptchaVerifier.VerifyAsync(
-            Input.RecaptchaToken,
+            Input.RecaptchaToken ?? string.Empty,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             HttpContext.RequestAborted,
             expectedAction: "login_form");
         if (!recaptchaResult.IsValid)
         {
+            _logger.LogWarning("Login blocked by reCAPTCHA verification: {Reason}", recaptchaResult.ErrorMessage);
             ErrorMessage = "Verification failed. Please refresh and try again.";
             return Page();
         }
@@ -98,6 +104,22 @@ public sealed class LoginModel : PageModel
         RecaptchaSiteKey = options.RecaptchaSiteKey;
     }
 
+    private IEnumerable<string> GetModelStateErrors()
+    {
+        foreach (var item in ModelState)
+        {
+            if (item.Value?.Errors is not { Count: > 0 })
+            {
+                continue;
+            }
+
+            foreach (var error in item.Value.Errors)
+            {
+                yield return $"{item.Key}: {error.ErrorMessage}";
+            }
+        }
+    }
+
     public sealed class LoginInputModel
     {
         [Required]
@@ -111,6 +133,6 @@ public sealed class LoginModel : PageModel
         public bool RememberMe { get; set; }
 
         [StringLength(4096)]
-        public string RecaptchaToken { get; set; } = string.Empty;
+        public string? RecaptchaToken { get; set; }
     }
 }

@@ -71,15 +71,6 @@ services:
       postgres:
         condition: service_healthy
 
-  redis:
-    image: redis:7-alpine
-    container_name: estherlink-redis
-    ports:
-      - "6379:6379"
-    command: [ "redis-server", "--appendonly", "yes" ]
-    volumes:
-      - estherlink_redisdata:/data
-
   backend:
     build:
       context: .
@@ -89,7 +80,6 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=estherlink;Username=estherlink;Password=estherlink_dev_password
-      ConnectionStrings__Redis: redis:6379
       Admin__ApiKeys__0: dev-admin-key
       Admin__ApiKeyPepper: dev-admin-pepper
       Licensing__SigningKeyRotationDays: 90
@@ -127,6 +117,7 @@ services:
       CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-1024m}
     volumes:
       - estherlink_installers:/app/data/installers
+      - estherlink_dpkeys:/app/data/dpkeys
     ports:
       - "8080:8080"
     expose:
@@ -138,14 +129,12 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
 
 volumes:
   estherlink_pgdata:
   estherlink_pgadmin_data:
-  estherlink_redisdata:
   estherlink_installers:
+  estherlink_dpkeys:
   omnirelay_proxy_certs:
   omnirelay_proxy_vhost:
   omnirelay_proxy_html:

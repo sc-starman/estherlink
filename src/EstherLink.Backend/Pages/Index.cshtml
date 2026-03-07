@@ -8,7 +8,7 @@
 <section class="relative overflow-hidden">
     <div class="absolute inset-0 bg-gradient-to-br from-cyan-500/20 via-transparent to-slate-900"></div>
     <div class="max-w-7xl mx-auto px-4 py-24 relative">
-        <p class="uppercase tracking-widest text-cyan-300 text-sm mb-4">OmniRelay</p>
+        <p class="uppercase tracking-[0.25em] text-cyan-300 text-sm mb-4">OmniRelay</p>
         <h1 class="text-5xl font-bold leading-tight max-w-5xl">@landing.HeroHeadline</h1>
         <p class="mt-6 text-lg text-slate-300 max-w-4xl">@landing.HeroSubheadline</p>
         <div class="mt-8 flex flex-wrap gap-4">
@@ -19,8 +19,41 @@
 </section>
 
 <section class="max-w-7xl mx-auto px-4 py-16">
-    <h2 class="text-3xl font-bold mb-6">Why Teams Choose OmniRelay</h2>
-    <div class="grid md:grid-cols-3 gap-6">
+    <h2 class="text-3xl font-bold mb-4">The Problem: Stratified Internet</h2>
+    <p class="text-slate-300 max-w-4xl">
+        In many regions, internet access is fragmented across different layers with different levels of reach, visibility, and control.
+        Standard connectivity tools often fail in these environments, leaving teams with unstable access, blocked services, and operational risk.
+    </p>
+    <div class="grid md:grid-cols-3 gap-4 mt-8">
+        <article class="p-5 rounded-xl border border-slate-800 bg-slate-900">
+            <h3 class="font-semibold text-slate-100 mb-2">Restricted Reach</h3>
+            <p class="text-slate-300 text-sm">Critical services become unreachable when direct paths are filtered or segmented.</p>
+        </article>
+        <article class="p-5 rounded-xl border border-slate-800 bg-slate-900">
+            <h3 class="font-semibold text-slate-100 mb-2">Operational Instability</h3>
+            <p class="text-slate-300 text-sm">Connectivity breaks during network policy shifts, outages, or access-layer changes.</p>
+        </article>
+        <article class="p-5 rounded-xl border border-slate-800 bg-slate-900">
+            <h3 class="font-semibold text-slate-100 mb-2">High Exposure Risk</h3>
+            <p class="text-slate-300 text-sm">Ad-hoc workarounds can reveal sensitive network relationships and increase monitoring exposure.</p>
+        </article>
+    </div>
+</section>
+
+<section class="max-w-7xl mx-auto px-4 py-8">
+    <h2 class="text-3xl font-bold mb-4">The OmniRelay Solution</h2>
+    <p class="text-slate-300 max-w-4xl">
+        OmniRelay is a desktop connectivity platform that helps you maintain secure, reliable access across layered networks.
+        It orchestrates available connections into controlled relay paths so teams can operate with continuity in restricted environments.
+    </p>
+    <div class="mt-8">
+        <a href="@landing.MidCtaUrl" class="inline-flex px-6 py-3 rounded-md bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">@landing.MidCtaText</a>
+    </div>
+</section>
+
+<section class="max-w-7xl mx-auto px-4 py-12">
+    <h2 class="text-3xl font-bold mb-6">Key Features</h2>
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
         @foreach (var benefit in landing.BenefitBlocks)
         {
             <article class="p-6 rounded-xl border border-slate-800 bg-slate-900">
@@ -31,35 +64,48 @@
 </section>
 
 <section class="max-w-7xl mx-auto px-4 py-8">
-    <h2 class="text-3xl font-bold mb-6">Trusted by Operators Who Need Reliability</h2>
-    <div class="grid md:grid-cols-3 gap-6 mb-8">
-        @foreach (var card in landing.ResultCards)
-        {
-            <article class="p-6 rounded-xl border border-slate-800 bg-slate-900 text-center">
-                <p class="text-3xl font-bold text-cyan-300">@card.Value</p>
-                <p class="text-slate-300 mt-2">@card.Label</p>
-            </article>
-        }
-    </div>
-
+    <h2 class="text-3xl font-bold mb-6">Real-World Use Cases</h2>
     <div class="grid md:grid-cols-2 gap-6">
-        @foreach (var quote in landing.Testimonials)
-        {
-            <article class="p-6 rounded-xl border border-slate-800 bg-slate-900">
-                <p class="text-slate-200 italic">"@quote.Quote"</p>
-                <p class="text-slate-400 mt-4">@quote.Author - @quote.Role</p>
-            </article>
-        }
-    </div>
-
-    <p class="mt-8 text-slate-400">@landing.TrustBarText</p>
-
-    <div class="mt-8">
-        <a href="@landing.MidCtaUrl" class="inline-flex px-6 py-3 rounded-md bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">@landing.MidCtaText</a>
+        <article class="p-6 rounded-xl border border-slate-800 bg-slate-900">
+            <h3 class="font-semibold text-slate-100 mb-2">Internet Censorship Bypass</h3>
+            <p class="text-slate-300">Access global internet services safely from restricted networks through layered relay routing.</p>
+        </article>
+        <article class="p-6 rounded-xl border border-slate-800 bg-slate-900">
+            <h3 class="font-semibold text-slate-100 mb-2">Starlink Mobility Extension</h3>
+            <p class="text-slate-300">Extend fixed satellite connectivity to mobile and field operations through intermediary networks.</p>
+        </article>
+        <article class="p-6 rounded-xl border border-slate-800 bg-slate-900">
+            <h3 class="font-semibold text-slate-100 mb-2">Hidden Network Access</h3>
+            <p class="text-slate-300">Expose otherwise unreachable resources without disclosing the true origin network.</p>
+        </article>
+        <article class="p-6 rounded-xl border border-slate-800 bg-slate-900">
+            <h3 class="font-semibold text-slate-100 mb-2">Private Relay Infrastructure</h3>
+            <p class="text-slate-300">Operate your own connectivity layer instead of depending on public, shared routing providers.</p>
+        </article>
+        <article class="p-6 rounded-xl border border-slate-800 bg-slate-900 md:col-span-2">
+            <h3 class="font-semibold text-slate-100 mb-2">Anti-Detection Routing</h3>
+            <p class="text-slate-300">Use layered paths that align with legitimate traffic patterns to reduce obvious monitoring signatures.</p>
+        </article>
     </div>
 </section>
 
-<section id="how-it-works" class="max-w-7xl mx-auto px-4 py-12">
+<section class="max-w-7xl mx-auto px-4 py-8">
+    <div class="rounded-xl border border-cyan-700/40 bg-cyan-500/10 p-8">
+        <h2 class="text-3xl font-bold">Security and Privacy by Design</h2>
+        <p class="text-slate-200 mt-3 max-w-4xl">
+            OmniRelay is built for high-risk network environments where visibility, attribution, and continuity matter.
+            You keep control over your routing layer while minimizing unnecessary exposure of internal connectivity relationships.
+        </p>
+        <ul class="mt-6 grid md:grid-cols-2 gap-3 text-slate-200 text-sm">
+            <li class="rounded border border-slate-700/70 bg-slate-900/60 px-3 py-2">Policy-driven access with controlled operational behavior</li>
+            <li class="rounded border border-slate-700/70 bg-slate-900/60 px-3 py-2">Reduced dependence on shared third-party routing infrastructure</li>
+            <li class="rounded border border-slate-700/70 bg-slate-900/60 px-3 py-2">Built for censorship resistance and network stratification realities</li>
+            <li class="rounded border border-slate-700/70 bg-slate-900/60 px-3 py-2">Operational visibility for health checks and continuity decisions</li>
+        </ul>
+    </div>
+</section>
+
+<section id="how-it-works" class="max-w-7xl mx-auto px-4 py-10">
     <h2 class="text-3xl font-bold mb-6">How It Works</h2>
     <div class="grid md:grid-cols-3 gap-6">
         @for (var i = 0; i < landing.HowItWorksSteps.Count; i++)
@@ -74,24 +120,11 @@
 
 <section class="max-w-7xl mx-auto px-4 py-8">
     <div class="p-8 rounded-xl border border-cyan-600/40 bg-cyan-500/10">
-        <h2 class="text-3xl font-bold">@landing.OfferTitle</h2>
+        <h2 class="text-3xl font-bold">Pricing: One-Time License</h2>
         <p class="text-slate-200 mt-3">@landing.OfferSummary</p>
         <p class="text-3xl font-bold mt-4">@landing.OfferPriceAnchor</p>
         <p class="text-slate-300 mt-2">@landing.OfferRiskReducer</p>
         <a href="@landing.MidCtaUrl" class="inline-flex mt-6 px-6 py-3 rounded-md bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">@landing.MidCtaText</a>
-    </div>
-</section>
-
-<section class="max-w-7xl mx-auto px-4 py-8">
-    <h2 class="text-3xl font-bold mb-6">Frequently Asked Questions</h2>
-    <div class="space-y-4">
-        @foreach (var faq in landing.Faqs)
-        {
-            <article class="p-6 rounded-xl border border-slate-800 bg-slate-900">
-                <h3 class="font-semibold text-lg">@faq.Question</h3>
-                <p class="text-slate-300 mt-2">@faq.Answer</p>
-            </article>
-        }
     </div>
 </section>
 
@@ -110,7 +143,7 @@
     <div class="max-w-7xl mx-auto px-4 py-10 grid md:grid-cols-2 gap-6">
         <div>
             <h3 class="font-bold text-xl">OmniRelay</h3>
-            <p class="text-slate-400 mt-2">Conversion-focused secure access platform for modern operations teams.</p>
+            <p class="text-slate-400 mt-2">Infrastructure-grade anti-censorship connectivity for stratified network environments.</p>
         </div>
         <div class="grid grid-cols-2 gap-3 text-sm">
             <a href="/docs" class="hover:text-cyan-300">Documentation</a>

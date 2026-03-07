@@ -81,7 +81,7 @@ Capabilities:
 - Swagger/OpenAPI
 - Health checks: `/health/live`, `/health/ready`
 - Metrics endpoint: `/metrics`
-- EF Core migrations on PostgreSQL (Redis optional)
+- EF Core migrations on PostgreSQL
 
 ## OmniRelay Web (Landing + Dashboard)
 

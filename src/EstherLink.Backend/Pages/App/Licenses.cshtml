@@ -50,10 +50,13 @@
                         <tr class="border-t border-slate-800">
                             <td class="px-4 py-3 font-mono text-xs">@item.LicenseId</td>
                             <td class="px-4 py-3">
-                                <div class="flex items-center gap-2">
-                                    <code class="font-mono text-cyan-300">@item.LicenseKey</code>
-                                    <button class="copy-license px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs" data-key="@item.LicenseKey">Copy</button>
-                                </div>
+                                <button
+                                    type="button"
+                                    class="show-license px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs"
+                                    data-license-id="@item.LicenseId"
+                                    data-license-key="@item.LicenseKey">
+                                    Show
+                                </button>
                             </td>
                             <td class="px-4 py-3 font-mono">@item.CurrentDeviceId</td>
                             <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>
@@ -71,3 +74,88 @@
         }
     </section>
 </div>
+
+<div id="licenseKeyModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/60" data-close-modal></div>
+    <div class="relative mx-auto mt-24 w-[92%] max-w-xl rounded-xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <h2 class="text-xl font-semibold text-slate-100">License Key</h2>
+                <p id="licenseKeyModalId" class="mt-1 font-mono text-xs text-slate-400"></p>
+            </div>
+            <button type="button" class="rounded px-2 py-1 text-slate-300 hover:bg-slate-800" data-close-modal aria-label="Close">
+                x
+            </button>
+        </div>
+
+        <div class="mt-4 rounded-lg border border-slate-700 bg-slate-950 p-3">
+            <code id="licenseKeyModalValue" class="break-all font-mono text-cyan-300"></code>
+        </div>
+
+        <div class="mt-4 flex items-center gap-3">
+            <button type="button" id="licenseKeyModalCopy" class="rounded bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400">
+                Copy
+            </button>
+            <span id="licenseKeyModalCopyStatus" class="text-xs text-slate-400"></span>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        (function () {
+            const modal = document.getElementById("licenseKeyModal");
+            if (!modal) return;
+
+            const idEl = document.getElementById("licenseKeyModalId");
+            const valueEl = document.getElementById("licenseKeyModalValue");
+            const copyBtn = document.getElementById("licenseKeyModalCopy");
+            const copyStatus = document.getElementById("licenseKeyModalCopyStatus");
+            let currentKey = "";
+
+            const showModal = function (licenseId, key) {
+                currentKey = key || "";
+                if (idEl) idEl.textContent = "License Id: " + (licenseId || "");
+                if (valueEl) valueEl.textContent = currentKey;
+                if (copyStatus) copyStatus.textContent = "";
+                modal.classList.remove("hidden");
+                document.body.classList.add("overflow-hidden");
+            };
+
+            const hideModal = function () {
+                modal.classList.add("hidden");
+                document.body.classList.remove("overflow-hidden");
+                currentKey = "";
+            };
+
+            document.querySelectorAll(".show-license").forEach(function (button) {
+                button.addEventListener("click", function () {
+                    const target = button;
+                    showModal(target.getAttribute("data-license-id"), target.getAttribute("data-license-key"));
+                });
+            });
+
+            modal.querySelectorAll("[data-close-modal]").forEach(function (button) {
+                button.addEventListener("click", hideModal);
+            });
+
+            document.addEventListener("keydown", function (event) {
+                if (event.key === "Escape" && !modal.classList.contains("hidden")) {
+                    hideModal();
+                }
+            });
+
+            if (copyBtn) {
+                copyBtn.addEventListener("click", async function () {
+                    if (!currentKey) return;
+                    try {
+                        await navigator.clipboard.writeText(currentKey);
+                        if (copyStatus) copyStatus.textContent = "Copied.";
+                    } catch {
+                        if (copyStatus) copyStatus.textContent = "Copy failed.";
+                    }
+                });
+            }
+        })();
+    </script>
+}

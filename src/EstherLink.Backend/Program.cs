@@ -16,6 +16,7 @@ using EstherLink.Backend.Services.Commerce;
 using EstherLink.Backend.Services.Installers;
 using EstherLink.Backend.Swagger;
 using EstherLink.Backend.Utilities;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
@@ -49,6 +50,9 @@ builder.Services.AddOptions<SpamProtectionOptions>()
         options.RecaptchaExpectedAction = ParseStringOrDefault(section["RecaptchaExpectedAction"], "contact_form");
         options.RecaptchaMinimumScore = ParseDoubleOrDefault(section["RecaptchaMinimumScore"], 0.5);
     });
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo("/app/data/dpkeys"))
+    .SetApplicationName("OmniRelay.Backend");
 
 var installerMaxUploadMb = builder.Configuration.GetValue<int?>("InstallerStorage:MaxUploadMb");
 if (installerMaxUploadMb.HasValue && installerMaxUploadMb.Value > 0)
@@ -68,16 +72,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 {
     options.UseNpgsql(postgresConnection);
 });
-
-var redisConnection = builder.Configuration.GetConnectionString("Redis");
-if (!string.IsNullOrWhiteSpace(redisConnection))
-{
-    builder.Services.AddStackExchangeRedisCache(options => options.Configuration = redisConnection);
-}
-else
-{
-    builder.Services.AddDistributedMemoryCache();
-}
 
 builder.Services
     .AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>
