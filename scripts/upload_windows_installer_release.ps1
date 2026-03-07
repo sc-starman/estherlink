@@ -16,6 +16,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Net.Http
 
 function Test-SemVerBasic {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -30,7 +31,10 @@ function Resolve-LatestMsiPath {
         throw "Build script not found: $buildScriptPath"
     }
 
-    & $buildScriptPath -Configuration $BuildConfiguration
+    # Consume build script pipeline output so this function returns only the MSI path.
+    & $buildScriptPath -Configuration $BuildConfiguration 2>&1 | ForEach-Object {
+        Write-Host $_
+    }
 
     $installerBin = Join-Path $RootPath "src\EstherLink.Installer\bin\$BuildConfiguration"
     $candidates = Get-ChildItem -Path $installerBin -Filter *.msi -File -Recurse -ErrorAction SilentlyContinue |
@@ -41,6 +45,21 @@ function Resolve-LatestMsiPath {
     }
 
     return $candidates[0].FullName
+}
+
+function Normalize-BaseUrl {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    $normalized = $Value.Trim()
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        throw "BaseUrl is required."
+    }
+
+    if ($normalized -notmatch '^https?://') {
+        $normalized = "https://$normalized"
+    }
+
+    return $normalized.TrimEnd("/")
 }
 
 function Get-MsiProductVersion {
@@ -138,7 +157,7 @@ function Invoke-Upload {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$normalizedBaseUrl = $BaseUrl.TrimEnd("/")
+$normalizedBaseUrl = Normalize-BaseUrl -Value $BaseUrl
 $uploadUrl = "$normalizedBaseUrl/api/installer/upload-windows"
 
 if ([string]::IsNullOrWhiteSpace($MsiPath)) {

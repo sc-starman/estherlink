@@ -122,6 +122,7 @@ services:
       LETSENCRYPT_HOST: ${OMNIRELAY_DOMAIN}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
       VIRTUAL_PORT: 8080
+      CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-1024m}
     volumes:
       - estherlink_installers:/app/data/installers
     ports:
