@@ -45,6 +45,20 @@ public sealed class TunnelSupervisorWorker : BackgroundService
                     await StopTunnelProcessAsync();
                 }
 
+                var licenseStatus = _runtime.GetStatusSnapshot();
+                if (licenseStatus.LicenseCheckedAtUtc is not null && !licenseStatus.LicenseValid)
+                {
+                    var reason = string.IsNullOrWhiteSpace(licenseStatus.LicenseReason)
+                        ? "License invalid."
+                        : licenseStatus.LicenseReason;
+
+                    await StopTunnelProcessAsync();
+                    _runtime.SetTunnelStatus(false, _lastConnectedAtUtc, _reconnectCount, reason);
+                    _runtime.SetBootstrapSocksStatus(false, false, reason);
+                    await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+                    continue;
+                }
+
                 if (string.IsNullOrWhiteSpace(config.TunnelHost))
                 {
                     await StopTunnelProcessAsync();

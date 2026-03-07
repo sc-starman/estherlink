@@ -117,7 +117,7 @@ public sealed class RegisterModel : PageModel
                     "Confirm your OmniRelay account",
                     body,
                     ToName: user.UserName),
-                HttpContext.RequestAborted);
+                CancellationToken.None);
         }
         catch (Exception ex)
         {

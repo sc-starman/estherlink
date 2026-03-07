@@ -7,6 +7,8 @@ namespace EstherLink.Service.Workers;
 
 public sealed class ProxyCoordinatorWorker : BackgroundService
 {
+    private static readonly TimeSpan LicenseCheckInterval = TimeSpan.FromMinutes(1);
+
     private readonly GatewayRuntime _runtime;
     private readonly LicenseValidator _licenseValidator;
     private readonly HttpConnectProxyEngine _proxyEngine;
@@ -59,6 +61,14 @@ public sealed class ProxyCoordinatorWorker : BackgroundService
                     continue;
                 }
 
+                var currentStatus = _runtime.GetStatusSnapshot();
+                if (currentStatus.LicenseValid &&
+                    currentStatus.LicenseExpiresAtUtc.HasValue &&
+                    currentStatus.LicenseExpiresAtUtc.Value <= DateTimeOffset.UtcNow)
+                {
+                    nextLicenseCheck = DateTimeOffset.MinValue;
+                }
+
                 if (DateTimeOffset.UtcNow >= nextLicenseCheck)
                 {
                     var license = await _licenseValidator.ValidateAsync(
@@ -67,7 +77,7 @@ public sealed class ProxyCoordinatorWorker : BackgroundService
                         transferRequested: false,
                         cancellationToken: stoppingToken);
                     _runtime.SetLicenseStatus(license);
-                    nextLicenseCheck = DateTimeOffset.UtcNow.AddMinutes(5);
+                    nextLicenseCheck = DateTimeOffset.UtcNow.Add(LicenseCheckInterval);
 
                     if (!license.IsValid)
                     {
@@ -78,6 +88,21 @@ public sealed class ProxyCoordinatorWorker : BackgroundService
                         await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
                         continue;
                     }
+                }
+
+                var enforcedStatus = _runtime.GetStatusSnapshot();
+                if (enforcedStatus.LicenseCheckedAtUtc is not null && !enforcedStatus.LicenseValid)
+                {
+                    var reason = string.IsNullOrWhiteSpace(enforcedStatus.LicenseReason)
+                        ? enforcedStatus.LastError ?? "License invalid."
+                        : enforcedStatus.LicenseReason;
+
+                    _runtime.SetProxyRunning(false, config.LocalProxyListenPort);
+                    _runtime.SetBootstrapSocksStatus(false, _runtime.GetStatusSnapshot().TunnelConnected, reason);
+                    await _proxyEngine.StopAsync(stoppingToken);
+                    await _socksEngine.StopAsync(stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
+                    continue;
                 }
 
                 await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, stoppingToken);

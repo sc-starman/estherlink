@@ -184,11 +184,19 @@ public partial class LicenseViewModel : ObservableObject
     {
         var status = _state.Status;
         LicenseActive = _state.LicenseActivated || status?.LicenseValid == true;
+        var now = DateTimeOffset.UtcNow;
+        var reason = status?.LicenseReason ?? string.Empty;
+        var localKey = (_state.LicenseKey ?? string.Empty).Trim();
+        var isTrial = localKey.StartsWith("OMNI-TRIAL", StringComparison.OrdinalIgnoreCase);
+        var expiredByTime = status?.LicenseExpiresAtUtc is DateTimeOffset exp && exp <= now;
+
         LicenseStatus = status is null
-            ? (LicenseActive ? "Active (Pro)" : "Unavailable")
+            ? (LicenseActive ? (isTrial ? "Active (Trial)" : "Active") : "Unavailable")
             : LicenseActive
-                ? "Active (Pro)"
-                : "Inactive";
+                ? (isTrial ? "Active (Trial)" : "Active")
+                : (string.Equals(reason, "EXPIRED", StringComparison.OrdinalIgnoreCase) || expiredByTime)
+                    ? "Expired"
+                    : "Inactive";
 
         var expiresAt = _state.LicenseActivatedExpiresAtUtc ?? status?.LicenseExpiresAtUtc;
 
@@ -204,15 +212,19 @@ public partial class LicenseViewModel : ObservableObject
 
         if (LicenseActive)
         {
-            BannerTitle = "Professional License is Active";
-            BannerDescription = "You have access to 256-bit AES encryption, unlimited network configurations, and dedicated 24/7 technical support.";
-            BannerActionText = "View Feature Log";
+            BannerTitle = isTrial ? "Trial License is Active" : "License is Active";
+            BannerDescription = isTrial
+                ? "Trial access is active for this device until the listed expiration date."
+                : "Your license is active for this device.";
+            BannerActionText = "License Details";
             BannerActionEnabled = true;
         }
         else
         {
             BannerTitle = "No Active License";
-            BannerDescription = TransferRequired
+            BannerDescription = (string.Equals(reason, "EXPIRED", StringComparison.OrdinalIgnoreCase) || expiredByTime)
+                ? "Your license has expired. Enter a valid license key to continue."
+                : TransferRequired
                 ? $"License is active on {(string.IsNullOrWhiteSpace(ActiveDeviceHint) ? "another device" : ActiveDeviceHint)}. Confirm transfer to activate here."
                 : "Activate a valid license to unlock professional routing, security features, and support.";
             BannerActionText = "Activation Required";

@@ -60,13 +60,14 @@ public sealed class LicenseValidator
                 cache.IsValid &&
                 cache.LicenseKeyHash == licenseKeyHash &&
                 cache.ExpiresAtUtc > now &&
+                !IsLicenseExpired(cache.LicenseExpiresAtUtc, now) &&
                 VerifyCachedEntrySignature(cache, publicKeys))
             {
                 return new LicenseValidationResult(
                     true,
                     true,
                     cache.CheckedAtUtc,
-                    cache.ExpiresAtUtc,
+                    cache.LicenseExpiresAtUtc,
                     null,
                     cache.TransferRequired,
                     cache.TransferLimitPerRollingYear,
@@ -144,8 +145,10 @@ public sealed class LicenseValidator
                 }
 
                 var cacheExpiresAt = parsed.CacheExpiresAt.ToUniversalTime();
+                var licenseExpiresAt = parsed.LicenseExpiresAt?.ToUniversalTime();
+                var isLicenseExpired = IsLicenseExpired(licenseExpiresAt, now);
                 var newCache = new LicenseCacheEntry(
-                    parsed.Valid,
+                    parsed.Valid && !isLicenseExpired,
                     licenseKeyHash,
                     now,
                     cacheExpiresAt,
@@ -153,7 +156,7 @@ public sealed class LicenseValidator
                     parsed.SignatureAlg,
                     parsed.KeyId,
                     parsed.Signature,
-                    parsed.Reason,
+                    isLicenseExpired ? "EXPIRED" : parsed.Reason,
                     parsed.TransferRequired,
                     parsed.TransferLimitPerRollingYear,
                     parsed.TransfersUsedInWindow,
@@ -161,27 +164,27 @@ public sealed class LicenseValidator
                     parsed.TransferWindowStartAt?.ToUniversalTime(),
                     parsed.ActiveDeviceIdHint,
                     parsed.Plan,
-                    parsed.LicenseExpiresAt?.ToUniversalTime(),
+                    licenseExpiresAt,
                     parsed.ServerTime.ToUniversalTime(),
                     parsed.RequestId);
 
                 await WriteCacheAsync(newCache, cancellationToken);
 
-                if (!parsed.Valid || cacheExpiresAt <= now)
+                if (!newCache.IsValid || cacheExpiresAt <= now)
                 {
                     return new LicenseValidationResult(
                         false,
                         false,
                         now,
-                        cacheExpiresAt,
-                        parsed.Reason,
+                        licenseExpiresAt,
+                        newCache.Reason,
                         parsed.TransferRequired,
                         parsed.TransferLimitPerRollingYear,
                         parsed.TransfersUsedInWindow,
                         parsed.TransfersRemainingInWindow,
                         parsed.TransferWindowStartAt?.ToUniversalTime(),
                         parsed.ActiveDeviceIdHint,
-                        parsed.Reason,
+                        newCache.Reason,
                         parsed.RequestId,
                         parsed.KeyId);
                 }
@@ -191,7 +194,7 @@ public sealed class LicenseValidator
                     true,
                     false,
                     now,
-                    cacheExpiresAt,
+                    licenseExpiresAt,
                     null,
                     parsed.TransferRequired,
                     parsed.TransferLimitPerRollingYear,
@@ -226,14 +229,38 @@ public sealed class LicenseValidator
         if (cache is not null &&
             cache.IsValid &&
             cache.LicenseKeyHash == licenseKeyHash &&
+            VerifyCachedEntrySignature(cache, keys) &&
+            IsLicenseExpired(cache.LicenseExpiresAtUtc, now))
+        {
+            return new LicenseValidationResult(
+                false,
+                true,
+                cache.CheckedAtUtc,
+                cache.LicenseExpiresAtUtc,
+                "License has expired.",
+                cache.TransferRequired,
+                cache.TransferLimitPerRollingYear,
+                cache.TransfersUsedInWindow,
+                cache.TransfersRemainingInWindow,
+                cache.TransferWindowStartAt,
+                cache.ActiveDeviceIdHint,
+                "EXPIRED",
+                cache.RequestId,
+                cache.KeyId);
+        }
+
+        if (cache is not null &&
+            cache.IsValid &&
+            cache.LicenseKeyHash == licenseKeyHash &&
             cache.ExpiresAtUtc > now &&
+            !IsLicenseExpired(cache.LicenseExpiresAtUtc, now) &&
             VerifyCachedEntrySignature(cache, keys))
         {
             return new LicenseValidationResult(
                 true,
                 true,
                 cache.CheckedAtUtc,
-                cache.ExpiresAtUtc,
+                cache.LicenseExpiresAtUtc,
                 null,
                 cache.TransferRequired,
                 cache.TransferLimitPerRollingYear,
@@ -250,7 +277,7 @@ public sealed class LicenseValidator
             false,
             false,
             now,
-            cache?.ExpiresAtUtc,
+            cache?.LicenseExpiresAtUtc,
             error,
             Reason: "OFFLINE_FALLBACK_FAILED");
     }
@@ -493,6 +520,11 @@ public sealed class LicenseValidator
     private static string Format(DateTimeOffset? value)
     {
         return value?.ToUniversalTime().ToString("O") ?? string.Empty;
+    }
+
+    private static bool IsLicenseExpired(DateTimeOffset? licenseExpiresAtUtc, DateTimeOffset nowUtc)
+    {
+        return licenseExpiresAtUtc.HasValue && licenseExpiresAtUtc.Value <= nowUtc;
     }
 
     private static string GetAppVersion()

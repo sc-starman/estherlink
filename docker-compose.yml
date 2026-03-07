@@ -97,6 +97,8 @@ services:
       Smtp__Port: ${SMTP_PORT}
       Smtp__UseSsl: ${SMTP_USE_SSL}
       Smtp__RequireAuthentication: ${SMTP_REQUIRE_AUTH}
+      Smtp__SendTimeoutSeconds: ${SMTP_SEND_TIMEOUT_SECONDS:-45}
+      Smtp__RetryCount: ${SMTP_RETRY_COUNT:-1}
       Smtp__Username: ${SMTP_USERNAME}
       Smtp__Password: ${SMTP_PASSWORD}
       Smtp__FromEmail: ${SMTP_FROM_EMAIL}
