@@ -93,16 +93,24 @@ services:
       Commerce__TrialDays: 2
       Commerce__UpdateEntitlementMonths: 12
       Web__SupportEmail: ${SUPPORT_EMAIL}
+      EmailDelivery__Provider: ${EMAIL_DELIVERY_PROVIDER:-smtp}
       Smtp__Host: ${SMTP_HOST}
       Smtp__Port: ${SMTP_PORT}
       Smtp__UseSsl: ${SMTP_USE_SSL}
       Smtp__RequireAuthentication: ${SMTP_REQUIRE_AUTH}
+      Smtp__ConnectTimeoutSeconds: ${SMTP_CONNECT_TIMEOUT_SECONDS:-10}
       Smtp__SendTimeoutSeconds: ${SMTP_SEND_TIMEOUT_SECONDS:-45}
       Smtp__RetryCount: ${SMTP_RETRY_COUNT:-1}
       Smtp__Username: ${SMTP_USERNAME}
       Smtp__Password: ${SMTP_PASSWORD}
       Smtp__FromEmail: ${SMTP_FROM_EMAIL}
       Smtp__FromName: ${SMTP_FROM_NAME}
+      MailService__BaseUrl: ${MAIL_SERVICE_BASE_URL}
+      MailService__SendPath: ${MAIL_SERVICE_SEND_PATH:-/send}
+      MailService__ApiKey: ${MAIL_SERVICE_API_KEY}
+      MailService__ApiKeyHeader: ${MAIL_SERVICE_API_KEY_HEADER:-x-api-key}
+      MailService__TimeoutSeconds: ${MAIL_SERVICE_TIMEOUT_SECONDS:-45}
+      MailService__RetryCount: ${MAIL_SERVICE_RETRY_COUNT:-1}
       SpamProtection__EnableRecaptcha: ${SPAM_RECAPTCHA_ENABLED:-false}
       SpamProtection__RecaptchaSiteKey: ${SPAM_RECAPTCHA_SITE_KEY}
       SpamProtection__RecaptchaSecretKey: ${SPAM_RECAPTCHA_SECRET_KEY}

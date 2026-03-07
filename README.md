@@ -229,6 +229,44 @@ docker compose up -d --build
 Public endpoint:
 - `https://<OMNIRELAY_DOMAIN>` (TLS auto-managed)
 
+### Email Delivery Mode (Registration + Contact)
+
+Both account verification emails and contact-form emails use the same delivery provider.
+
+Set provider in `.env`:
+
+```env
+EMAIL_DELIVERY_PROVIDER=smtp
+```
+
+`smtp` mode (default):
+
+```env
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USE_SSL=true
+SMTP_REQUIRE_AUTH=true
+SMTP_CONNECT_TIMEOUT_SECONDS=10
+SMTP_SEND_TIMEOUT_SECONDS=45
+SMTP_RETRY_COUNT=1
+SMTP_USERNAME=mailer@example.com
+SMTP_PASSWORD=change-me
+SMTP_FROM_EMAIL=noreply@example.com
+SMTP_FROM_NAME=OmniRelay Contact
+```
+
+`mail_service` mode:
+
+```env
+EMAIL_DELIVERY_PROVIDER=mail_service
+MAIL_SERVICE_BASE_URL=https://mail-sender.example.com:8443
+MAIL_SERVICE_SEND_PATH=/send
+MAIL_SERVICE_API_KEY=replace-with-mail-service-api-key
+MAIL_SERVICE_API_KEY_HEADER=x-api-key
+MAIL_SERVICE_TIMEOUT_SECONDS=45
+MAIL_SERVICE_RETRY_COUNT=1
+```
+
 ## Run Backend Locally (without Docker)
 
 ```powershell

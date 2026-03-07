@@ -22,6 +22,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.OpenApi.Models;
 using NuGet.Versioning;
 
@@ -35,7 +36,9 @@ builder.Services.Configure<LicensingOptions>(builder.Configuration.GetSection("L
 builder.Services.Configure<PayKryptOptions>(builder.Configuration.GetSection("PayKrypt"));
 builder.Services.Configure<CommerceOptions>(builder.Configuration.GetSection("Commerce"));
 builder.Services.Configure<WebOptions>(builder.Configuration.GetSection("Web"));
+builder.Services.Configure<EmailDeliveryOptions>(builder.Configuration.GetSection("EmailDelivery"));
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+builder.Services.Configure<MailServiceOptions>(builder.Configuration.GetSection("MailService"));
 builder.Services.Configure<InstallerStorageOptions>(builder.Configuration.GetSection("InstallerStorage"));
 builder.Services.AddOptions<SpamProtectionOptions>()
     .Configure<IConfiguration>((options, configuration) =>
@@ -128,7 +131,22 @@ builder.Services.AddScoped<ICommerceService, CommerceService>();
 builder.Services.AddScoped<ILicenseIssuanceService, LicenseIssuanceService>();
 builder.Services.AddScoped<ITrialPolicyService, TrialPolicyService>();
 builder.Services.AddScoped<IDownloadCatalogService, DownloadCatalogService>();
-builder.Services.AddScoped<IEmailDeliveryService, SmtpEmailDeliveryService>();
+builder.Services.AddScoped<SmtpEmailDeliveryService>();
+builder.Services.AddHttpClient<MailServiceEmailDeliveryService>();
+builder.Services.AddScoped<IEmailDeliveryService>(serviceProvider =>
+{
+    var provider = NormalizeEmailProvider(serviceProvider
+        .GetRequiredService<IOptions<EmailDeliveryOptions>>()
+        .Value
+        .Provider);
+
+    return provider switch
+    {
+        "smtp" => serviceProvider.GetRequiredService<SmtpEmailDeliveryService>(),
+        "mail_service" => serviceProvider.GetRequiredService<MailServiceEmailDeliveryService>(),
+        _ => throw new InvalidOperationException($"Unsupported email provider '{provider}'.")
+    };
+});
 builder.Services.AddScoped<IContactEmailSender, SmtpContactEmailSender>();
 builder.Services.AddSingleton<IInstallerStorageService, FileSystemInstallerStorageService>();
 builder.Services.AddSingleton<IInstallerVersionResolver, WindowsInstallerVersionResolver>();
@@ -185,6 +203,8 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 var app = builder.Build();
+
+ValidateEmailDeliveryConfiguration(app.Services);
 
 app.UseStaticFiles();
 app.UseSwagger();
@@ -890,6 +910,92 @@ static double ParseDoubleOrDefault(string? value, double defaultValue)
 static string ParseStringOrDefault(string? value, string defaultValue)
 {
     return string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
+}
+
+static string NormalizeEmailProvider(string? value)
+{
+    var normalized = (value ?? string.Empty).Trim().ToLowerInvariant().Replace('-', '_');
+    return string.IsNullOrWhiteSpace(normalized) ? "smtp" : normalized;
+}
+
+static void ValidateEmailDeliveryConfiguration(IServiceProvider serviceProvider)
+{
+    var provider = NormalizeEmailProvider(ServiceProviderServiceExtensions
+        .GetRequiredService<IOptions<EmailDeliveryOptions>>(serviceProvider)
+        .Value
+        .Provider);
+
+    if (provider == "smtp")
+    {
+        var smtp = ServiceProviderServiceExtensions.GetRequiredService<IOptions<SmtpOptions>>(serviceProvider).Value;
+        if (string.IsNullOrWhiteSpace(smtp.Host))
+        {
+            throw new InvalidOperationException("EmailDelivery provider 'smtp' requires Smtp:Host.");
+        }
+
+        if (smtp.Port is <= 0 or > 65535)
+        {
+            throw new InvalidOperationException("EmailDelivery provider 'smtp' requires a valid Smtp:Port.");
+        }
+
+        if (string.IsNullOrWhiteSpace(smtp.FromEmail))
+        {
+            throw new InvalidOperationException("EmailDelivery provider 'smtp' requires Smtp:FromEmail.");
+        }
+
+        if (smtp.RequireAuthentication &&
+            (string.IsNullOrWhiteSpace(smtp.Username) || string.IsNullOrWhiteSpace(smtp.Password)))
+        {
+            throw new InvalidOperationException("EmailDelivery provider 'smtp' requires Smtp:Username and Smtp:Password when authentication is enabled.");
+        }
+
+        return;
+    }
+
+    if (provider == "mail_service")
+    {
+        var mailService = ServiceProviderServiceExtensions.GetRequiredService<IOptions<MailServiceOptions>>(serviceProvider).Value;
+
+        if (string.IsNullOrWhiteSpace(mailService.BaseUrl))
+        {
+            throw new InvalidOperationException("EmailDelivery provider 'mail_service' requires MailService:BaseUrl.");
+        }
+
+        if (!Uri.TryCreate(mailService.BaseUrl, UriKind.Absolute, out var baseUri) ||
+            (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException("MailService:BaseUrl must be a valid absolute http/https URL.");
+        }
+
+        if (string.IsNullOrWhiteSpace(mailService.SendPath))
+        {
+            throw new InvalidOperationException("EmailDelivery provider 'mail_service' requires MailService:SendPath.");
+        }
+
+        if (string.IsNullOrWhiteSpace(mailService.ApiKeyHeader))
+        {
+            throw new InvalidOperationException("EmailDelivery provider 'mail_service' requires MailService:ApiKeyHeader.");
+        }
+
+        if (string.IsNullOrWhiteSpace(mailService.ApiKey))
+        {
+            throw new InvalidOperationException("EmailDelivery provider 'mail_service' requires MailService:ApiKey.");
+        }
+
+        if (mailService.TimeoutSeconds is < 5 or > 300)
+        {
+            throw new InvalidOperationException("MailService:TimeoutSeconds must be between 5 and 300.");
+        }
+
+        if (mailService.RetryCount is < 0 or > 4)
+        {
+            throw new InvalidOperationException("MailService:RetryCount must be between 0 and 4.");
+        }
+
+        return;
+    }
+
+    throw new InvalidOperationException("EmailDelivery:Provider must be one of: smtp, mail_service.");
 }
 
 public partial class Program;

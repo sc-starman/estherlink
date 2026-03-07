@@ -33,6 +33,11 @@ public sealed class IntegrationTestWebApplicationFactory : WebApplicationFactory
                 ["Commerce:PaidMaxDevices"] = "3",
                 ["Commerce:TrialDays"] = "2",
                 ["Commerce:UpdateEntitlementMonths"] = "12",
+                ["EmailDelivery:Provider"] = "smtp",
+                ["Smtp:Host"] = "smtp.test.local",
+                ["Smtp:Port"] = "587",
+                ["Smtp:FromEmail"] = "noreply@test.local",
+                ["Smtp:RequireAuthentication"] = "false",
                 ["Web:DocumentationUrl"] = "https://docs.example",
                 ["Web:DownloadChannel"] = "stable"
             });
