@@ -9,6 +9,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $installerProject = Join-Path $root "src\EstherLink.Installer\EstherLink.Installer.wixproj"
 Write-Host "Building OmniRelay MSI ($Configuration)..." -ForegroundColor Cyan
 dotnet build $installerProject -c $Configuration
+if ($LASTEXITCODE -ne 0) {
+    throw "MSI build failed with exit code $LASTEXITCODE."
+}
 
 $msiCandidates = Get-ChildItem -Path (Join-Path $root "src\EstherLink.Installer\bin\$Configuration") -Filter *.msi -File -ErrorAction SilentlyContinue
 if (-not $msiCandidates) {

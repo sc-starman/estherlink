@@ -60,9 +60,17 @@ builder.Services.AddDataProtection()
 var installerMaxUploadMb = builder.Configuration.GetValue<int?>("InstallerStorage:MaxUploadMb");
 if (installerMaxUploadMb.HasValue && installerMaxUploadMb.Value > 0)
 {
+    var installerMaxUploadBytes = installerMaxUploadMb.Value * 1024L * 1024L;
+    var multipartLimitBytes = installerMaxUploadBytes + (2L * 1024L * 1024L); // allow multipart overhead
+
+    builder.WebHost.ConfigureKestrel(options =>
+    {
+        options.Limits.MaxRequestBodySize = multipartLimitBytes;
+    });
+
     builder.Services.Configure<FormOptions>(options =>
     {
-        options.MultipartBodyLengthLimit = installerMaxUploadMb.Value * 1024L * 1024L;
+        options.MultipartBodyLengthLimit = multipartLimitBytes;
     });
 }
 

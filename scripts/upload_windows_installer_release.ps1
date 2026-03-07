@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$AdminApiKey,
 
+    [string]$UploadBaseUrl,
+    [switch]$InsecureSkipTlsVerify,
     [string]$MsiPath,
     [string]$Version,
     [string]$Channel = "stable",
@@ -17,6 +19,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Net.Http
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
 function Test-SemVerBasic {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -115,10 +118,16 @@ function Invoke-Upload {
         [Parameter(Mandatory = $true)][string]$InstallerVersion,
         [Parameter(Mandatory = $true)][string]$InstallerChannel,
         [Parameter(Mandatory = $true)][string]$InstallerMinSupportedVersion,
+        [switch]$SkipTlsValidation,
         [string]$InstallerNotes
     )
 
-    $client = New-Object System.Net.Http.HttpClient
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    if ($SkipTlsValidation) {
+        $handler.ServerCertificateCustomValidationCallback = { $true }
+    }
+
+    $client = New-Object System.Net.Http.HttpClient($handler)
     $client.Timeout = [TimeSpan]::FromMinutes(30)
     $client.DefaultRequestHeaders.Add("X-ADMIN-API-KEY", $ApiKey)
 
@@ -136,10 +145,30 @@ function Invoke-Upload {
     }
 
     try {
-        $response = $client.PostAsync($Endpoint, $multipart).GetAwaiter().GetResult()
+        try {
+            $response = $client.PostAsync($Endpoint, $multipart).GetAwaiter().GetResult()
+        }
+        catch {
+            $ex = $_.Exception
+            $chain = @()
+            while ($null -ne $ex) {
+                $chain += ("{0}: {1}" -f $ex.GetType().FullName, $ex.Message)
+                $ex = $ex.InnerException
+            }
+
+            $chainText = ($chain -join " | ")
+            $tlsHint = if ($SkipTlsValidation) { "" } else { " If this is an origin host with self-signed or mismatched TLS cert, retry with -InsecureSkipTlsVerify for diagnosis only." }
+            throw "Upload request failed before HTTP response. Endpoint=$Endpoint. Details: $chainText.$tlsHint"
+        }
+
         $payload = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
 
         if (-not $response.IsSuccessStatusCode) {
+            $statusCode = [int]$response.StatusCode
+            if ($statusCode -eq 524) {
+                throw "Upload failed with status 524 (Cloudflare timeout). Upload path likely timed out behind proxy. Use -UploadBaseUrl with a non-proxied origin host (DNS-only) and retry. Raw response: $payload"
+            }
+
             throw "Upload failed with status $($response.StatusCode): $payload"
         }
 
@@ -153,12 +182,20 @@ function Invoke-Upload {
         $fileStream.Dispose()
         $multipart.Dispose()
         $client.Dispose()
+        $handler.Dispose()
     }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $normalizedBaseUrl = Normalize-BaseUrl -Value $BaseUrl
-$uploadUrl = "$normalizedBaseUrl/api/installer/upload-windows"
+$normalizedUploadBaseUrl = if ([string]::IsNullOrWhiteSpace($UploadBaseUrl)) {
+    $normalizedBaseUrl
+}
+else {
+    Normalize-BaseUrl -Value $UploadBaseUrl
+}
+
+$uploadUrl = "$normalizedUploadBaseUrl/api/installer/upload-windows"
 
 if ([string]::IsNullOrWhiteSpace($MsiPath)) {
     Write-Host "No -MsiPath provided. Building MSI first..." -ForegroundColor Yellow
@@ -199,6 +236,10 @@ Write-Host "  Version: $resolvedVersion"
 Write-Host "  Channel: $Channel"
 Write-Host "  MinSupportedVersion: $MinSupportedVersion"
 Write-Host "  Local SHA-256: $localHash"
+Write-Host "  Upload Endpoint: $uploadUrl"
+if ($InsecureSkipTlsVerify) {
+    Write-Warning "TLS certificate validation is disabled for this upload request."
+}
 
 $response = Invoke-Upload `
     -Endpoint $uploadUrl `
@@ -207,6 +248,7 @@ $response = Invoke-Upload `
     -InstallerVersion $resolvedVersion `
     -InstallerChannel $Channel `
     -InstallerMinSupportedVersion $MinSupportedVersion `
+    -SkipTlsValidation:$InsecureSkipTlsVerify `
     -InstallerNotes $Notes
 
 Write-Host ""

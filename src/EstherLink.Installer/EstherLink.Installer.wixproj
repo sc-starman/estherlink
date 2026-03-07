@@ -17,7 +17,7 @@
     <MakeDir Directories="$(PayloadRoot)\ui" />
     <MakeDir Directories="$(PayloadRoot)\service" />
 
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\EstherLink.UI\EstherLink.UI.csproj&quot; -c $(Configuration) -r win-x64 --self-contained false -o &quot;$(PayloadRoot)\ui&quot;" />
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\EstherLink.Service\EstherLink.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained false -o &quot;$(PayloadRoot)\service&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\EstherLink.UI\EstherLink.UI.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -o &quot;$(PayloadRoot)\ui&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\EstherLink.Service\EstherLink.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -o &quot;$(PayloadRoot)\service&quot;" />
   </Target>
 </Project>

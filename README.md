@@ -195,6 +195,9 @@ MSI behavior:
 3. Registers and starts `EstherLink.Service` (DisplayName: `OmniRelay Service`).
 4. Creates Start Menu shortcut for OmniRelay UI.
 
+Installer packaging note:
+- MSI payload is published as `win-x64` self-contained for both UI and Service, so a separate .NET runtime installation is not required on target Windows machines.
+
 ## Run Backend with Docker
 
 ```bash
@@ -294,6 +297,12 @@ Example:
 ```bash
 BASE_URL=http://localhost:8080 ADMIN_API_KEY=dev-admin-key bash scripts/seed_backend_sample.sh
 ```
+
+Windows MSI upload tip (when behind Cloudflare):
+- `scripts/upload_windows_installer_release.ps1` accepts:
+  - `-BaseUrl` for the public download URL base.
+  - `-UploadBaseUrl` (optional) for the admin upload endpoint base.
+- If Cloudflare returns `524` during upload, point `-UploadBaseUrl` to a non-proxied origin host (DNS-only) and keep `-BaseUrl` as your public site domain.
 
 Seed includes:
 - demo license (`DEMO-KEY-001`)
