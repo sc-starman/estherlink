@@ -11,6 +11,8 @@ services:
       - omnirelay_proxy_vhost:/etc/nginx/vhost.d
       - omnirelay_proxy_html:/usr/share/nginx/html
       - /var/run/docker.sock:/tmp/docker.sock:ro
+      - /opt/nginx-estherlink/my_proxy.conf:/etc/nginx/conf.d/my_proxy.conf:ro
+
 
   acme-companion:
     image: nginxproxy/acme-companion
