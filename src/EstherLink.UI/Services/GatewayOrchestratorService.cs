@@ -5,7 +5,6 @@ using EstherLink.Ipc;
 using EstherLink.UI.Models;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
 using System.Net.Sockets;
 
 namespace EstherLink.UI.Services;
@@ -152,10 +151,18 @@ public sealed class GatewayOrchestratorService
         try
         {
             var config = BuildConfig(requireTunnelAuthSecrets);
+            var preflight = await ValidateTunnelReachabilityForApplyAsync(config, cancellationToken);
+            var preflightWarning = preflight.Success ? null : preflight.Message;
+
             var response = await _gatewayClient.SetConfigAsync(config, cancellationToken);
             if (response?.Success == true)
             {
-                return SetAction(true, "Configuration updated.");
+                if (string.IsNullOrWhiteSpace(preflightWarning))
+                {
+                    return SetAction(true, "Configuration updated.");
+                }
+
+                return SetAction(true, $"Configuration updated. Local preflight warning: {preflightWarning}");
             }
 
             var error = response?.Error ?? "service unavailable";
@@ -171,6 +178,22 @@ public sealed class GatewayOrchestratorService
         {
             return SetAction(false, ex.Message);
         }
+    }
+
+    private async Task<OperationResult> ValidateTunnelReachabilityForApplyAsync(ServiceConfig config, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(config.TunnelHost))
+        {
+            return SetAction(true, "Tunnel host is empty; IC1 reachability preflight skipped.");
+        }
+
+        var probe = await TestSshTcpConnectivityAsync(config, cancellationToken);
+        if (probe.Success)
+        {
+            return new OperationResult(true, probe.Message);
+        }
+
+        return SetAction(false, $"IC1 preflight failed. {probe.Message}");
     }
 
     public async Task<OperationResult> UpdateWhitelistAsync(CancellationToken cancellationToken = default)
@@ -278,6 +301,28 @@ public sealed class GatewayOrchestratorService
 
     public async Task<OperationResult> RequestLicenseTransferAndVerifyAsync(CancellationToken cancellationToken = default)
     {
+        var readiness = await CheckLicenseServiceCompatibilityAsync(
+            requiredCommands: [IpcCommands.SetLicenseKey, IpcCommands.RequestLicenseTransfer],
+            cancellationToken);
+        if (!readiness.Success)
+        {
+            _state.LicenseActivated = false;
+            return readiness;
+        }
+
+        var licenseKey = (_state.LicenseKey ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(licenseKey))
+        {
+            return SetAction(false, "License key is required.");
+        }
+
+        var setLicenseKeyResponse = await _gatewayClient.SetLicenseKeyAsync(licenseKey, cancellationToken);
+        if (setLicenseKeyResponse?.Success != true)
+        {
+            return SetAction(false, $"Set license key failed: {setLicenseKeyResponse?.Error ?? "service unavailable"}");
+        }
+
+        SetAction(true, "Submitting license transfer request...");
         var transferResponse = await _gatewayClient.RequestLicenseTransferAsync(cancellationToken);
         if (transferResponse?.Success != true)
         {
@@ -288,6 +333,15 @@ public sealed class GatewayOrchestratorService
     }
 
     public async Task<OperationResult> CheckLicenseServiceCompatibilityAsync(CancellationToken cancellationToken = default)
+    {
+        return await CheckLicenseServiceCompatibilityAsync(
+            requiredCommands: [IpcCommands.SetLicenseKey],
+            cancellationToken);
+    }
+
+    private async Task<OperationResult> CheckLicenseServiceCompatibilityAsync(
+        IReadOnlyList<string> requiredCommands,
+        CancellationToken cancellationToken = default)
     {
         var serviceState = await _serviceControl.QueryServiceStateAsync(cancellationToken);
         if (!string.Equals(serviceState, "Running", StringComparison.OrdinalIgnoreCase))
@@ -307,11 +361,12 @@ public sealed class GatewayOrchestratorService
             return SetAction(false, "Relay service capabilities payload was invalid.");
         }
 
-        var supportsSetLicenseKey = payload.Capabilities.Any(x =>
-            string.Equals(x, IpcCommands.SetLicenseKey, StringComparison.OrdinalIgnoreCase));
-        if (!supportsSetLicenseKey)
+        var missing = requiredCommands
+            .Where(required => !payload.Capabilities.Any(x => string.Equals(x, required, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        if (missing.Count > 0)
         {
-            return SetAction(false, $"Relay service v{payload.ServiceVersion} is outdated and does not support '{IpcCommands.SetLicenseKey}'.");
+            return SetAction(false, $"Relay service v{payload.ServiceVersion} is outdated and missing capability: {string.Join(", ", missing)}.");
         }
 
         return SetAction(true, $"Relay service compatible (v{payload.ServiceVersion}).");
@@ -344,12 +399,12 @@ public sealed class GatewayOrchestratorService
             }
 
             var tcpFallback = await TestSshTcpConnectivityAsync(config, cancellationToken);
-            if (tcpFallback)
+            if (tcpFallback.Success)
             {
                 return SetAction(false, $"SSH endpoint is reachable, but authentication test failed: {authFallback.Message}");
             }
 
-            return SetAction(false, $"Tunnel test failed: service unavailable and SSH endpoint was not reachable. Details: {authFallback.Message}");
+            return SetAction(false, $"Tunnel test failed: service unavailable and SSH endpoint was not reachable. Details: {FirstNonEmpty(authFallback.Message, tcpFallback.Message)}");
         }
 
         return SetAction(false, $"Tunnel test failed: {response.Error ?? "unknown error"}");
@@ -649,233 +704,97 @@ public sealed class GatewayOrchestratorService
         return SetAction(false, $"{stepName} failed after {maxAttempts} attempts: {last?.Message ?? "unknown error"}");
     }
 
-    private static async Task<bool> TestSshTcpConnectivityAsync(ServiceConfig config, CancellationToken cancellationToken)
+    private static async Task<(bool Success, string Message)> TestSshTcpConnectivityAsync(ServiceConfig config, CancellationToken cancellationToken)
     {
+        if (!SshCliStartInfoFactory.TryResolveIc1BindIp(config, out var bindIp, out var bindError))
+        {
+            return (false, bindError ?? "VPS Network (IC1) adapter has no usable IPv4 address.");
+        }
+
         try
         {
             using var tcp = new TcpClient();
+            tcp.Client.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Parse(bindIp), 0));
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(5));
             await tcp.ConnectAsync(config.TunnelHost, config.TunnelSshPort, cts.Token);
-            return true;
+            return (true, $"SSH endpoint reachable via IC1 source IP {bindIp}.");
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            return (false, $"Cannot open SSH endpoint from IC1 adapter IPv4 {bindIp}: {ex.Message}");
         }
     }
 
     private static async Task<(bool Success, string Message)> TestSshAuthConnectivityAsync(ServiceConfig config, CancellationToken cancellationToken)
     {
-        if (!TryCreateUiSshTestStartInfo(config, out var startInfo, out var error))
+        var attemptedRepair = false;
+        while (true)
         {
-            return (false, error ?? "Tunnel configuration is invalid.");
-        }
-
-        Process? process = null;
-        try
-        {
-            process = Process.Start(startInfo!);
-            if (process is null)
+            if (!SshCliStartInfoFactory.TryCreateBoundSshConnectionTestStartInfo(config, out var startInfo, out var bindIp, out var error))
             {
-                return (false, "Unable to start ssh process.");
+                return (false, error ?? "Cannot prepare SSH auth connectivity test command for IC1.");
             }
 
-            process.StandardInput.Close();
-
-            var waitTask = process.WaitForExitAsync(cancellationToken);
-            var runningDelay = Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
-            var completed = await Task.WhenAny(waitTask, runningDelay);
-
-            if (completed == waitTask)
+            Process? process = null;
+            try
             {
-                var stderr = (await process.StandardError.ReadToEndAsync(cancellationToken)).Trim();
-                var stdout = (await process.StandardOutput.ReadToEndAsync(cancellationToken)).Trim();
-
-                if (process.ExitCode == 0)
+                process = Process.Start(startInfo!);
+                if (process is null)
                 {
-                    return (true, "SSH connection established.");
+                    return (false, "Unable to start ssh process.");
                 }
 
-                return (false, FirstNonEmpty(stderr, stdout) ?? $"SSH exited with code {process.ExitCode}.");
-            }
+                process.StandardInput.Close();
 
-            await StopProcessAsync(process);
-            return (true, "SSH connection established.");
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or TaskCanceledException or OperationCanceledException)
-        {
-            return (false, ex.Message);
-        }
-        finally
-        {
-            if (process is not null)
-            {
+                var waitTask = process.WaitForExitAsync(cancellationToken);
+                // ConnectTimeout is 10s in SSH start info; wait beyond that before
+                // treating a still-running ssh process as success.
+                var runningDelay = Task.Delay(TimeSpan.FromSeconds(12), cancellationToken);
+                var completed = await Task.WhenAny(waitTask, runningDelay);
+
+                if (completed == waitTask)
+                {
+                    var stderr = (await process.StandardError.ReadToEndAsync(cancellationToken)).Trim();
+                    var stdout = (await process.StandardOutput.ReadToEndAsync(cancellationToken)).Trim();
+
+                    if (process.ExitCode == 0)
+                    {
+                        return (true, $"SSH connection established via IC1 source IP {bindIp}.");
+                    }
+
+                    var message = FirstNonEmpty(stderr, stdout) ?? $"SSH exited with code {process.ExitCode}.";
+                    if (!attemptedRepair && SshCliStartInfoFactory.LooksLikeHostKeyMismatch(message))
+                    {
+                        attemptedRepair = true;
+                        var repair = await SshCliStartInfoFactory.TryRepairKnownHostEntryAsync(config, cancellationToken);
+                        if (repair.Success)
+                        {
+                            continue;
+                        }
+
+                        return (false, $"{message} | {repair.Message}");
+                    }
+
+                    return (false, message);
+                }
+
                 await StopProcessAsync(process);
-                process.Dispose();
+                return (true, $"SSH connection established via IC1 source IP {bindIp}.");
             }
-        }
-    }
-
-    private static bool TryCreateUiSshTestStartInfo(
-        ServiceConfig config,
-        out ProcessStartInfo? startInfo,
-        out string? error)
-    {
-        startInfo = null;
-        error = ValidateTunnelConfigForTest(config);
-        if (error is not null)
-        {
-            return false;
-        }
-
-        var args = new List<string>
-        {
-            "-N",
-            "-o", "ServerAliveInterval=10",
-            "-o", "ServerAliveCountMax=1",
-            "-o", "TCPKeepAlive=yes",
-            "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=accept-new"
-        };
-
-        var appDataDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "EstherLink");
-        Directory.CreateDirectory(appDataDir);
-        args.Add("-o");
-        args.Add($"UserKnownHostsFile={Path.Combine(appDataDir, "known_hosts_ui")}");
-
-        var method = TunnelAuthMethods.Normalize(config.TunnelAuthMethod);
-        string? secret = null;
-        if (string.Equals(method, TunnelAuthMethods.Password, StringComparison.Ordinal))
-        {
-            if (string.IsNullOrWhiteSpace(config.TunnelPassword))
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or TaskCanceledException or OperationCanceledException)
             {
-                error = "Tunnel password is required for password authentication.";
-                return false;
+                return (false, ex.Message);
             }
-
-            args.Add("-o");
-            args.Add("PreferredAuthentications=password,keyboard-interactive");
-            args.Add("-o");
-            args.Add("PubkeyAuthentication=no");
-            args.Add("-o");
-            args.Add("NumberOfPasswordPrompts=1");
-            secret = config.TunnelPassword;
-        }
-        else
-        {
-            var keyPath = (config.TunnelPrivateKeyPath ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(keyPath))
+            finally
             {
-                error = "Tunnel host key file path is required for host-key authentication.";
-                return false;
-            }
-
-            if (!File.Exists(keyPath))
-            {
-                error = $"Tunnel host key file not found: {keyPath}";
-                return false;
-            }
-
-            args.Add("-i");
-            args.Add(keyPath);
-            args.Add("-o");
-            args.Add("PreferredAuthentications=publickey");
-
-            if (string.IsNullOrWhiteSpace(config.TunnelPrivateKeyPassphrase))
-            {
-                args.Add("-o");
-                args.Add("BatchMode=yes");
-            }
-            else
-            {
-                secret = config.TunnelPrivateKeyPassphrase;
+                if (process is not null)
+                {
+                    await StopProcessAsync(process);
+                    process.Dispose();
+                }
             }
         }
-
-        args.Add($"{config.TunnelUser.Trim()}@{config.TunnelHost.Trim()}");
-        args.Add("-p");
-        args.Add(config.TunnelSshPort.ToString());
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = "ssh",
-            UseShellExecute = false,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true,
-            RedirectStandardInput = true,
-            CreateNoWindow = true
-        };
-
-        foreach (var arg in args)
-        {
-            psi.ArgumentList.Add(arg);
-        }
-
-        if (!string.IsNullOrWhiteSpace(secret))
-        {
-            ConfigureAskPass(psi, secret);
-        }
-
-        startInfo = psi;
-        return true;
-    }
-
-    private static string? ValidateTunnelConfigForTest(ServiceConfig config)
-    {
-        if (string.IsNullOrWhiteSpace(config.TunnelHost))
-        {
-            return "Tunnel host is required.";
-        }
-
-        if (string.IsNullOrWhiteSpace(config.TunnelUser))
-        {
-            return "Tunnel user is required.";
-        }
-
-        if (config.TunnelSshPort <= 0 || config.TunnelSshPort > 65535)
-        {
-            return "Tunnel SSH port must be between 1 and 65535.";
-        }
-
-        return null;
-    }
-
-    private static void ConfigureAskPass(ProcessStartInfo startInfo, string secret)
-    {
-        var launcherPath = EnsureAskPassLauncher();
-        startInfo.Environment["SSH_ASKPASS"] = launcherPath;
-        startInfo.Environment["SSH_ASKPASS_REQUIRE"] = "force";
-        startInfo.Environment["DISPLAY"] = "estherlink-ui:0";
-        startInfo.Environment["ESTHERLINK_UI_SSH_SECRET"] = secret;
-    }
-
-    private static string EnsureAskPassLauncher()
-    {
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "EstherLink",
-            "ssh-ui");
-        Directory.CreateDirectory(root);
-
-        var scriptPath = Path.Combine(root, "ssh-askpass.ps1");
-        var launcherPath = Path.Combine(root, "ssh-askpass.cmd");
-
-        if (!File.Exists(scriptPath))
-        {
-            var scriptContent = "$secret = $env:ESTHERLINK_UI_SSH_SECRET; if ($null -ne $secret) { [Console]::Out.Write($secret) }";
-            File.WriteAllText(scriptPath, scriptContent);
-        }
-
-        if (!File.Exists(launcherPath))
-        {
-            var launcherContent = "@echo off\r\npowershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File \"%~dp0ssh-askpass.ps1\"";
-            File.WriteAllText(launcherPath, launcherContent);
-        }
-
-        return launcherPath;
     }
 
     private static async Task StopProcessAsync(Process process)

@@ -1,7 +1,6 @@
 using EstherLink.Core.Configuration;
 using EstherLink.UI.Models;
-using Renci.SshNet;
-using Renci.SshNet.Common;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -16,12 +15,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
     private const string GatewayCtlPath = "/usr/local/sbin/omnirelay-gatewayctl";
     private const string RemoteInstallScriptPath = "/tmp/omnirelay-gatewayctl.sh";
 
-    private readonly ISshHostKeyTrustStore _hostKeyTrustStore;
-
-    public GatewayDeploymentService(ISshHostKeyTrustStore hostKeyTrustStore)
-    {
-        _hostKeyTrustStore = hostKeyTrustStore;
-    }
+    public GatewayDeploymentService() { }
 
     public async Task<GatewayOperationResult> CheckGatewayBootstrapAsync(
         GatewayDeploymentRequest request,
@@ -112,7 +106,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 Message = "Uploading gateway installer script"
             });
 
-            await UploadInstallerScriptAsync(request, cancellationToken);
+            await UploadInstallerScriptAsync(request, progress, cancellationToken);
 
             var panelUser = $"omniadmin_{RandomAlphaNum(6)}";
             var panelPassword = RandomAlphaNum(24);
@@ -344,28 +338,66 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return dto.ToModel(json);
     }
 
-    private async Task UploadInstallerScriptAsync(GatewayDeploymentRequest request, CancellationToken cancellationToken)
+    private async Task UploadInstallerScriptAsync(
+        GatewayDeploymentRequest request,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
     {
         var localScript = ResolveInstallerScriptPath();
-
-        await Task.Run(() =>
+        ProcessStartInfo? BuildStartInfo(out string bindIp, out string? error)
         {
-            using var sftp = new SftpClient(CreateConnectionInfo(request.Config));
-            AttachHostKeyTrust(sftp, request.Config);
-            sftp.Connect();
-            try
+            if (!SshCliStartInfoFactory.TryCreateBoundScpUploadStartInfo(
+                    request.Config,
+                    localScript,
+                    RemoteInstallScriptPath,
+                    out var startInfo,
+                    out bindIp,
+                    out error))
             {
-                using var fs = File.OpenRead(localScript);
-                sftp.UploadFile(fs, RemoteInstallScriptPath, canOverride: true);
+                return null;
             }
-            finally
+
+            return startInfo;
+        }
+
+        var startInfo = BuildStartInfo(out var bindIp, out var buildError);
+        if (startInfo is null)
+        {
+            throw new InvalidOperationException(buildError ?? "Cannot prepare SSH/SCP command for IC1 gateway operation.");
+        }
+
+        progress?.Report(new DeploymentProgressSnapshot
+        {
+            Phase = DeploymentPhases.GatewayInstall,
+            Percent = 8,
+            Message = $"IC1 adapter IPv4 resolved as {bindIp} for installer upload"
+        });
+
+        var result = await RunCliWithHostKeyRepairAsync(
+            request.Config,
+            () =>
             {
-                if (sftp.IsConnected)
+                var psi = BuildStartInfo(out _, out var retryError);
+                return (psi, retryError);
+            },
+            line =>
+            {
+                var clean = SanitizeTerminalLine(line);
+                if (!string.IsNullOrWhiteSpace(clean))
                 {
-                    sftp.Disconnect();
+                    progress?.Report(new DeploymentProgressSnapshot
+                    {
+                        Phase = DeploymentPhases.GatewayInstall,
+                        Percent = 0,
+                        Message = $"[vps] {clean}"
+                    });
                 }
-            }
-        }, cancellationToken);
+            },
+            cancellationToken);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(FirstMeaningfulLine(result.Output, string.Empty));
+        }
     }
 
     private static string ResolveInstallerScriptPath()
@@ -451,129 +483,151 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         Action<string>? onLine,
         CancellationToken cancellationToken)
     {
-        return await Task.Run(() =>
+        var wrapped = WrapCommand(command, sudoPassword);
+        ProcessStartInfo? BuildStartInfo(out string bindIp, out string? error)
         {
-            using var ssh = new SshClient(CreateConnectionInfo(config));
-            AttachHostKeyTrust(ssh, config);
-            ssh.Connect();
-
-            try
+            if (!SshCliStartInfoFactory.TryCreateBoundSshCommandStartInfo(
+                    config,
+                    wrapped,
+                    out var startInfo,
+                    out bindIp,
+                    out error))
             {
-                var wrapped = WrapCommand(command, sudoPassword);
-                using var cmd = ssh.CreateCommand(wrapped);
-                var output = new StringBuilder();
-                var asyncResult = cmd.BeginExecute();
-
-                using var reader = new StreamReader(cmd.OutputStream, Encoding.UTF8, true, 1024, leaveOpen: true);
-                while (!asyncResult.IsCompleted || !reader.EndOfStream)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var line = reader.ReadLine();
-                    if (line is null)
-                    {
-                        Thread.Sleep(40);
-                        continue;
-                    }
-
-                    output.AppendLine(line);
-                    onLine?.Invoke(line);
-                }
-
-                cmd.EndExecute(asyncResult);
-
-                if (!string.IsNullOrWhiteSpace(cmd.Error))
-                {
-                    foreach (var line in SplitLines(cmd.Error))
-                    {
-                        output.AppendLine(line);
-                        onLine?.Invoke(line);
-                    }
-                }
-
-                var success = cmd.ExitStatus == 0;
-                return new CommandExecutionResult(success, output.ToString(), success ? string.Empty : FirstMeaningfulLine(output.ToString(), cmd.Error));
+                return null;
             }
-            finally
+
+            return startInfo;
+        }
+
+        var startInfo = BuildStartInfo(out var bindIp, out var error);
+        if (startInfo is null)
+        {
+            return new CommandExecutionResult(false, string.Empty, error ?? "Cannot prepare SSH command for IC1 gateway operation.");
+        }
+
+        onLine?.Invoke($"IC1 adapter IPv4 resolved as {bindIp} for gateway SSH operation");
+        var result = await RunCliWithHostKeyRepairAsync(
+            config,
+            () =>
             {
-                if (ssh.IsConnected)
-                {
-                    ssh.Disconnect();
-                }
-            }
-        }, cancellationToken);
+                var psi = BuildStartInfo(out _, out var retryError);
+                return (psi, retryError);
+            },
+            onLine,
+            cancellationToken);
+        var success = result.ExitCode == 0;
+        var errorMessage = success ? string.Empty : FirstMeaningfulLine(result.Output, string.Empty);
+        return new CommandExecutionResult(success, result.Output, errorMessage);
     }
 
-    private void AttachHostKeyTrust(BaseClient client, ServiceConfig config)
+    private async Task<CliExecutionResult> RunCliWithHostKeyRepairAsync(
+        ServiceConfig config,
+        Func<(ProcessStartInfo? StartInfo, string? Error)> startInfoFactory,
+        Action<string>? onLine,
+        CancellationToken cancellationToken)
     {
-        client.HostKeyReceived += (_, e) =>
+        var (startInfo, error) = startInfoFactory();
+        if (startInfo is null)
         {
-            var ok = _hostKeyTrustStore.ValidateAndRemember(config.TunnelHost.Trim(), config.TunnelSshPort, e.FingerPrint);
-            e.CanTrust = ok;
-        };
+            return new CliExecutionResult(255, error ?? "Cannot prepare SSH command for IC1 gateway operation.");
+        }
+
+        var first = await RunCliProcessAsync(startInfo, onLine, cancellationToken);
+        if (first.ExitCode == 0 || !SshCliStartInfoFactory.LooksLikeHostKeyMismatch(first.Output))
+        {
+            return first;
+        }
+
+        onLine?.Invoke("Detected SSH host-key change; removing stale known_hosts entry and retrying once.");
+        var repair = await SshCliStartInfoFactory.TryRepairKnownHostEntryAsync(config, cancellationToken);
+        onLine?.Invoke(repair.Message);
+        if (!repair.Success)
+        {
+            return first;
+        }
+
+        var (retryStartInfo, retryError) = startInfoFactory();
+        if (retryStartInfo is null)
+        {
+            var merged = string.IsNullOrWhiteSpace(retryError)
+                ? first.Output
+                : $"{first.Output}{Environment.NewLine}{retryError}";
+            return new CliExecutionResult(255, merged);
+        }
+
+        var second = await RunCliProcessAsync(retryStartInfo, onLine, cancellationToken);
+        var mergedOutput = $"{first.Output}{Environment.NewLine}{second.Output}";
+        return new CliExecutionResult(second.ExitCode, mergedOutput);
     }
 
-    private static ConnectionInfo CreateConnectionInfo(ServiceConfig config)
+    private static async Task<CliExecutionResult> RunCliProcessAsync(
+        ProcessStartInfo startInfo,
+        Action<string>? onLine,
+        CancellationToken cancellationToken)
     {
-        var host = (config.TunnelHost ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(host))
+        using var process = new Process
         {
-            throw new InvalidOperationException("Tunnel host is required.");
-        }
-
-        var user = (config.TunnelUser ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(user))
-        {
-            throw new InvalidOperationException("Tunnel user is required.");
-        }
-
-        var port = config.TunnelSshPort;
-        if (port <= 0 || port > 65535)
-        {
-            throw new InvalidOperationException("Tunnel SSH port is invalid.");
-        }
-
-        var authMethod = TunnelAuthMethods.Normalize(config.TunnelAuthMethod);
-        AuthenticationMethod method;
-        if (string.Equals(authMethod, TunnelAuthMethods.Password, StringComparison.Ordinal))
-        {
-            if (string.IsNullOrWhiteSpace(config.TunnelPassword))
-            {
-                throw new InvalidOperationException("Tunnel password is required for password authentication.");
-            }
-
-            method = new PasswordAuthenticationMethod(user, config.TunnelPassword);
-        }
-        else
-        {
-            if (string.IsNullOrWhiteSpace(config.TunnelPrivateKeyPath))
-            {
-                throw new InvalidOperationException("Tunnel private key path is required for host-key authentication.");
-            }
-
-            if (!File.Exists(config.TunnelPrivateKeyPath))
-            {
-                throw new InvalidOperationException($"Tunnel private key file not found: {config.TunnelPrivateKeyPath}");
-            }
-
-            PrivateKeyFile keyFile;
-            if (string.IsNullOrWhiteSpace(config.TunnelPrivateKeyPassphrase))
-            {
-                keyFile = new PrivateKeyFile(config.TunnelPrivateKeyPath);
-            }
-            else
-            {
-                keyFile = new PrivateKeyFile(config.TunnelPrivateKeyPath, config.TunnelPrivateKeyPassphrase);
-            }
-
-            method = new PrivateKeyAuthenticationMethod(user, keyFile);
-        }
-
-        var connection = new ConnectionInfo(host, port, user, method)
-        {
-            Timeout = TimeSpan.FromSeconds(20)
+            StartInfo = startInfo
         };
 
-        return connection;
+        if (!process.Start())
+        {
+            throw new InvalidOperationException($"Cannot start process '{startInfo.FileName}' for gateway SSH operation.");
+        }
+
+        process.StandardInput.Close();
+
+        var output = new StringBuilder();
+        var stdoutTask = PumpReaderAsync(process.StandardOutput, output, onLine, cancellationToken);
+        var stderrTask = PumpReaderAsync(process.StandardError, output, onLine, cancellationToken);
+
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+            await Task.WhenAll(stdoutTask, stderrTask);
+            return new CliExecutionResult(process.ExitCode, output.ToString());
+        }
+        catch (OperationCanceledException)
+        {
+            await StopProcessAsync(process);
+            throw;
+        }
+    }
+
+    private static async Task PumpReaderAsync(
+        StreamReader reader,
+        StringBuilder output,
+        Action<string>? onLine,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+            {
+                break;
+            }
+
+            output.AppendLine(line);
+            onLine?.Invoke(line);
+        }
+    }
+
+    private static async Task StopProcessAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            await process.WaitForExitAsync();
+        }
+        catch
+        {
+        }
     }
 
     private static string BuildInstallArgs(
@@ -587,8 +641,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             $"--tunnel-auth {ShellQuote(MapTunnelAuth(request.Config))} " +
             $"--panel-user {ShellQuote(panelUser)} " +
             $"--panel-password {ShellQuote(panelPassword)} " +
-            $"--panel-base-path {ShellQuote(panelBasePath)} " +
-            $"--bootstrap-socks-port {request.Config.BootstrapSocksRemotePort}";
+            $"--panel-base-path {ShellQuote(panelBasePath)}";
     }
 
     private static string BuildCommonArgs(GatewayDeploymentRequest request)
@@ -599,6 +652,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             "--panel-port", request.GatewayPanelPort.ToString(),
             "--backend-port", request.Config.TunnelRemotePort.ToString(),
             "--ssh-port", request.Config.TunnelSshPort.ToString(),
+            "--bootstrap-socks-port", request.Config.BootstrapSocksRemotePort.ToString(),
             "--tunnel-user", ShellQuote(request.Config.TunnelUser.Trim()),
             "--dns-mode", ShellQuote(request.GatewayDnsMode.Trim().ToLowerInvariant()),
             "--doh-endpoints", ShellQuote(request.GatewayDohEndpoints.Trim()),
@@ -800,6 +854,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
     };
 
     private sealed record CommandExecutionResult(bool Success, string Output, string ErrorMessage);
+    private sealed record CliExecutionResult(int ExitCode, string Output);
 
     private class GatewayStatusDto
     {

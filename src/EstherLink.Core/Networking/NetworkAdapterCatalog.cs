@@ -63,4 +63,37 @@ public static class NetworkAdapterCatalog
 
         return IPAddress.TryParse(adapter.IPv4Addresses[0], out ipAddress);
     }
+
+    public static bool TryGetPrimaryIpv4Gateway(int ifIndex, out IPAddress? gatewayAddress)
+    {
+        gatewayAddress = null;
+
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus == OperationalStatus.Down)
+            {
+                continue;
+            }
+
+            var properties = nic.GetIPProperties();
+            var ipv4Props = properties.GetIPv4Properties();
+            if (ipv4Props is null || ipv4Props.Index != ifIndex)
+            {
+                continue;
+            }
+
+            var gateway = properties.GatewayAddresses
+                .Select(x => x.Address)
+                .FirstOrDefault(x => x.AddressFamily == AddressFamily.InterNetwork && !IPAddress.Any.Equals(x));
+            if (gateway is null)
+            {
+                return false;
+            }
+
+            gatewayAddress = gateway;
+            return true;
+        }
+
+        return false;
+    }
 }

@@ -158,6 +158,10 @@ public partial class LicenseViewModel : ObservableObject
                 _navigationService.Navigate(RelayRoute);
             }
         }
+        catch (Exception ex)
+        {
+            Feedback = $"License transfer failed: {ex.Message}";
+        }
         finally
         {
             IsBusy = false;

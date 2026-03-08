@@ -77,8 +77,15 @@ public sealed class GatewayRuntime
     {
         lock (_sync)
         {
+            var previous = CloneConfig(_config);
             _config = CloneConfig(config);
             _status.ProxyListenPort = _config.LocalProxyListenPort;
+
+            if (RequiresTunnelRestart(previous, _config, out var changeSummary))
+            {
+                RequestTunnelRestartLocked($"Tunnel restart requested after config change: {changeSummary}.");
+            }
+
             PersistLocked();
         }
     }
@@ -87,8 +94,14 @@ public sealed class GatewayRuntime
     {
         lock (_sync)
         {
-            _config.LicenseKey = licenseKey ?? string.Empty;
-            _licenseTransferRequested = false;
+            var normalized = (licenseKey ?? string.Empty).Trim();
+            if (!string.Equals(_config.LicenseKey ?? string.Empty, normalized, StringComparison.Ordinal))
+            {
+                // Clear pending transfer only when operator actually changes the key.
+                _licenseTransferRequested = false;
+            }
+
+            _config.LicenseKey = normalized;
             PersistLocked();
         }
     }
@@ -212,9 +225,7 @@ public sealed class GatewayRuntime
     {
         lock (_sync)
         {
-            _tunnelRestartRequestVersion++;
-            _status.TunnelLastError = reason;
-            _status.BootstrapSocksLastError = reason;
+            RequestTunnelRestartLocked(reason);
         }
     }
 
@@ -291,6 +302,83 @@ public sealed class GatewayRuntime
     private void PersistLocked()
     {
         _configStore.Save(_config, _whitelistEntries);
+    }
+
+    private void RequestTunnelRestartLocked(string reason)
+    {
+        _tunnelRestartRequestVersion++;
+        _status.TunnelConnected = false;
+        _status.BootstrapSocksRemoteForwardActive = false;
+        _status.TunnelLastError = reason;
+        _status.BootstrapSocksLastError = reason;
+    }
+
+    private static bool RequiresTunnelRestart(ServiceConfig previous, ServiceConfig current, out string summary)
+    {
+        var changed = new List<string>(8);
+
+        if (previous.WhitelistAdapterIfIndex != current.WhitelistAdapterIfIndex)
+        {
+            changed.Add("IC1 adapter");
+        }
+
+        if (!string.Equals((previous.TunnelHost ?? string.Empty).Trim(), (current.TunnelHost ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            changed.Add("tunnel host");
+        }
+
+        if (previous.TunnelSshPort != current.TunnelSshPort)
+        {
+            changed.Add("SSH port");
+        }
+
+        if (previous.TunnelRemotePort != current.TunnelRemotePort)
+        {
+            changed.Add("remote data port");
+        }
+
+        if (previous.BootstrapSocksRemotePort != current.BootstrapSocksRemotePort)
+        {
+            changed.Add("remote bootstrap port");
+        }
+
+        if (previous.LocalProxyListenPort != current.LocalProxyListenPort)
+        {
+            changed.Add("local proxy port");
+        }
+
+        if (previous.BootstrapSocksLocalPort != current.BootstrapSocksLocalPort)
+        {
+            changed.Add("local bootstrap port");
+        }
+
+        if (!string.Equals((previous.TunnelUser ?? string.Empty).Trim(), (current.TunnelUser ?? string.Empty).Trim(), StringComparison.Ordinal))
+        {
+            changed.Add("tunnel user");
+        }
+
+        if (!string.Equals(TunnelAuthMethods.Normalize(previous.TunnelAuthMethod), TunnelAuthMethods.Normalize(current.TunnelAuthMethod), StringComparison.Ordinal))
+        {
+            changed.Add("auth method");
+        }
+
+        if (!string.Equals((previous.TunnelPrivateKeyPath ?? string.Empty).Trim(), (current.TunnelPrivateKeyPath ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            changed.Add("private key path");
+        }
+
+        if (!string.Equals(previous.TunnelPrivateKeyPassphrase ?? string.Empty, current.TunnelPrivateKeyPassphrase ?? string.Empty, StringComparison.Ordinal))
+        {
+            changed.Add("private key passphrase");
+        }
+
+        if (!string.Equals(previous.TunnelPassword ?? string.Empty, current.TunnelPassword ?? string.Empty, StringComparison.Ordinal))
+        {
+            changed.Add("password");
+        }
+
+        summary = changed.Count == 0 ? string.Empty : string.Join(", ", changed);
+        return changed.Count > 0;
     }
 
     private static ServiceConfig CloneConfig(ServiceConfig config)

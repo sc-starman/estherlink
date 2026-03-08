@@ -65,9 +65,6 @@ internal static class SshTunnelProcessFactory
             return false;
         }
 
-        args.Add("-b");
-        args.Add(bindIp);
-
         args.Add("-o");
         args.Add("ConnectTimeout=10");
         args.Add("-o");
@@ -80,9 +77,9 @@ internal static class SshTunnelProcessFactory
             return false;
         }
 
-        args.Add($"{config.TunnelUser.Trim()}@{config.TunnelHost.Trim()}");
         args.Add("-p");
         args.Add(config.TunnelSshPort.ToString());
+        args.Add($"{config.TunnelUser.Trim()}@{config.TunnelHost.Trim()}");
 
         var psi = new ProcessStartInfo
         {
