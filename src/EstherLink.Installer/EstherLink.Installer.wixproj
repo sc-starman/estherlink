@@ -11,6 +11,11 @@
     <PackageReference Include="WixToolset.UI.wixext" Version="6.0.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Prevent payload-copied metadata files (for UI runtime) from being compiled as WiX sources. -->
+    <Compile Remove="payload\**\*.wxs" />
+  </ItemGroup>
+
   <Target Name="PreparePayload" BeforeTargets="BeforeBuild">
     <Message Text="Preparing MSI payload at $(PayloadRoot)" Importance="high" />
     <RemoveDir Directories="$(PayloadRoot)" />

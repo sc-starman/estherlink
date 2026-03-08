@@ -47,11 +47,34 @@ internal static class SshTunnelProcessFactory
         return TryCreateStartInfo(config, args, out startInfo, out error);
     }
 
+    public static bool TryCreateRemoteCommandStartInfo(
+        ServiceConfig config,
+        string remoteCommand,
+        out ProcessStartInfo? startInfo,
+        out string? error)
+    {
+        var args = new List<string>
+        {
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new"
+        };
+
+        if (string.IsNullOrWhiteSpace(remoteCommand))
+        {
+            startInfo = null;
+            error = "Remote command is required.";
+            return false;
+        }
+
+        return TryCreateStartInfo(config, args, out startInfo, out error, remoteCommand);
+    }
+
     private static bool TryCreateStartInfo(
         ServiceConfig config,
         List<string> args,
         out ProcessStartInfo? startInfo,
-        out string? error)
+        out string? error,
+        string? remoteCommand = null)
     {
         startInfo = null;
         error = ValidateRequiredFields(config);
@@ -80,6 +103,10 @@ internal static class SshTunnelProcessFactory
         args.Add("-p");
         args.Add(config.TunnelSshPort.ToString());
         args.Add($"{config.TunnelUser.Trim()}@{config.TunnelHost.Trim()}");
+        if (!string.IsNullOrWhiteSpace(remoteCommand))
+        {
+            args.Add(remoteCommand);
+        }
 
         var psi = new ProcessStartInfo
         {

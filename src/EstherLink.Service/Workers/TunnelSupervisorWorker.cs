@@ -10,7 +10,7 @@ public sealed class TunnelSupervisorWorker : BackgroundService
 {
     private static readonly TimeSpan HealthyLoopDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ErrorLoopDelay = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan StaleForwardCooldown = TimeSpan.FromSeconds(95);
+    private static readonly TimeSpan StaleForwardCooldown = TimeSpan.FromSeconds(12);
     private static readonly TimeSpan UnestablishedGracePeriod = TimeSpan.FromSeconds(15);
 
     private readonly GatewayRuntime _runtime;
@@ -75,6 +75,14 @@ public sealed class TunnelSupervisorWorker : BackgroundService
 
                 if (_process is null || _process.HasExited)
                 {
+                    // Avoid stale "connected/forwarded" UI state while waiting for restart backoff.
+                    var snapshotBeforeRestart = _runtime.GetStatusSnapshot();
+                    var exitReason = string.IsNullOrWhiteSpace(_lastError)
+                        ? "Tunnel process is not running."
+                        : _lastError;
+                    _runtime.SetTunnelStatus(false, _lastConnectedAtUtc, _reconnectCount, exitReason);
+                    _runtime.SetBootstrapSocksStatus(snapshotBeforeRestart.BootstrapSocksListening, false, exitReason);
+
                     var retryDelay = GetRetryDelay(_reconnectCount, _lastError);
                     if (retryDelay > TimeSpan.Zero)
                     {
@@ -98,6 +106,10 @@ public sealed class TunnelSupervisorWorker : BackgroundService
                             _fileLog.Warn(_lastError);
                             await StopTunnelProcessAsync();
                         }
+                    }
+                    else
+                    {
+                        _lastConnectedAtUtc = DateTimeOffset.UtcNow;
                     }
                 }
 
@@ -132,6 +144,8 @@ public sealed class TunnelSupervisorWorker : BackgroundService
     private async Task StartTunnelProcessAsync(EstherLink.Core.Configuration.ServiceConfig config, CancellationToken cancellationToken)
     {
         await StopTunnelProcessAsync();
+
+        await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
 
         if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(config.WhitelistAdapterIfIndex, out var bindIp) || bindIp is null)
         {
@@ -180,7 +194,6 @@ public sealed class TunnelSupervisorWorker : BackgroundService
         _process.StandardInput.Close();
         _processStartedAtUtc = DateTimeOffset.UtcNow;
         _reconnectCount++;
-        _lastConnectedAtUtc = DateTimeOffset.UtcNow;
         _lastError = null;
         _fileLog.Info($"Tunnel process started. pid={_process.Id} reconnectCount={_reconnectCount}");
 
@@ -198,6 +211,10 @@ public sealed class TunnelSupervisorWorker : BackgroundService
                 {
                     _lastError = cleaned;
                     _fileLog.Warn($"Tunnel process exited. exitCode={exitCode} error={cleaned}");
+                    if (HasRemoteForwardFailure(cleaned))
+                    {
+                        await TryScheduleRemoteForwardCleanupAsync(config, CancellationToken.None);
+                    }
                     if (SshKnownHostsRepair.LooksLikeHostKeyMismatch(cleaned))
                     {
                         var repair = await SshKnownHostsRepair.TryRepairAsync(config, CancellationToken.None);
@@ -214,12 +231,153 @@ public sealed class TunnelSupervisorWorker : BackgroundService
                     _lastError = $"ssh exited with code {exitCode}.";
                     _fileLog.Warn($"Tunnel process exited. exitCode={exitCode}");
                 }
+
+                var snapshotAfterExit = _runtime.GetStatusSnapshot();
+                var exitReason = string.IsNullOrWhiteSpace(_lastError)
+                    ? "Tunnel process exited."
+                    : _lastError;
+                _runtime.SetTunnelStatus(false, _lastConnectedAtUtc, _reconnectCount, exitReason);
+                _runtime.SetBootstrapSocksStatus(snapshotAfterExit.BootstrapSocksListening, false, exitReason);
             }
             catch
             {
             }
         }, cancellationToken);
 
+    }
+
+    private async Task TryScheduleRemoteForwardCleanupAsync(
+        EstherLink.Core.Configuration.ServiceConfig config,
+        CancellationToken cancellationToken)
+    {
+        // Dedicated tunnel user only: clear stale user sessions that can keep remote -R listen ports occupied.
+        var remoteCommand =
+            "if command -v pkill >/dev/null 2>&1; then " +
+            "u=" + ShellSingleQuote(config.TunnelUser.Trim()) + "; " +
+            "nohup sh -lc 'sleep 1; pkill -KILL -u " + EscapeForSingleQuotedShell(config.TunnelUser.Trim()) + " >/dev/null 2>&1 || true' >/dev/null 2>&1 & " +
+            "echo \"Remote tunnel session cleanup scheduled for user: $u\"; " +
+            "else echo 'pkill is not available; skipping remote cleanup.'; fi";
+
+        if (!SshTunnelProcessFactory.TryCreateRemoteCommandStartInfo(config, remoteCommand, out var psi, out var error) || psi is null)
+        {
+            _fileLog.Warn($"Unable to schedule remote tunnel cleanup: {error ?? "cannot prepare ssh command."}");
+            return;
+        }
+
+        try
+        {
+            using var process = new Process { StartInfo = psi };
+            if (!process.Start())
+            {
+                _fileLog.Warn("Unable to start ssh process for remote tunnel cleanup.");
+                return;
+            }
+
+            process.StandardInput.Close();
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(12));
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+            await process.WaitForExitAsync(timeoutCts.Token);
+
+            var stdout = (await stdoutTask).Trim();
+            var stderr = (await stderrTask).Trim();
+            if (!string.IsNullOrWhiteSpace(stdout))
+            {
+                _fileLog.Info(stdout);
+            }
+
+            if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                _fileLog.Warn($"Remote tunnel cleanup stderr: {stderr}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _fileLog.Warn($"Remote tunnel cleanup request failed: {ex.Message}");
+        }
+    }
+
+    private async Task CleanupOrphanTunnelProcessesAsync(
+        EstherLink.Core.Configuration.ServiceConfig config,
+        CancellationToken cancellationToken)
+    {
+        var tunnelForwardSignature = $"127.0.0.1:{config.TunnelRemotePort}:127.0.0.1:{config.LocalProxyListenPort}";
+        var bootstrapForwardSignature = $"127.0.0.1:{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}";
+        var tunnelHost = (config.TunnelHost ?? string.Empty).Trim();
+        var tunnelUser = (config.TunnelUser ?? string.Empty).Trim();
+        var command =
+            "$killed = @(); " +
+            "$matched = @(); " +
+            "$forwardA = '" + EscapePowerShellSingleQuoted(tunnelForwardSignature) + "'; " +
+            "$forwardB = '" + EscapePowerShellSingleQuoted(bootstrapForwardSignature) + "'; " +
+            "$forwardALegacy = ':" + config.TunnelRemotePort + ":127.0.0.1:" + config.LocalProxyListenPort + "'; " +
+            "$forwardBLegacy = ':" + config.BootstrapSocksRemotePort + ":127.0.0.1:" + config.BootstrapSocksLocalPort + "'; " +
+            "$targetHost = '" + EscapePowerShellSingleQuoted(tunnelHost) + "'; " +
+            "$targetUser = '" + EscapePowerShellSingleQuoted(tunnelUser) + "'; " +
+            "Get-CimInstance Win32_Process -Filter \"Name = 'ssh.exe'\" | " +
+            "Where-Object { " +
+            "  $_.CommandLine -and " +
+            "  (" +
+            "    $_.CommandLine -like ('*' + $forwardA + '*') -or " +
+            "    $_.CommandLine -like ('*' + $forwardB + '*') -or " +
+            "    $_.CommandLine -like ('*' + $forwardALegacy + '*') -or " +
+            "    $_.CommandLine -like ('*' + $forwardBLegacy + '*') -or " +
+            "    (" +
+            "      $_.CommandLine -like '* -R *' -and " +
+            "      $_.CommandLine -like ('*' + $targetUser + '@' + $targetHost + '*')" +
+            "    )" +
+            "  )" +
+            "} | " +
+            "ForEach-Object { $matched += $_.ProcessId; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; if ($?) { $killed += $_.ProcessId } }; " +
+            "Write-Output ('Stale ssh cleanup: matched=' + $matched.Count + ', killed=' + $killed.Count); " +
+            "if ($killed.Count -gt 0) { Write-Output ('Killed stale tunnel ssh process IDs: ' + ($killed -join ', ')) }";
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "powershell",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("-NoLogo");
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-Command");
+        psi.ArgumentList.Add(command);
+
+        try
+        {
+            using var process = new Process { StartInfo = psi };
+            if (!process.Start())
+            {
+                return;
+            }
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+
+            var stdout = (await stdoutTask).Trim();
+            var stderr = (await stderrTask).Trim();
+
+            if (!string.IsNullOrWhiteSpace(stdout))
+            {
+                _fileLog.Info(stdout);
+            }
+
+            if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                _fileLog.Warn($"Stale tunnel cleanup stderr: {stderr}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _fileLog.Warn($"Failed to cleanup stale tunnel ssh processes: {ex.Message}");
+        }
     }
 
     private async Task StopTunnelProcessAsync()
@@ -277,6 +435,21 @@ public sealed class TunnelSupervisorWorker : BackgroundService
         return error.Contains("remote port forwarding failed", StringComparison.OrdinalIgnoreCase) ||
                error.Contains("forwarding failed", StringComparison.OrdinalIgnoreCase) ||
                error.Contains("administratively prohibited", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string EscapePowerShellSingleQuoted(string value)
+    {
+        return (value ?? string.Empty).Replace("'", "''", StringComparison.Ordinal);
+    }
+
+    private static string ShellSingleQuote(string value)
+    {
+        return "'" + EscapeForSingleQuotedShell(value) + "'";
+    }
+
+    private static string EscapeForSingleQuotedShell(string value)
+    {
+        return (value ?? string.Empty).Replace("'", "'\\''", StringComparison.Ordinal);
     }
 
     private static async Task<(bool Success, string Error)> ProbeSshReachabilityFromIc1Async(

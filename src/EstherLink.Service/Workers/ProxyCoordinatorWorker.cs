@@ -108,7 +108,11 @@ public sealed class ProxyCoordinatorWorker : BackgroundService
                 await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, stoppingToken);
                 await _socksEngine.EnsureRunningAsync(config.BootstrapSocksLocalPort, stoppingToken);
                 _runtime.SetProxyRunning(true, config.LocalProxyListenPort);
-                _runtime.SetBootstrapSocksStatus(true, _runtime.GetStatusSnapshot().TunnelConnected, null);
+                var runningStatus = _runtime.GetStatusSnapshot();
+                _runtime.SetBootstrapSocksStatus(
+                    true,
+                    runningStatus.BootstrapSocksRemoteForwardActive,
+                    runningStatus.BootstrapSocksLastError);
 
                 await RunBootstrapSocksWatchdogAsync(config, stoppingToken);
                 await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);

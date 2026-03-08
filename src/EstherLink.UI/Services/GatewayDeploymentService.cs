@@ -653,6 +653,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             "--backend-port", request.Config.TunnelRemotePort.ToString(),
             "--ssh-port", request.Config.TunnelSshPort.ToString(),
             "--bootstrap-socks-port", request.Config.BootstrapSocksRemotePort.ToString(),
+            "--vps-ip", ShellQuote(request.Config.TunnelHost.Trim()),
             "--tunnel-user", ShellQuote(request.Config.TunnelUser.Trim()),
             "--dns-mode", ShellQuote(request.GatewayDnsMode.Trim().ToLowerInvariant()),
             "--doh-endpoints", ShellQuote(request.GatewayDohEndpoints.Trim()),

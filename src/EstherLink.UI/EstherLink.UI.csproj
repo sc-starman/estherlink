@@ -15,6 +15,10 @@
              Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_3xui.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_vps_3xui.sh" />
+    <Content Include="..\EstherLink.Installer\Product.wxs"
+             Condition="Exists('..\\EstherLink.Installer\\Product.wxs')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="InstallerMetadata\\Product.metadata.xml" />
   </ItemGroup>
 
   <ItemGroup>

@@ -3,7 +3,7 @@
   <Package
     Name="OmniRelay"
     Manufacturer="OmniRelay"
-    Version="1.34.0"
+    Version="1.34.11"
     Language="1033"
     UpgradeCode="{95EE2733-FDA4-4B0A-91CA-43D42B3E91E7}"
     Scope="perMachine">

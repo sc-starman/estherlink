@@ -4,6 +4,8 @@ using EstherLink.UI.Models;
 using EstherLink.UI.Services;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
+using System.Text.RegularExpressions;
 using System.Windows.Threading;
 
 namespace EstherLink.UI.ViewModels;
@@ -58,6 +60,9 @@ public partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     private bool compactMode;
+
+    [ObservableProperty]
+    private string sidebarVersionText = $"Version {ResolveInstallerPackageVersion()}";
 
     public async Task InitializeAsync()
     {
@@ -208,6 +213,37 @@ public partial class MainWindowViewModel : ObservableObject
             item.IsEnabled = unlocked ||
                              string.Equals(item.Item.Route, LicenseRoute, StringComparison.OrdinalIgnoreCase) ||
                              string.Equals(item.Item.Route, "relay", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private static string ResolveInstallerPackageVersion()
+    {
+        try
+        {
+            var metadataDir = Path.Combine(AppContext.BaseDirectory, "InstallerMetadata");
+            var metadataPath = Path.Combine(metadataDir, "Product.metadata.xml");
+            if (!File.Exists(metadataPath))
+            {
+                // Backward-compatibility for existing installs built before metadata filename change.
+                metadataPath = Path.Combine(metadataDir, "Product.wxs");
+            }
+
+            if (!File.Exists(metadataPath))
+            {
+                return "unknown";
+            }
+
+            var contents = File.ReadAllText(metadataPath);
+            var match = Regex.Match(
+                contents,
+                "<Package\\b[^>]*\\bVersion\\s*=\\s*\"([^\"]+)\"",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+            return match.Success ? match.Groups[1].Value : "unknown";
+        }
+        catch
+        {
+            return "unknown";
         }
     }
 }

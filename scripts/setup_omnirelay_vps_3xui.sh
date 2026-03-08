@@ -61,7 +61,7 @@ Options:
   --public-port <port>          Public client ingress port for 3x-ui/Xray inbound (default: ${PUBLIC_PORT})
   --panel-port <port>           3x-ui panel HTTP port (default: ${PANEL_PORT})
   --backend-port <port>         Loopback port for reverse tunnel endpoint (default: ${BACKEND_PORT})
-  --ssh-port <port>             SSH port exposed on VPS (default: ${SSH_PORT})
+  --ssh-port <port>             SSH port used by the Windows client to connect to VPS (default: ${SSH_PORT}); does not modify local sshd listen port
   --tunnel-user <name>          SSH tunnel user (default: ${TUNNEL_USER})
   --tunnel-auth <method>        host_key | password | both (default: ${TUNNEL_AUTH_METHOD})
   --bootstrap-socks-port <port> VPS loopback SOCKS5 port used for bootstrap install traffic (default: ${BOOTSTRAP_SOCKS_PORT})
@@ -274,12 +274,44 @@ setup_tunnel_user() {
   chmod 0600 "/home/${TUNNEL_USER}/.ssh/authorized_keys"
 
   if [[ -n "$PUBKEY" ]]; then
+    local auth_file="/home/${TUNNEL_USER}/.ssh/authorized_keys"
+    local key_blob=""
+    key_blob="$(printf '%s' "$PUBKEY" | awk '{print $2}')"
+    if [[ -n "$key_blob" ]]; then
+      local tmp_auth
+      tmp_auth="$(mktemp)"
+      awk -v blob="$key_blob" '
+        function keyblob(line, n, i, t) {
+          n = split(line, t, /[[:space:]]+/)
+          for (i = 1; i <= n; i++) {
+            if (t[i] ~ /^(ssh-|ecdsa-|sk-)/) {
+              if (i + 1 <= n) {
+                return t[i + 1]
+              }
+              return ""
+            }
+          }
+          return ""
+        }
+        {
+          if (keyblob($0) != blob) {
+            print $0
+          }
+        }
+      ' "$auth_file" > "$tmp_auth"
+      cat "$tmp_auth" > "$auth_file"
+      rm -f "$tmp_auth"
+    fi
+
     local restricted_key
-    restricted_key="restrict,port-forwarding,permitlisten=\"127.0.0.1:${BACKEND_PORT}\",permitlisten=\"127.0.0.1:${BOOTSTRAP_SOCKS_PORT}\" ${PUBKEY}"
-    if ! grep -Fqx "$restricted_key" "/home/${TUNNEL_USER}/.ssh/authorized_keys"; then
-      printf '%s\n' "$restricted_key" >> "/home/${TUNNEL_USER}/.ssh/authorized_keys"
+    restricted_key="restrict,port-forwarding ${PUBKEY}"
+    if ! grep -Fqx "$restricted_key" "$auth_file"; then
+      printf '%s\n' "$restricted_key" >> "$auth_file"
       log "Added provided SSH public key for ${TUNNEL_USER}."
     fi
+
+    chown "$TUNNEL_USER:$TUNNEL_USER" "$auth_file"
+    chmod 0600 "$auth_file"
   fi
 
   if [[ "$TUNNEL_AUTH_METHOD" == "host_key" ]]; then
@@ -319,7 +351,9 @@ configure_sshd() {
 
   local content
   content="# Managed by ${SCRIPT_NAME}
-Port ${SSH_PORT}
+# NOTE: We intentionally do not set 'Port' here.
+# In many deployments external SSH port != VPS internal sshd port
+# (NAT/port-forwarding). Forcing Port from UI value would break access.
 AllowTcpForwarding yes
 GatewayPorts no
 PermitTunnel no
@@ -335,8 +369,7 @@ ${auth_block}
     AllowTcpForwarding remote
     GatewayPorts no
     PermitTunnel no
-    PermitListen 127.0.0.1:${BACKEND_PORT}
-    PermitListen 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}
+    PermitListen any
 "
 
   local changed=0
@@ -382,6 +415,7 @@ detect_vps_ip() {
 
 configure_panel_credentials() {
   progress 68 "Configuring 3x-ui panel credentials"
+  local canonical_base_path panel_probe_code
 
   if [[ -z "$PANEL_USER" ]]; then
     PANEL_USER="omniadmin_$(random_string 6)"
@@ -396,13 +430,20 @@ configure_panel_credentials() {
   PANEL_BASE_PATH="${PANEL_BASE_PATH#/}"
   PANEL_BASE_PATH="${PANEL_BASE_PATH%/}"
   [[ -n "$PANEL_BASE_PATH" ]] || die "Panel base path cannot be empty."
+  canonical_base_path="${PANEL_BASE_PATH}"
 
   /usr/local/x-ui/x-ui setting \
     -username "$PANEL_USER" \
     -password "$PANEL_PASSWORD" \
     -port "$PANEL_PORT" \
-    -webBasePath "$PANEL_BASE_PATH" \
+    -webBasePath "$canonical_base_path" \
     -listenIP "0.0.0.0" >/dev/null
+
+  # Best-effort local probe so operators can distinguish path mismatch from network/firewall issues.
+  panel_probe_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${PANEL_PORT}${canonical_base_path}" || true)"
+  if [[ "$panel_probe_code" == "404" || "$panel_probe_code" == "000" || -z "$panel_probe_code" ]]; then
+    log "WARNING: Panel local probe returned HTTP ${panel_probe_code} at http://127.0.0.1:${PANEL_PORT}${canonical_base_path}"
+  fi
 }
 
 disable_panel_tls() {
