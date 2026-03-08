@@ -10,7 +10,7 @@ PUBLIC_PORT=443
 PANEL_PORT=2054
 BACKEND_PORT=15000
 SSH_PORT=22
-TUNNEL_USER="estherlink"
+TUNNEL_USER="omnirelay"
 TUNNEL_AUTH_METHOD="both"
 BOOTSTRAP_SOCKS_PORT=16080
 PROXY_CHECK_URL="https://deb.debian.org/"
@@ -322,7 +322,7 @@ setup_tunnel_user() {
 configure_sshd() {
   progress 48 "Configuring sshd for reverse tunnel"
 
-  local sshd_dropin="/etc/ssh/sshd_config.d/99-estherlink.conf"
+  local sshd_dropin="/etc/ssh/sshd_config.d/99-omnirelay.conf"
   local auth_block=""
 
   case "$TUNNEL_AUTH_METHOD" in
@@ -1132,7 +1132,7 @@ uninstall_impl() {
   rm -f /usr/local/sbin/omnirelay-gatewayctl
 
   progress 70 "Cleaning managed sshd drop-in"
-  rm -f /etc/ssh/sshd_config.d/99-estherlink.conf
+  rm -f /etc/ssh/sshd_config.d/99-omnirelay.conf
   sshd -t || true
   if [[ -n "$SSH_SERVICE" ]]; then
     systemctl restart "$SSH_SERVICE" || true

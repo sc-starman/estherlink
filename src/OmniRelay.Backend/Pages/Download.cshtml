@@ -1,0 +1,100 @@
+@page "/download"
+@model OmniRelay.Backend.Pages.DownloadModel
+@{
+    ViewData["Title"] = "Download";
+}
+
+<section class="max-w-7xl mx-auto px-4 py-10 space-y-10">
+    <header class="space-y-3">
+        <p class="text-cyan-300 uppercase tracking-[0.18em] text-xs font-semibold">OmniRelay Downloads</p>
+        <h1 class="text-4xl md:text-5xl font-bold leading-tight">Get The Latest OmniRelay Desktop App</h1>
+        <p class="text-slate-300 max-w-3xl">
+            Download the current stable release, verify integrity, and launch the Windows UI to manage Relay and Gateway workflows.
+            Linux desktop package is planned and will be published here when available.
+        </p>
+    </header>
+
+    <div class="grid gap-6 md:grid-cols-2">
+        <article class="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-4">
+            <div class="flex items-center justify-between gap-4">
+                <h2 class="text-2xl font-semibold">Windows</h2>
+                <span class="inline-flex items-center rounded-full border border-cyan-400/40 px-3 py-1 text-xs text-cyan-300">
+                    Stable
+                </span>
+            </div>
+
+            @if (Model.WindowsRelease is null)
+            {
+                <p class="text-slate-300">No published stable build is available yet.</p>
+            }
+            else
+            {
+                <ul class="text-sm text-slate-300 space-y-2">
+                    <li><span class="text-slate-400">Version:</span> @Model.WindowsRelease.Version</li>
+                    <li><span class="text-slate-400">Published:</span> @Model.WindowsRelease.PublishedAt.ToString("u")</li>
+                    <li class="break-all"><span class="text-slate-400">SHA-256:</span> <span class="font-mono text-xs">@Model.WindowsRelease.Sha256</span></li>
+                </ul>
+
+                <a href="/download/windows"
+                   class="inline-flex items-center justify-center rounded-md bg-cyan-500 px-5 py-2.5 font-semibold text-slate-950 hover:bg-cyan-400">
+                    Download For Windows
+                </a>
+
+                @if (!string.IsNullOrWhiteSpace(Model.WindowsRelease.Notes))
+                {
+                    <p class="text-sm text-slate-300 whitespace-pre-wrap">@Model.WindowsRelease.Notes</p>
+                }
+            }
+        </article>
+
+        <article class="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-4">
+            <div class="flex items-center justify-between gap-4">
+                <h2 class="text-2xl font-semibold">Linux</h2>
+                <span class="inline-flex items-center rounded-full border border-amber-400/40 px-3 py-1 text-xs text-amber-300">
+                    Coming Soon
+                </span>
+            </div>
+            <p class="text-slate-300">
+                Linux desktop package distribution is in progress. Current production workflow is the Windows UI controlling the Relay service and VPS gateway.
+            </p>
+            <button type="button"
+                    class="inline-flex items-center justify-center rounded-md border border-slate-700 px-5 py-2.5 text-slate-400 cursor-not-allowed"
+                    disabled>
+                Linux Download (Coming Soon)
+            </button>
+        </article>
+    </div>
+
+    <section class="grid gap-6 lg:grid-cols-2">
+        <article class="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-3">
+            <h3 class="text-xl font-semibold">Recommended Environment</h3>
+            <ul class="text-slate-300 space-y-2 text-sm">
+                <li>Windows 11 (64-bit) for best performance and compatibility.</li>
+                <li>At least 8 GB RAM and 2 CPU cores available.</li>
+                <li>Stable network connectivity for Relay and tunnel operations.</li>
+                <li>Administrator rights for installing/updating the local Windows service.</li>
+            </ul>
+        </article>
+
+        <article class="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-3">
+            <h3 class="text-xl font-semibold">Minimum Requirements</h3>
+            <ul class="text-slate-300 space-y-2 text-sm">
+                <li>Windows 10 (64-bit), latest updates recommended.</li>
+                <li>4 GB RAM minimum.</li>
+                <li>.NET runtime included via installer prerequisites.</li>
+                <li>Outbound access from designated network adapter for bootstrap and license checks.</li>
+            </ul>
+        </article>
+    </section>
+
+    <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-4">
+        <h3 class="text-xl font-semibold">Quick Installation Guidance</h3>
+        <ol class="list-decimal list-inside text-slate-300 space-y-2 text-sm">
+            <li>Download the latest MSI from the Windows card above.</li>
+            <li>Verify file hash with the displayed SHA-256 before installation.</li>
+            <li>Run installer as Administrator, then launch OmniRelay UI.</li>
+            <li>Activate license, configure Relay, then configure Gateway and run bootstrap check.</li>
+            <li>Use the in-app <a class="text-cyan-300 hover:text-cyan-200" href="/docs">/docs guide</a> for complete workflow details.</li>
+        </ol>
+    </section>
+</section>

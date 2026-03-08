@@ -1,6 +1,6 @@
-# EstherLink
+# OmniRelay
 
-EstherLink is a Windows HTTP CONNECT egress router behind a static-IP VPS ingress.
+OmniRelay is a Windows HTTP CONNECT egress router behind a static-IP VPS ingress.
 
 Traffic flow:
 - External client connects to VPS public TCP port (for example `443`).
@@ -11,21 +11,21 @@ Traffic flow:
 
 ## Projects
 
-- `src/EstherLink.Core`
+- `src/OmniRelay.Core`
   - Shared models: config, whitelist CIDR/IP parsing, status, adapter enumeration.
-- `src/EstherLink.Ipc`
+- `src/OmniRelay.Ipc`
   - Named pipe protocol + JSON client/server helpers.
-- `src/EstherLink.Service`
+- `src/OmniRelay.Service`
   - Windows Service host + CONNECT proxy engine + licensing + persistence.
-- `src/EstherLink.UI`
+- `src/OmniRelay.UI`
   - WPF control panel for configuration, whitelist, license verify, service control.
-- `src/EstherLink.Installer`
+- `src/OmniRelay.Installer`
   - WiX-based MSI installer packaging UI + Service for Windows.
-- `src/EstherLink.Backend`
+- `src/OmniRelay.Backend`
   - .NET 8 minimal API for licensing, whitelist updates, app releases.
-- `src/EstherLink.Backend.Contracts`
+- `src/OmniRelay.Backend.Contracts`
   - Backend request/response DTO contracts.
-- `tests/EstherLink.Backend.IntegrationTests`
+- `tests/OmniRelay.Backend.IntegrationTests`
   - Integration tests for backend license verify, whitelist diff, and app latest.
 
 ## Windows MVP (UI + Service)
@@ -46,8 +46,8 @@ Implemented:
   - Encrypted DPAPI cache fallback if online check fails and cached signed license is still valid
 - Config schema migration (`SchemaVersion=1`) for persisted config upgrades.
 - Optional tunnel supervisor worker (`ssh -NT -R ...`) with reconnect/backoff and tunnel health status.
-- Persistent config at `C:\ProgramData\EstherLink\config.json` with encrypted license key.
-- Service log at `C:\ProgramData\EstherLink\logs\service.log`.
+- Persistent config at `C:\ProgramData\OmniRelay\config.json` with encrypted license key.
+- Service log at `C:\ProgramData\OmniRelay\logs\service.log`.
 
 UI redesign (Tailwind-inspired WPF shell):
 - MVVM + `Frame/Page` navigation with `CommunityToolkit.Mvvm`.
@@ -65,7 +65,7 @@ UI redesign (Tailwind-inspired WPF shell):
   - Logs
   - Settings
 - Runtime theme switching (Dark/Light) with persisted preference in:
-  - `%AppData%\EstherLink\ui.settings.json`
+  - `%AppData%\OmniRelay\ui.settings.json`
 - Busy-state command gating to prevent duplicate action clicks.
 - License page visual direction aligned to the provided Tailwind concept.
 
@@ -85,7 +85,7 @@ Capabilities:
 
 ## OmniRelay Web (Landing + Dashboard)
 
-`src/EstherLink.Backend` now hosts:
+`src/OmniRelay.Backend` now hosts:
 - Public landing page at `/` (OmniRelay marketing copy).
 - Account auth pages:
   - `GET|POST /account/register`
@@ -142,8 +142,8 @@ Admin endpoints (`X-ADMIN-API-KEY` required):
 
 ```powershell
 dotnet tool restore
-dotnet restore EstherLink.sln
-dotnet build EstherLink.sln -c Debug
+dotnet restore OmniRelay.sln
+dotnet build OmniRelay.sln -c Debug
 ```
 
 ## Run Windows Components (Developer)
@@ -151,13 +151,13 @@ dotnet build EstherLink.sln -c Debug
 Terminal 1:
 
 ```powershell
-dotnet run --project src/EstherLink.Service
+dotnet run --project src/OmniRelay.Service
 ```
 
 Terminal 2:
 
 ```powershell
-dotnet run --project src/EstherLink.UI
+dotnet run --project src/OmniRelay.UI
 ```
 
 In UI:
@@ -172,7 +172,7 @@ In UI:
 ## Publish Windows Service
 
 ```powershell
-dotnet publish src/EstherLink.Service -c Release -r win-x64 --self-contained false -o .\out\service
+dotnet publish src/OmniRelay.Service -c Release -r win-x64 --self-contained false -o .\out\service
 ```
 
 ## Build Windows MSI (UI + Service)
@@ -186,13 +186,13 @@ MSI includes the VPS gateway setup script used by the UI for online gateway inst
 Output:
 
 ```text
-<repo>\src\EstherLink.Installer\bin\Release\OmniRelay.msi
+<repo>\src\OmniRelay.Installer\bin\Release\OmniRelay.msi
 ```
 
 MSI behavior:
 1. Installs UI binaries under `Program Files\OmniRelay\UI`.
 2. Installs Service binaries under `Program Files\OmniRelay\Service`.
-3. Registers and starts `EstherLink.Service` (DisplayName: `OmniRelay Service`).
+3. Registers and starts `OmniRelay.Service` (DisplayName: `OmniRelay Service`).
 4. Creates Start Menu shortcut for OmniRelay UI.
 
 Installer packaging note:
@@ -273,13 +273,13 @@ MAIL_SERVICE_RETRY_COUNT=1
 ## Run Backend Locally (without Docker)
 
 ```powershell
-dotnet run --project src/EstherLink.Backend
+dotnet run --project src/OmniRelay.Backend
 ```
 
 For Tailwind CSS during web development:
 
 ```powershell
-cd src/EstherLink.Backend
+cd src/OmniRelay.Backend
 npm install
 npm run watch:css
 ```
@@ -312,13 +312,13 @@ Seed includes:
 ## Backend Integration Tests
 
 ```powershell
-dotnet test tests/EstherLink.Backend.IntegrationTests/EstherLink.Backend.IntegrationTests.csproj -c Debug
+dotnet test tests/OmniRelay.Backend.IntegrationTests/OmniRelay.Backend.IntegrationTests.csproj -c Debug
 ```
 
 ## UI ViewModel Tests
 
 ```powershell
-dotnet test tests/EstherLink.UI.Tests/EstherLink.UI.Tests.csproj -c Debug
+dotnet test tests/OmniRelay.UI.Tests/OmniRelay.UI.Tests.csproj -c Debug
 ```
 
 ## CI
@@ -353,12 +353,12 @@ Primary ingress path (current):
 
 Helper setup scripts:
 - Primary control script (command-mode): `scripts/setup_omnirelay_vps_3xui.sh`
-- Rollback/legacy: `scripts/setup_estherlink_vps.sh`
+- Rollback/legacy: `scripts/setup_OmniRelay_vps.sh`
 
 Example (manual online install using SOCKS bootstrap):
 
 ```bash
-sudo bash scripts/setup_omnirelay_vps_3xui.sh install --public-port 443 --panel-port 2054 --backend-port 15000 --ssh-port 22 --tunnel-user estherlink --tunnel-auth host_key --bootstrap-socks-port 16080 --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
+sudo bash scripts/setup_omnirelay_vps_3xui.sh install --public-port 443 --panel-port 2054 --backend-port 15000 --ssh-port 22 --tunnel-user OmniRelay --tunnel-auth host_key --bootstrap-socks-port 16080 --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
 ```
 
 DNS-through-tunnel commands:

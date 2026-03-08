@@ -1,0 +1,47 @@
+@page "/dashboard/trial"
+@model OmniRelay.Backend.Pages.App.FreeTrialModel
+@{
+    ViewData["Title"] = "Free Trial";
+    ViewData["DashboardNav"] = "trial";
+}
+
+<div class="max-w-7xl mx-auto px-4 py-10 grid md:grid-cols-[240px_1fr] gap-6">
+    <partial name="_DashboardSidebar" view-data="ViewData" />
+
+    <section class="space-y-6">
+        <div>
+            <h1 class="text-3xl font-bold">Free Trial</h1>
+            <p class="text-slate-400 mt-1">One trial per account. Trial licenses are single-device only.</p>
+        </div>
+
+        <article class="rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-4">
+            <h2 class="text-xl font-semibold">Trial Access</h2>
+            <p class="text-sm text-slate-300">
+                Trial policy: one license key per account and one active device at a time. If you move to another device,
+                a transfer is required and counts against your yearly transfer limit.
+            </p>
+
+            @if (Model.HasIssuedTrial)
+            {
+                <div class="rounded-lg border border-slate-700 bg-slate-950 p-4 space-y-3">
+                    <p class="text-xs text-slate-400 uppercase">Issued Trial Key</p>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <code class="px-3 py-2 rounded bg-slate-800 text-cyan-300">@Model.TrialLicenseKey</code>
+                        <button class="copy-license px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-sm" data-key="@Model.TrialLicenseKey">Copy</button>
+                    </div>
+                    <p class="text-sm text-slate-300">
+                        Created: @(Model.TrialCreatedAt?.ToString("u") ?? "n/a") |
+                        Expires: @(Model.TrialExpiresAt?.ToString("u") ?? "n/a")
+                    </p>
+                </div>
+            }
+            else
+            {
+                <button type="button" data-action="start-trial" class="px-4 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">
+                    Start 2-Day Trial
+                </button>
+                <div id="trial-result" class="text-sm text-slate-300"></div>
+            }
+        </article>
+    </section>
+</div>

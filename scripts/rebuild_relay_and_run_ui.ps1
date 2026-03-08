@@ -1,7 +1,7 @@
 param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Debug",
-    [string]$ServiceName = "EstherLink.Service",
+    [string]$ServiceName = "OmniRelay.Service",
     [string]$ServiceDisplayName = "OmniRelay Service",
     [switch]$SkipUiLaunch,
     [switch]$Elevated
@@ -53,7 +53,7 @@ function Ensure-Elevated {
 
 function Stop-UiProcesses {
     Write-Step "Stopping running UI processes"
-    Get-Process -Name "EstherLink.UI" -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name "OmniRelay.UI" -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
 function Remove-ServiceIfExists {
@@ -88,10 +88,10 @@ function New-RelayService {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$serviceProj = Join-Path $repoRoot "src\EstherLink.Service\EstherLink.Service.csproj"
-$uiProj = Join-Path $repoRoot "src\EstherLink.UI\EstherLink.UI.csproj"
-$serviceExe = Join-Path $repoRoot "src\EstherLink.Service\bin\$Configuration\net8.0-windows\EstherLink.Service.exe"
-$uiExe = Join-Path $repoRoot "src\EstherLink.UI\bin\$Configuration\net8.0-windows\EstherLink.UI.exe"
+$serviceProj = Join-Path $repoRoot "src\OmniRelay.Service\OmniRelay.Service.csproj"
+$uiProj = Join-Path $repoRoot "src\OmniRelay.UI\OmniRelay.UI.csproj"
+$serviceExe = Join-Path $repoRoot "src\OmniRelay.Service\bin\$Configuration\net8.0-windows\OmniRelay.Service.exe"
+$uiExe = Join-Path $repoRoot "src\OmniRelay.UI\bin\$Configuration\net8.0-windows\OmniRelay.UI.exe"
 
 Ensure-Elevated
 Assert-Admin

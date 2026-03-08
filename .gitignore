@@ -14,11 +14,11 @@
 [Ee]xt/
 [Ll]og/
 [Ll]ogs/
-src/EstherLink.Installer/payload/
+src/OmniRelay.Installer/payload/
 .artifacts/
-src/EstherLink.UI/Assets/GatewayBundle/*.tar.gz
-src/EstherLink.UI/Assets/GatewayBundle/*.sha256
-src/EstherLink.Backend/data/installers/
+src/OmniRelay.UI/Assets/GatewayBundle/*.tar.gz
+src/OmniRelay.UI/Assets/GatewayBundle/*.sha256
+src/OmniRelay.Backend/data/installers/
 
 # MSBuild Binary and Structured Log
 *.binlog

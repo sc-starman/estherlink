@@ -6,8 +6,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$installerProject = Join-Path $root "src\EstherLink.Installer\EstherLink.Installer.wixproj"
-$productWxsPath = Join-Path $root "src\EstherLink.Installer\Product.wxs"
+$installerProject = Join-Path $root "src\OmniRelay.Installer\OmniRelay.Installer.wixproj"
+$productWxsPath = Join-Path $root "src\OmniRelay.Installer\Product.wxs"
 
 function Increment-InstallerPatchVersion {
     param([Parameter(Mandatory = $true)][string]$FilePath)
@@ -46,13 +46,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "MSI build failed with exit code $LASTEXITCODE."
 }
 
-$msiCandidates = Get-ChildItem -Path (Join-Path $root "src\EstherLink.Installer\bin\$Configuration") -Filter *.msi -File -ErrorAction SilentlyContinue
+$msiCandidates = Get-ChildItem -Path (Join-Path $root "src\OmniRelay.Installer\bin\$Configuration") -Filter *.msi -File -ErrorAction SilentlyContinue
 if (-not $msiCandidates) {
-    $msiCandidates = Get-ChildItem -Path (Join-Path $root "src\EstherLink.Installer\bin") -Filter *.msi -File -Recurse
+    $msiCandidates = Get-ChildItem -Path (Join-Path $root "src\OmniRelay.Installer\bin") -Filter *.msi -File -Recurse
 }
 
 if (-not $msiCandidates) {
-    throw "MSI not found under src\\EstherLink.Installer\\bin."
+    throw "MSI not found under src\\OmniRelay.Installer\\bin."
 }
 
 $msiPath = ($msiCandidates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName

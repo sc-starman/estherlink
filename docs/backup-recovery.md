@@ -9,7 +9,7 @@
 
 ## Backup Command (Example)
 ```bash
-pg_dump -Fc -h <HOST> -U <USER> -d estherlink -f estherlink_$(date -u +%Y%m%dT%H%M%SZ).dump
+pg_dump -Fc -h <HOST> -U <USER> -d omnirelay -f omnirelay_$(date -u +%Y%m%dT%H%M%SZ).dump
 ```
 
 ## WAL Archiving (Example Parameters)
@@ -20,7 +20,7 @@ pg_dump -Fc -h <HOST> -U <USER> -d estherlink -f estherlink_$(date -u +%Y%m%dT%H
 ## Restore Drill (Monthly)
 1. Provision clean Postgres instance.
 2. Restore latest full backup:
-   - `pg_restore -h <HOST> -U <USER> -d estherlink --clean --if-exists <backup.dump>`
+   - `pg_restore -h <HOST> -U <USER> -d omnirelay --clean --if-exists <backup.dump>`
 3. Apply WAL up to target point-in-time if needed.
 4. Run application smoke tests:
    - `GET /health/ready`

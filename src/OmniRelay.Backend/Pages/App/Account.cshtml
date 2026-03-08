@@ -1,0 +1,36 @@
+@page "/app/account"
+@model OmniRelay.Backend.Pages.App.AccountModel
+@{
+    ViewData["Title"] = "Account";
+    ViewData["DocumentationUrl"] = Model.DocumentationUrl;
+}
+
+<div class="max-w-3xl mx-auto px-4 py-10 space-y-6">
+    <h1 class="text-3xl font-bold">Account</h1>
+
+    <article class="rounded-xl border border-slate-800 bg-slate-900 p-6">
+        <dl class="grid sm:grid-cols-2 gap-4 text-sm">
+            <div>
+                <dt class="text-slate-400">Email</dt>
+                <dd class="text-lg">@Model.Email</dd>
+            </div>
+            <div>
+                <dt class="text-slate-400">Created At (UTC)</dt>
+                <dd class="text-lg">@Model.CreatedAtUtc</dd>
+            </div>
+            <div>
+                <dt class="text-slate-400">Trial Used</dt>
+                <dd class="text-lg">@(Model.HasTrial ? "Yes" : "No")</dd>
+            </div>
+            <div>
+                <dt class="text-slate-400">Paid Licenses</dt>
+                <dd class="text-lg">@Model.PaidLicenseCount</dd>
+            </div>
+        </dl>
+
+        <form method="post" asp-page="/Account/Logout" class="mt-6">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700">Logout</button>
+        </form>
+    </article>
+</div>

@@ -1,7 +1,7 @@
-# EstherLink Production Runbook
+# OmniRelay Production Runbook
 
 ## Scope
-- Backend API (`src/EstherLink.Backend`) in single-region production.
+- Backend API (`src/OmniRelay.Backend`) in single-region production.
 - Windows Service/UI data plane.
 - Customer/self-hosted VPS ingress.
 
@@ -35,7 +35,7 @@
 1. Inspect service status via UI `TunnelConnected/TunnelLastError`.
 2. Validate SSH binary availability and key path.
 3. Validate VPS `sshd` + `x-ui` listeners and firewall.
-4. Confirm remote port forwarding is accepted for `estherlink` user.
+4. Confirm remote port forwarding is accepted for `OmniRelay` user.
 
 ### Gateway Deployment Failures (VPS from UI)
 1. In UI `Gateway Management`, review operation log and failing phase (`gateway_bootstrap`, `gateway_install`, `gateway_health`).

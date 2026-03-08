@@ -1,0 +1,40 @@
+<Page x:Class="OmniRelay.UI.Views.Pages.WhitelistPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Title="Whitelist Rules"
+      Background="{DynamicResource Brush.Background}">
+    <Grid Margin="28">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="Whitelist Rules" Style="{StaticResource SectionTitleTextStyle}"/>
+            <TextBlock Text="CIDR/IP per line; comments with # are allowed." Style="{StaticResource MutedTextStyle}"/>
+        </StackPanel>
+
+        <TextBox Grid.Row="1"
+                 Text="{Binding State.WhitelistText, UpdateSourceTrigger=PropertyChanged}"
+                 AcceptsReturn="True"
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto"
+                 FontFamily="Consolas"
+                 Style="{StaticResource MultilineTextBoxStyle}"/>
+
+        <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+            <Button Content="Validate" Command="{Binding ValidateCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,10,0"/>
+            <Button Content="Update Whitelist" Command="{Binding UpdateWhitelistCommand}" Style="{StaticResource PrimaryButtonStyle}"/>
+        </WrapPanel>
+
+        <StackPanel Grid.Row="3" Margin="0,12,0,0">
+            <TextBlock Text="{Binding ValidationSummary}" Style="{StaticResource ValidationTextStyle}"/>
+            <TextBlock Text="{Binding Feedback}" Style="{StaticResource FeedbackTextStyle}" Margin="0,6,0,0"/>
+        </StackPanel>
+    </Grid>
+</Page>

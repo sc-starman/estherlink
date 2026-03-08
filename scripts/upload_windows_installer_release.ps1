@@ -39,7 +39,7 @@ function Resolve-LatestMsiPath {
         Write-Host $_
     }
 
-    $installerBin = Join-Path $RootPath "src\EstherLink.Installer\bin\$BuildConfiguration"
+    $installerBin = Join-Path $RootPath "src\OmniRelay.Installer\bin\$BuildConfiguration"
     $candidates = Get-ChildItem -Path $installerBin -Filter *.msi -File -Recurse -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTimeUtc -Descending
 

@@ -1,0 +1,112 @@
+@using Microsoft.AspNetCore.Identity
+@using OmniRelay.Backend.Models
+@inject SignInManager<ApplicationUser> SignInManager
+@inject UserManager<ApplicationUser> UserManager
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] - OmniRelay</title>
+    <link rel="stylesheet" href="~/css/app.css" asp-append-version="true" />
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+    <header class="border-b border-slate-800 bg-slate-950/95 backdrop-blur sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 py-3">
+            <div class="flex items-center justify-between">
+                <a href="/" class="text-cyan-400 font-bold text-xl">
+                    <img src="~/images/logo.png" alt="OmniRelay" class="h-8 w-8 mr-2 inline" />
+                    OmniRelay
+                </a>
+
+                <button
+                    type="button"
+                    id="mobileMenuButton"
+                    class="md:hidden inline-flex items-center justify-center rounded border border-slate-700 px-3 py-2 text-slate-200 hover:border-cyan-400 hover:text-cyan-300"
+                    aria-controls="mobileMenuPanel"
+                    aria-expanded="false"
+                    aria-label="Open menu">
+                    <span class="sr-only">Open menu</span>
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"></path>
+                    </svg>
+                </button>
+
+                <nav class="hidden md:flex items-center gap-4 text-sm">
+                    <a href="/" class="hover:text-cyan-300">Home</a>
+                    <a href="/download" class="hover:text-cyan-300">Download</a>
+                    <a href="/contact" class="hover:text-cyan-300">Contact</a>
+                    <a href="/docs" class="hover:text-cyan-300">Documentation</a>
+                    @if (SignInManager.IsSignedIn(User))
+                    {
+                        <a href="/dashboard" class="hover:text-cyan-300">Dashboard</a>
+                        <form method="post" asp-page="/Account/Logout" class="inline">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">Logout</button>
+                        </form>
+                    }
+                    else
+                    {
+                        <a href="/account/login" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">Login</a>
+                        <a href="/account/register" class="px-3 py-1 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">Register</a>
+                    }
+                </nav>
+            </div>
+
+            <div id="mobileMenuPanel" class="md:hidden hidden pt-4">
+                <nav class="flex flex-col gap-2 text-sm rounded border border-slate-800 bg-slate-900 p-3">
+                    <a href="/" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Home</a>
+                    <a href="/download" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Download</a>
+                    <a href="/contact" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Contact</a>
+                    <a href="/docs" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Documentation</a>
+                    @if (SignInManager.IsSignedIn(User))
+                    {
+                        <a href="/dashboard" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Dashboard</a>
+                        <form method="post" asp-page="/Account/Logout" class="pt-1">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="w-full px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-left">Logout</button>
+                        </form>
+                    }
+                    else
+                    {
+                        <a href="/account/login" class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700">Login</a>
+                        <a href="/account/register" class="px-3 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">Register</a>
+                    }
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        @RenderBody()
+    </main>
+
+    <script>
+        (function () {
+            const button = document.getElementById("mobileMenuButton");
+            const panel = document.getElementById("mobileMenuPanel");
+            if (!button || !panel) {
+                return;
+            }
+
+            const closeMenu = function () {
+                panel.classList.add("hidden");
+                button.setAttribute("aria-expanded", "false");
+            };
+
+            button.addEventListener("click", function () {
+                const isHidden = panel.classList.contains("hidden");
+                panel.classList.toggle("hidden", !isHidden);
+                button.setAttribute("aria-expanded", isHidden ? "true" : "false");
+            });
+
+            panel.querySelectorAll("a").forEach(function (link) {
+                link.addEventListener("click", closeMenu);
+            });
+        })();
+    </script>
+
+    <script src="~/js/dashboard.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

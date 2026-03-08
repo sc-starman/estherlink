@@ -23,24 +23,24 @@ jobs:
         run: dotnet tool restore
 
       - name: Restore solution
-        run: dotnet restore EstherLink.sln
+        run: dotnet restore OmniRelay.sln
 
       - name: Dependency vulnerability scan
-        run: dotnet list EstherLink.sln package --vulnerable --include-transitive
+        run: dotnet list OmniRelay.sln package --vulnerable --include-transitive
 
       - name: Build solution
-        run: dotnet build EstherLink.sln -c Release --no-restore
+        run: dotnet build OmniRelay.sln -c Release --no-restore
 
       - name: Run tests
-        run: dotnet test EstherLink.sln -c Release --no-build --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test OmniRelay.sln -c Release --no-build --logger "trx;LogFileName=test-results.trx"
 
       - name: Validate EF migration script generation
         run: |
           mkdir -p artifacts
           dotnet tool run dotnet-ef migrations script --idempotent \
-            --project src/EstherLink.Backend/EstherLink.Backend.csproj \
-            --startup-project src/EstherLink.Backend/EstherLink.Backend.csproj \
-            --context EstherLink.Backend.Data.AppDbContext \
+            --project src/OmniRelay.Backend/OmniRelay.Backend.csproj \
+            --startup-project src/OmniRelay.Backend/OmniRelay.Backend.csproj \
+            --context OmniRelay.Backend.Data.AppDbContext \
             -o artifacts/migrations.sql
 
       - name: Validate docker compose

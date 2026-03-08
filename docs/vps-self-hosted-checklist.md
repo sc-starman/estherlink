@@ -6,7 +6,7 @@
 3. Run command-mode installer:
    - `sudo bash scripts/setup_omnirelay_vps_3xui.sh install --bundle-dir <bundle-dir> ...`
 4. Tunnel user must have shell access and sudo permission (password mode used by UI gateway automation).
-4. Keep old script `scripts/setup_estherlink_vps.sh` only for rollback scenarios.
+4. Keep old script `scripts/setup_omnirelay_vps.sh` only for rollback scenarios.
 
 ## Required Services
 1. `sshd` active.
@@ -35,7 +35,7 @@
 
 ## Tunnel Validation
 1. Start Windows reverse SSH tunnel:
-   - `ssh -NT -R 127.0.0.1:15000:127.0.0.1:<WINDOWS_PROXY_PORT> estherlink@<VPS_IP> -p 22`
+   - `ssh -NT -R 127.0.0.1:15000:127.0.0.1:<WINDOWS_PROXY_PORT> omnirelay@<VPS_IP> -p 22`
 2. On VPS:
    - `timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/15000' && echo OPEN || echo CLOSED`
 3. Confirm client sessions in 3x-ui can reach internet only when tunnel is up.

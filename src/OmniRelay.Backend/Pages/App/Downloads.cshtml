@@ -1,0 +1,48 @@
+@page "/app/downloads"
+@model OmniRelay.Backend.Pages.App.DownloadsModel
+@{
+    ViewData["Title"] = "Downloads";
+    ViewData["DocumentationUrl"] = Model.DocumentationUrl;
+}
+
+<div class="max-w-7xl mx-auto px-4 py-10 space-y-8">
+    <div>
+        <h1 class="text-3xl font-bold mb-2">Download Application</h1>
+        <p class="text-slate-400">Download the latest OmniRelay installer and verify integrity before running.</p>
+    </div>
+
+    @if (Model.Latest is null)
+    {
+        <div class="rounded-xl border border-slate-800 bg-slate-900 p-6">No release metadata found.</div>
+    }
+    else
+    {
+        <article class="rounded-xl border border-slate-800 bg-slate-900 p-6">
+            <h2 class="text-2xl font-bold">Version @Model.Latest.Version</h2>
+            <p class="text-slate-300 mt-2">Published: @Model.Latest.PublishedAt.ToString("u")</p>
+            <p class="text-slate-300 mt-2">SHA256: <span class="font-mono">@Model.Latest.Sha256</span></p>
+            <a href="@Model.Latest.DownloadUrl" class="mt-4 inline-block px-4 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">Download</a>
+            <p class="mt-4 text-sm text-slate-300 whitespace-pre-wrap">@Model.Latest.Notes</p>
+        </article>
+    }
+
+    <section>
+        <h2 class="text-xl font-semibold mb-3">Your Entitlements</h2>
+        @if (Model.Entitlements.Count == 0)
+        {
+            <p class="text-slate-400">No paid entitlement found yet.</p>
+        }
+        else
+        {
+            <ul class="space-y-2">
+                @foreach (var item in Model.Entitlements)
+                {
+                    <li class="rounded border border-slate-800 bg-slate-900 p-4 flex flex-wrap justify-between gap-2">
+                        <span class="font-mono">@item.LicenseKey</span>
+                        <span class="text-sm text-slate-300">Updates until: @(item.UpdatesEntitledUntil?.ToString("u") ?? "n/a")</span>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+</div>
