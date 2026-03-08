@@ -59,7 +59,7 @@ Commands:
 
 Options:
   --public-port <port>          Public client ingress port for 3x-ui/Xray inbound (default: ${PUBLIC_PORT})
-  --panel-port <port>           3x-ui panel HTTP port (default: ${PANEL_PORT})
+  --panel-port <port>           3x-ui panel HTTPS port (default: ${PANEL_PORT})
   --backend-port <port>         Loopback port for reverse tunnel endpoint (default: ${BACKEND_PORT})
   --ssh-port <port>             SSH port used by the Windows client to connect to VPS (default: ${SSH_PORT}); does not modify local sshd listen port
   --tunnel-user <name>          SSH tunnel user (default: ${TUNNEL_USER})
@@ -397,7 +397,7 @@ install_3xui_online() {
     --output "$installer"
 
   # Upstream installer runs interactive post-install panel/SSL bootstrap in config_after_install.
-  # We disable that step and manage panel settings ourselves (HTTP port/base path/user/password).
+  # We disable that step and manage panel settings ourselves (HTTPS port/base path/user/password/cert).
   sed -i 's/^[[:space:]]*config_after_install[[:space:]]*$/# config_after_install disabled by omnirelay-gatewayctl/' "$installer"
 
   chmod +x "$installer"
@@ -440,37 +440,105 @@ configure_panel_credentials() {
     -listenIP "0.0.0.0" >/dev/null
 
   # Best-effort local probe so operators can distinguish path mismatch from network/firewall issues.
-  panel_probe_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${PANEL_PORT}${canonical_base_path}" || true)"
+  panel_probe_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${PANEL_PORT}/${canonical_base_path}/" || true)"
   if [[ "$panel_probe_code" == "404" || "$panel_probe_code" == "000" || -z "$panel_probe_code" ]]; then
-    log "WARNING: Panel local probe returned HTTP ${panel_probe_code} at http://127.0.0.1:${PANEL_PORT}${canonical_base_path}"
+    log "WARNING: Panel local probe returned HTTP ${panel_probe_code} at http://127.0.0.1:${PANEL_PORT}/${canonical_base_path}/"
   fi
 }
 
-disable_panel_tls() {
-  progress 75 "Disabling 3x-ui panel TLS (HTTP mode)"
-
+enable_panel_tls() {
+  progress 75 "Enabling 3x-ui panel TLS (HTTPS mode)"
+  local cert_dir cert_path key_path server_name detected_ip san_index tmp_cfg panel_probe_code
   local db_path="/etc/x-ui/x-ui.db"
+
+  cert_dir="/etc/x-ui/cert"
+  cert_path="${cert_dir}/omnirelay-panel.crt"
+  key_path="${cert_dir}/omnirelay-panel.key"
+  mkdir -p "$cert_dir"
+  chmod 0700 "$cert_dir"
+
+  detected_ip="$(detect_vps_ip || true)"
+  server_name="$VPS_IP"
+  if [[ -z "$server_name" ]]; then
+    server_name="$detected_ip"
+  fi
+  if [[ -z "$server_name" ]]; then
+    server_name="localhost"
+  fi
+
+  tmp_cfg="$(mktemp)"
+  san_index=2
+  cat > "$tmp_cfg" <<EOF
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+x509_extensions = v3_req
+
+[dn]
+CN = ${server_name}
+
+[v3_req]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+EOF
+
+  if [[ "$server_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'IP.%s = %s\n' "$san_index" "$server_name" >> "$tmp_cfg"
+    ((san_index++))
+  else
+    printf 'DNS.%s = %s\n' "$san_index" "$server_name" >> "$tmp_cfg"
+    ((san_index++))
+  fi
+
+  if [[ -n "$detected_ip" && "$detected_ip" != "$server_name" ]]; then
+    printf 'IP.%s = %s\n' "$san_index" "$detected_ip" >> "$tmp_cfg"
+  fi
+
+  openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+    -keyout "$key_path" \
+    -out "$cert_path" \
+    -config "$tmp_cfg" >/dev/null 2>&1
+  rm -f "$tmp_cfg"
+
+  chmod 0600 "$key_path"
+  chmod 0644 "$cert_path"
+  chown root:root "$key_path" "$cert_path"
+
   if [[ -f "$db_path" ]]; then
-    python3 - "$db_path" <<'PY'
+    python3 - "$db_path" "$cert_path" "$key_path" <<'PY'
 import sqlite3
 import sys
 
-db_path = sys.argv[1]
+db_path, cert_path, key_path = sys.argv[1], sys.argv[2], sys.argv[3]
 conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings';")
 if cur.fetchone() is not None:
-    for key in ("webCertFile", "webKeyFile"):
+    for key, value in (("webCertFile", cert_path), ("webKeyFile", key_path)):
         cur.execute("SELECT id FROM settings WHERE key = ?", (key,))
         row = cur.fetchone()
         if row:
-            cur.execute("UPDATE settings SET value = '' WHERE id = ?", (row[0],))
+            cur.execute("UPDATE settings SET value = ? WHERE id = ?", (value, row[0]))
+        else:
+            cur.execute("INSERT INTO settings(key, value) VALUES(?, ?)", (key, value))
 conn.commit()
 conn.close()
 PY
   fi
 
   systemctl restart x-ui
+
+  panel_probe_code="$(curl --silent --output /dev/null --write-out '%{http_code}' --insecure "https://127.0.0.1:${PANEL_PORT}/${PANEL_BASE_PATH}/" || true)"
+  if [[ "$panel_probe_code" == "000" || -z "$panel_probe_code" ]]; then
+    log "WARNING: Panel local HTTPS probe failed at https://127.0.0.1:${PANEL_PORT}/${PANEL_BASE_PATH}/ (HTTP ${panel_probe_code})"
+  fi
 }
 
 reset_stale_xray_template_config() {
@@ -1084,7 +1152,7 @@ print_summary() {
     endpoint="<VPS_IP_OR_HOSTNAME>"
   fi
 
-  panel_url="http://${endpoint}:${PANEL_PORT}/${PANEL_BASE_PATH}/"
+  panel_url="https://${endpoint}:${PANEL_PORT}/${PANEL_BASE_PATH}/"
 
   cat <<EOF
 
@@ -1120,7 +1188,7 @@ install_impl() {
   disable_haproxy
   install_3xui_online
   configure_panel_credentials
-  disable_panel_tls
+  enable_panel_tls
   reset_stale_xray_template_config
   apply_dns_profile
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl

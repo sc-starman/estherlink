@@ -153,7 +153,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 return new GatewayOperationResult(false, result.ErrorMessage);
             }
 
-            var panelUrl = $"http://{request.Config.TunnelHost}:{request.GatewayPanelPort}/{panelBasePath}/";
+            var panelUrl = $"https://{request.Config.TunnelHost}:{request.GatewayPanelPort}/{panelBasePath}/";
             return new GatewayOperationResult(
                 true,
                 $"Gateway install completed. Panel URL: {panelUrl} | Username: {panelUser} | Password: {panelPassword}");

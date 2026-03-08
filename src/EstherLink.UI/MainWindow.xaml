@@ -6,10 +6,10 @@
         mc:Ignorable="d"
         Title="OmniRelay"
         Icon="Assets/app.ico"
-        Width="1360"
-        Height="860"
-        MinWidth="1120"
-        MinHeight="740">
+        Width="1020"
+        Height="640"
+        MinWidth="1020"
+        MinHeight="540">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="280"/>
