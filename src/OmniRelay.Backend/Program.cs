@@ -76,6 +76,8 @@ if (installerMaxUploadMb.HasValue && installerMaxUploadMb.Value > 0)
 
 var postgresConnection =
     builder.Configuration.GetConnectionString("Postgres") ??
+    Environment.GetEnvironmentVariable("ConnectionStrings__Postgres") ??
+    Environment.GetEnvironmentVariable("CONNECTIONSTRINGS__POSTGRES") ??
     Environment.GetEnvironmentVariable("OmniRelay_DB_CONNECTION") ??
     throw new InvalidOperationException("ConnectionStrings:Postgres is required.");
 

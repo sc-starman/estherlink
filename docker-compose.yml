@@ -79,7 +79,7 @@ services:
     restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=omnirelay;Username=omnirelay;Password=omnirelay_dev_password
+      ConnectionStrings__Postgres: ${CONNECTIONSTRINGS__POSTGRES:-Host=postgres;Port=5432;Database=omnirelay;Username=omnirelay;Password=omnirelay_dev_password}
       Admin__ApiKeys__0: dev-admin-key
       Admin__ApiKeyPepper: dev-admin-pepper
       Licensing__SigningKeyRotationDays: 90
