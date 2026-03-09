@@ -153,10 +153,13 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 return new GatewayOperationResult(false, result.ErrorMessage);
             }
 
-            var panelUrl = $"https://{request.Config.TunnelHost}:{request.GatewayPanelPort}/{panelBasePath}/";
+            var panelUrl = $"https://{request.Config.TunnelHost}:{request.GatewayPanelPort}/";
             return new GatewayOperationResult(
                 true,
-                $"Gateway install completed. Panel URL: {panelUrl} | Username: {panelUser} | Password: {panelPassword}");
+                $"Gateway install completed. Panel URL: {panelUrl} | Username: {panelUser} | Password: {panelPassword}",
+                panelUrl,
+                panelUser,
+                panelPassword);
         }
         catch (Exception ex)
         {
@@ -281,7 +284,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         var args = BuildCommonArgs(request) + " --json";
         var command =
             "set -euo pipefail; " +
-            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"sshState\":\"missing\",\"xuiState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false}}'; exit 0; }}; " +
+            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"sshState\":\"missing\",\"xuiState\":\"missing\",\"omniPanelState\":\"missing\",\"nginxState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"omniPanelInternalPort\":0,\"xuiPanelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"omniPanelInternalListener\":false,\"inboundId\":\"\",\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false}}'; exit 0; }}; " +
             $"{ShellQuote(GatewayCtlPath)} status {args}";
 
         var result = await ExecuteCommandAsync(request.Config, command, sudoPassword, null, cancellationToken);
@@ -312,7 +315,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         var args = BuildCommonArgs(request) + " --json";
         var command =
             "set -euo pipefail; " +
-            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"healthy\":false,\"sshState\":\"missing\",\"xuiState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false}}'; exit 0; }}; " +
+            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"healthy\":false,\"sshState\":\"missing\",\"xuiState\":\"missing\",\"omniPanelState\":\"missing\",\"nginxState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"omniPanelInternalPort\":0,\"xuiPanelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"omniPanelInternalListener\":false,\"inboundId\":\"\",\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false}}'; exit 0; }}; " +
             $"{ShellQuote(GatewayCtlPath)} health {args}";
 
         var result = await ExecuteCommandAsync(
@@ -650,6 +653,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             "--public-port", request.GatewayPublicPort.ToString(),
             "--panel-port", request.GatewayPanelPort.ToString(),
+            "--gateway-sni", ShellQuote(request.GatewaySni.Trim()),
+            "--gateway-target", ShellQuote(request.GatewayTarget.Trim()),
             "--backend-port", request.Config.TunnelRemotePort.ToString(),
             "--ssh-port", request.Config.TunnelSshPort.ToString(),
             "--bootstrap-socks-port", request.Config.BootstrapSocksRemotePort.ToString(),
@@ -707,6 +712,16 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         if (request.GatewayPublicPort == request.GatewayPanelPort)
         {
             throw new InvalidOperationException("Gateway public and panel ports must be different.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.GatewaySni))
+        {
+            throw new InvalidOperationException("Gateway SNI is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.GatewayTarget))
+        {
+            throw new InvalidOperationException("Gateway target is required.");
         }
 
         if (string.IsNullOrWhiteSpace(request.GatewayDohEndpoints))
@@ -861,13 +876,19 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
     {
         public string SshState { get; set; } = "unknown";
         public string XuiState { get; set; } = "unknown";
+        public string OmniPanelState { get; set; } = "unknown";
+        public string NginxState { get; set; } = "unknown";
         public string Fail2banState { get; set; } = "unknown";
         public int BackendPort { get; set; }
         public int PublicPort { get; set; }
         public int PanelPort { get; set; }
+        public int OmniPanelInternalPort { get; set; }
+        public int XuiPanelPort { get; set; }
         public bool BackendListener { get; set; }
         public bool PublicListener { get; set; }
         public bool PanelListener { get; set; }
+        public bool OmniPanelInternalListener { get; set; }
+        public string InboundId { get; set; } = string.Empty;
         public bool DnsConfigPresent { get; set; }
         public bool DnsRuleActive { get; set; }
         public bool DohReachableViaTunnel { get; set; }
@@ -881,13 +902,19 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             SshState = SshState,
             XuiState = XuiState,
+            OmniPanelState = OmniPanelState,
+            NginxState = NginxState,
             Fail2BanState = Fail2banState,
             BackendPort = BackendPort,
             PublicPort = PublicPort,
             PanelPort = PanelPort,
+            OmniPanelInternalPort = OmniPanelInternalPort,
+            XuiPanelPort = XuiPanelPort,
             BackendListener = BackendListener,
             PublicListener = PublicListener,
             PanelListener = PanelListener,
+            OmniPanelInternalListener = OmniPanelInternalListener,
+            InboundId = InboundId,
             DnsConfigPresent = DnsConfigPresent,
             DnsRuleActive = DnsRuleActive,
             DohReachableViaTunnel = DohReachableViaTunnel,
@@ -915,13 +942,19 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 CheckedAtUtc = DateTimeOffset.UtcNow,
                 SshState = baseModel.SshState,
                 XuiState = baseModel.XuiState,
+                OmniPanelState = baseModel.OmniPanelState,
+                NginxState = baseModel.NginxState,
                 Fail2BanState = baseModel.Fail2BanState,
                 BackendPort = baseModel.BackendPort,
                 PublicPort = baseModel.PublicPort,
                 PanelPort = baseModel.PanelPort,
+                OmniPanelInternalPort = baseModel.OmniPanelInternalPort,
+                XuiPanelPort = baseModel.XuiPanelPort,
                 BackendListener = baseModel.BackendListener,
                 PublicListener = baseModel.PublicListener,
                 PanelListener = baseModel.PanelListener,
+                OmniPanelInternalListener = baseModel.OmniPanelInternalListener,
+                InboundId = baseModel.InboundId,
                 DnsConfigPresent = baseModel.DnsConfigPresent,
                 DnsRuleActive = baseModel.DnsRuleActive,
                 DohReachableViaTunnel = baseModel.DohReachableViaTunnel,

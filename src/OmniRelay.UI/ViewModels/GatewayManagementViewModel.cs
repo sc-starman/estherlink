@@ -243,6 +243,24 @@ public partial class GatewayManagementViewModel : ObservableObject
             var op = await _gatewayDeployment.InstallGatewayAsync(request, sudo, progress);
             Feedback = op.Message;
             AppendLog(op.Message);
+            if (op.Success)
+            {
+                if (!string.IsNullOrWhiteSpace(op.PanelUrl))
+                {
+                    State.GatewayPanelUrl = op.PanelUrl;
+                }
+
+                if (!string.IsNullOrWhiteSpace(op.PanelUsername))
+                {
+                    State.GatewayPanelUsername = op.PanelUsername;
+                }
+
+                if (!string.IsNullOrWhiteSpace(op.InitialPanelPassword))
+                {
+                    State.GatewayInitialPanelPassword = op.InitialPanelPassword;
+                }
+            }
+
             await RefreshGatewayStatusAsync(sudo);
             await RefreshGatewayHealthAsync(request, sudo);
         });
@@ -408,7 +426,7 @@ public partial class GatewayManagementViewModel : ObservableObject
         {
             var request = BuildGatewayRequest();
             var status = await _gatewayDeployment.GetStatusAsync(request, sudoPassword);
-            GatewayServiceState = $"x-ui={status.XuiState}, sshd={status.SshState}";
+            GatewayServiceState = $"x-ui={status.XuiState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
         }
         catch (Exception ex)
         {
@@ -454,6 +472,16 @@ public partial class GatewayManagementViewModel : ObservableObject
             throw new InvalidOperationException("Gateway panel port must be a positive integer.");
         }
 
+        if (string.IsNullOrWhiteSpace(_state.GatewaySni))
+        {
+            throw new InvalidOperationException("Gateway SNI is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(_state.GatewayTarget))
+        {
+            throw new InvalidOperationException("Gateway target is required.");
+        }
+
         var dnsMode = _state.GatewayDnsMode.Trim().ToLowerInvariant();
         if (dnsMode is not ("hybrid" or "doh" or "udp"))
         {
@@ -470,6 +498,8 @@ public partial class GatewayManagementViewModel : ObservableObject
             Config = config,
             GatewayPublicPort = publicPort,
             GatewayPanelPort = panelPort,
+            GatewaySni = _state.GatewaySni.Trim(),
+            GatewayTarget = _state.GatewayTarget.Trim(),
             GatewayDnsMode = dnsMode,
             GatewayDohEndpoints = _state.GatewayDohEndpointsText.Trim(),
             GatewayDnsUdpOnly = _state.GatewayDnsUdpOnly

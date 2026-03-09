@@ -44,6 +44,12 @@ public partial class GatewayStateStore : ObservableObject
     private string gatewayBackendPortText = "15000";
 
     [ObservableProperty]
+    private string gatewaySni = "nobitex.ir";
+
+    [ObservableProperty]
+    private string gatewayTarget = "nobitex.ir:443";
+
+    [ObservableProperty]
     private string gatewayDnsMode = "hybrid";
 
     [ObservableProperty]
@@ -51,6 +57,15 @@ public partial class GatewayStateStore : ObservableObject
 
     [ObservableProperty]
     private bool gatewayDnsUdpOnly = true;
+
+    [ObservableProperty]
+    private string gatewayPanelUrl = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayPanelUsername = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayInitialPanelPassword = string.Empty;
 
     [ObservableProperty]
     private string tunnelUser = "OmniRelay";

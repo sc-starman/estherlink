@@ -189,6 +189,8 @@ ClientBin/
 node_modules/
 npm-debug.log*
 package-lock.json.*
+src/OmniRelay.GatewayPanel/.next/
+src/OmniRelay.GatewayPanel/out/
 *.dbmdl
 *.dbproj.schemaview
 *.jfm

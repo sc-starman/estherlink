@@ -12,6 +12,7 @@ namespace OmniRelay.Backend.IntegrationTests;
 public sealed class IntegrationTestWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     private readonly string _databaseName = $"OmniRelay-backend-tests-{Guid.NewGuid():N}";
+    private readonly string _installerRoot = Path.Combine(Path.GetTempPath(), $"omnirelay-installers-tests-{Guid.NewGuid():N}");
     private readonly TestPayKryptClient _testPayKryptClient = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -39,7 +40,9 @@ public sealed class IntegrationTestWebApplicationFactory : WebApplicationFactory
                 ["Smtp:FromEmail"] = "noreply@test.local",
                 ["Smtp:RequireAuthentication"] = "false",
                 ["Web:DocumentationUrl"] = "https://docs.example",
-                ["Web:DownloadChannel"] = "stable"
+                ["Web:DownloadChannel"] = "stable",
+                ["InstallerStorage:RootPath"] = _installerRoot,
+                ["InstallerStorage:MaxUploadMb"] = "8"
             });
         });
 
@@ -97,6 +100,10 @@ public sealed class IntegrationTestWebApplicationFactory : WebApplicationFactory
     {
         await ResetDatabaseAsync();
         await base.DisposeAsync();
+        if (Directory.Exists(_installerRoot))
+        {
+            Directory.Delete(_installerRoot, recursive: true);
+        }
     }
 }
 

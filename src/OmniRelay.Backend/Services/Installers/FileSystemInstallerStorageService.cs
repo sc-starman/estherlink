@@ -40,6 +40,16 @@ public sealed class FileSystemInstallerStorageService : IInstallerStorageService
         return $"OmniRelay-{safeVersion}-windows-x64.msi";
     }
 
+    public string GetOmniGatewayArtifactPath()
+    {
+        return Path.Combine(_rootPath, "omni-gateway", "latest", "omni-gateway.tar.gz");
+    }
+
+    public string GetOmniGatewayDownloadFileName()
+    {
+        return "omni-gateway.tar.gz";
+    }
+
     public async Task<InstallerSaveResult> SaveWindowsInstallerAsync(
         string sourceFilePath,
         string channel,
@@ -57,6 +67,44 @@ public sealed class FileSystemInstallerStorageService : IInstallerStorageService
 
         Directory.CreateDirectory(destinationDirectory);
 
+        var tempDestinationPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+        long written = 0;
+        string sha256;
+
+        await using (var source = File.Open(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        await using (var target = File.Open(tempDestinationPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+        {
+            var buffer = new byte[128 * 1024];
+            int read;
+            while ((read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+            {
+                await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                hasher.AppendData(buffer, 0, read);
+                written += read;
+            }
+
+            sha256 = Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
+        }
+
+        File.Move(tempDestinationPath, destinationPath, overwrite: true);
+        return new InstallerSaveResult(destinationPath, written, sha256);
+    }
+
+    public async Task<InstallerSaveResult> SaveOmniGatewayArtifactAsync(
+        string sourceFilePath,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(sourceFilePath))
+        {
+            throw new FileNotFoundException("Source gateway artifact file was not found.", sourceFilePath);
+        }
+
+        var destinationPath = GetOmniGatewayArtifactPath();
+        var destinationDirectory = Path.GetDirectoryName(destinationPath)
+            ?? throw new InvalidOperationException("Destination directory could not be determined.");
+
+        Directory.CreateDirectory(destinationDirectory);
         var tempDestinationPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
         long written = 0;
         string sha256;

@@ -315,6 +315,22 @@ app.MapGet("/download/windows", async (
     })
     .RequireRateLimiting("public");
 
+app.MapGet("/download/omni-gateway", (
+        IInstallerStorageService installerStorageService) =>
+    {
+        var artifactPath = installerStorageService.GetOmniGatewayArtifactPath();
+        if (!File.Exists(artifactPath))
+        {
+            return Results.NotFound(new { message = "Gateway panel artifact is not available yet." });
+        }
+
+        return Results.File(
+            artifactPath,
+            "application/gzip",
+            installerStorageService.GetOmniGatewayDownloadFileName());
+    })
+    .RequireRateLimiting("public");
+
 app.MapMethods("/app", new[] { "GET", "HEAD" }, () =>
         Results.Redirect("/dashboard", permanent: true, preserveMethod: true))
     .AllowAnonymous();
@@ -577,6 +593,100 @@ installerApi.MapPost("/upload-windows", async (
                 downloadUrl = release.DownloadUrl,
                 publishedAt = release.PublishedAt,
                 fileSizeBytes = saveResult.FileSizeBytes
+            });
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Best-effort temp cleanup.
+                }
+            }
+        }
+    });
+
+installerApi.MapPost("/upload-omni-gateway", async (
+        HttpRequest request,
+        IInstallerStorageService installerStorageService,
+        CancellationToken cancellationToken) =>
+    {
+        if (!request.HasFormContentType)
+        {
+            return Results.BadRequest(new { message = "Content-Type must be multipart/form-data." });
+        }
+
+        var form = await request.ReadFormAsync(cancellationToken);
+        var artifact = form.Files.GetFile("artifact");
+        if (artifact is null)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["artifact"] = ["artifact (.tar.gz) file is required."]
+            });
+        }
+
+        if (artifact.Length <= 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["artifact"] = ["artifact file must not be empty."]
+            });
+        }
+
+        if (!artifact.FileName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["artifact"] = ["artifact file name must end with .tar.gz."]
+            });
+        }
+
+        if (artifact.Length > installerStorageService.MaxUploadBytes)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["artifact"] =
+                [
+                    $"artifact file exceeds max upload size of {installerStorageService.MaxUploadBytes / (1024L * 1024L)} MB."
+                ]
+            });
+        }
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"omnirelay-omni-gateway-{Guid.NewGuid():N}.tar.gz");
+        try
+        {
+            await using (var tempStream = new FileStream(
+                             tempPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             128 * 1024,
+                             FileOptions.Asynchronous))
+            {
+                await artifact.CopyToAsync(tempStream, cancellationToken);
+            }
+
+            if (!IsGzipFile(tempPath))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["artifact"] = ["artifact must be a valid gzip archive."]
+                });
+            }
+
+            var saveResult = await installerStorageService.SaveOmniGatewayArtifactAsync(tempPath, cancellationToken);
+            return Results.Ok(new
+            {
+                message = "Gateway panel artifact uploaded successfully.",
+                sha256 = saveResult.Sha256,
+                fileSizeBytes = saveResult.FileSizeBytes,
+                downloadUrl = "/download/omni-gateway"
             });
         }
         finally
@@ -891,6 +1001,26 @@ static Guid? GetUserId(ClaimsPrincipal principal)
 static bool IsValidSemVer(string value)
 {
     return !string.IsNullOrWhiteSpace(value) && NuGetVersion.TryParse(value.Trim(), out _);
+}
+
+static bool IsGzipFile(string filePath)
+{
+    try
+    {
+        using var stream = File.OpenRead(filePath);
+        if (stream.Length < 2)
+        {
+            return false;
+        }
+
+        var first = stream.ReadByte();
+        var second = stream.ReadByte();
+        return first == 0x1F && second == 0x8B;
+    }
+    catch
+    {
+        return false;
+    }
 }
 
 static bool ParseBooleanOrDefault(string? value, bool defaultValue)

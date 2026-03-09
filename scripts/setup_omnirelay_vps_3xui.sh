@@ -23,6 +23,18 @@ PUBKEY_FILE=""
 PANEL_USER=""
 PANEL_PASSWORD=""
 PANEL_BASE_PATH=""
+GATEWAY_SNI=""
+GATEWAY_TARGET=""
+XUI_PANEL_PORT=0
+OMNIPANEL_INTERNAL_PORT=0
+INBOUND_ID=""
+SESSION_SECRET=""
+METADATA_DIR="/etc/omnirelay/gateway"
+METADATA_FILE="/etc/omnirelay/gateway/metadata.json"
+OMNIPANEL_ENV_FILE="/etc/omnirelay/gateway/omnipanel.env"
+OMNIPANEL_SERVICE_NAME="omnirelay-omnipanel"
+OMNIPANEL_APP_DIR="/opt/omnirelay/omni-gateway"
+XUI_COOKIE_JAR=""
 STATUS_JSON=0
 HEALTH_JSON=0
 SSH_SERVICE=""
@@ -59,8 +71,10 @@ Commands:
 
 Options:
   --public-port <port>          Public client ingress port for 3x-ui/Xray inbound (default: ${PUBLIC_PORT})
-  --panel-port <port>           3x-ui panel HTTPS port (default: ${PANEL_PORT})
+  --panel-port <port>           OmniPanel public HTTPS port (default: ${PANEL_PORT})
   --backend-port <port>         Loopback port for reverse tunnel endpoint (default: ${BACKEND_PORT})
+  --gateway-sni <host>          REALITY SNI value for managed inbound (required for install)
+  --gateway-target <host:port>  REALITY target value for managed inbound (required for install)
   --ssh-port <port>             SSH port used by the Windows client to connect to VPS (default: ${SSH_PORT}); does not modify local sshd listen port
   --tunnel-user <name>          SSH tunnel user (default: ${TUNNEL_USER})
   --tunnel-auth <method>        host_key | password | both (default: ${TUNNEL_AUTH_METHOD})
@@ -74,7 +88,7 @@ Options:
   --pubkey-file <path>          Read SSH public key from file and add it
   --panel-user <name>           Panel username (default: generated)
   --panel-password <value>      Panel password (default: generated)
-  --panel-base-path <path>      Panel base path (default: generated random path)
+  --panel-base-path <path>      Hidden 3x-ui panel base path (default: generated random path)
   --json                        For status/health commands output compact JSON
   -h, --help                    Show this help
 EOF
@@ -129,6 +143,52 @@ require_existing_sshd() {
 random_string() {
   local len="$1"
   LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c "$len" || true
+}
+
+random_hex() {
+  local bytes="$1"
+  openssl rand -hex "$bytes" 2>/dev/null | tr -d '\r\n'
+}
+
+random_uuid() {
+  if [[ -f /proc/sys/kernel/random/uuid ]]; then
+    cat /proc/sys/kernel/random/uuid
+    return
+  fi
+  uuidgen
+}
+
+choose_random_port() {
+  local low="$1"
+  local high="$2"
+  shift 2
+  local avoid=("$@")
+  local candidate tries=0 in_use conflict
+
+  while (( tries < 128 )); do
+    candidate="$(( RANDOM % (high - low + 1) + low ))"
+    conflict=0
+    for in_use in "${avoid[@]}"; do
+      if [[ -n "$in_use" && "$candidate" == "$in_use" ]]; then
+        conflict=1
+        break
+      fi
+    done
+
+    if (( conflict == 1 )); then
+      ((tries++))
+      continue
+    fi
+
+    if ! ss -lnt "( sport = :${candidate} )" 2>/dev/null | awk 'NR>1 {print $0}' | grep -q .; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+
+    ((tries++))
+  done
+
+  die "Unable to allocate a free random port in range ${low}-${high}."
 }
 
 backup_file() {
@@ -256,7 +316,9 @@ install_packages_online() {
     jq \
     openssl \
     python3 \
-    sqlite3
+    sqlite3 \
+    nginx \
+    nodejs
 }
 
 setup_tunnel_user() {
@@ -414,7 +476,7 @@ detect_vps_ip() {
 }
 
 configure_panel_credentials() {
-  progress 68 "Configuring 3x-ui panel credentials"
+  progress 68 "Configuring hidden 3x-ui panel credentials"
   local canonical_base_path panel_probe_code
 
   if [[ -z "$PANEL_USER" ]]; then
@@ -431,29 +493,204 @@ configure_panel_credentials() {
   PANEL_BASE_PATH="${PANEL_BASE_PATH%/}"
   [[ -n "$PANEL_BASE_PATH" ]] || die "Panel base path cannot be empty."
   canonical_base_path="${PANEL_BASE_PATH}"
+  XUI_PANEL_PORT="$(choose_random_port 12000 48000 "$PUBLIC_PORT" "$PANEL_PORT" "$BACKEND_PORT" "$BOOTSTRAP_SOCKS_PORT")"
 
   /usr/local/x-ui/x-ui setting \
     -username "$PANEL_USER" \
     -password "$PANEL_PASSWORD" \
-    -port "$PANEL_PORT" \
+    -port "$XUI_PANEL_PORT" \
     -webBasePath "$canonical_base_path" \
-    -listenIP "0.0.0.0" >/dev/null
+    -listenIP "127.0.0.1" >/dev/null
 
-  # Best-effort local probe so operators can distinguish path mismatch from network/firewall issues.
-  panel_probe_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${PANEL_PORT}/${canonical_base_path}/" || true)"
+  systemctl restart x-ui
+  sleep 2
+
+  # Best-effort local probe so operators can distinguish path mismatch from process readiness issues.
+  panel_probe_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${XUI_PANEL_PORT}/${canonical_base_path}/" || true)"
   if [[ "$panel_probe_code" == "404" || "$panel_probe_code" == "000" || -z "$panel_probe_code" ]]; then
-    log "WARNING: Panel local probe returned HTTP ${panel_probe_code} at http://127.0.0.1:${PANEL_PORT}/${canonical_base_path}/"
+    log "WARNING: Hidden panel local probe returned HTTP ${panel_probe_code} at http://127.0.0.1:${XUI_PANEL_PORT}/${canonical_base_path}/"
   fi
 }
 
-enable_panel_tls() {
-  progress 75 "Enabling 3x-ui panel TLS (HTTPS mode)"
-  local cert_dir cert_path key_path server_name detected_ip san_index tmp_cfg panel_probe_code
-  local db_path="/etc/x-ui/x-ui.db"
+reset_stale_xray_template_config() {
+  progress 82 "Cleaning stale Xray template settings"
 
-  cert_dir="/etc/x-ui/cert"
-  cert_path="${cert_dir}/omnirelay-panel.crt"
-  key_path="${cert_dir}/omnirelay-panel.key"
+  local db_path="/etc/x-ui/x-ui.db"
+  if [[ ! -f "$db_path" ]]; then
+    return 0
+  fi
+
+  python3 - "$db_path" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings';")
+if cur.fetchone() is not None:
+    cur.execute("DELETE FROM settings WHERE key = ?", ("xrayTemplateConfig",))
+conn.commit()
+conn.close()
+PY
+
+  rm -f /etc/x-ui/omnirelay-xray-template.json || true
+  systemctl restart x-ui
+}
+
+ensure_metadata_dir() {
+  install -d -m 0700 -o root -g root "$METADATA_DIR"
+}
+
+xui_api_base_url() {
+  printf 'http://127.0.0.1:%s/%s' "$XUI_PANEL_PORT" "$PANEL_BASE_PATH"
+}
+
+xui_api_login() {
+  progress 74 "Authenticating with hidden 3x-ui API"
+  local login_url status retries=20
+  login_url="$(xui_api_base_url)/login/"
+  XUI_COOKIE_JAR="$(mktemp)"
+
+  for ((i=1; i<=retries; i++)); do
+    status="$(curl --silent --show-error --output /tmp/omnirelay-xui-login.json --write-out '%{http_code}' \
+      --cookie-jar "$XUI_COOKIE_JAR" \
+      --data-urlencode "username=${PANEL_USER}" \
+      --data-urlencode "password=${PANEL_PASSWORD}" \
+      --data-urlencode "twoFactorCode=" \
+      "$login_url" || true)"
+    if [[ "$status" == "200" || "$status" == "204" ]]; then
+      break
+    fi
+    sleep 2
+  done
+
+  grep -q '3x-ui' "$XUI_COOKIE_JAR" || die "Failed to authenticate against hidden 3x-ui API."
+}
+
+generate_short_ids_json() {
+  python3 - <<'PY'
+import json
+import random
+import secrets
+
+ids = []
+for _ in range(8):
+    ids.append(secrets.token_hex(random.randint(1, 8)))
+print(json.dumps(ids))
+PY
+}
+
+provision_managed_inbound() {
+  progress 78 "Creating managed VLESS REALITY inbound"
+  local api_base cert_json private_key public_key client_uuid sub_id short_ids_json
+  local settings_json stream_settings_json sniffing_json add_resp success
+
+  [[ -n "$GATEWAY_SNI" ]] || die "--gateway-sni is required for install."
+  [[ -n "$GATEWAY_TARGET" ]] || die "--gateway-target is required for install."
+
+  xui_api_login
+  api_base="$(xui_api_base_url)/panel/api"
+  cert_json="$(curl --fail --silent --show-error --cookie "$XUI_COOKIE_JAR" "${api_base}/server/getNewX25519Cert")"
+  private_key="$(printf '%s' "$cert_json" | jq -r '.obj.privateKey // empty')"
+  public_key="$(printf '%s' "$cert_json" | jq -r '.obj.publicKey // empty')"
+  [[ -n "$private_key" && -n "$public_key" ]] || die "3x-ui getNewX25519Cert did not return private/public key."
+
+  client_uuid="$(random_uuid)"
+  sub_id="$(random_string 16 | tr '[:upper:]' '[:lower:]')"
+  short_ids_json="$(generate_short_ids_json)"
+
+  settings_json="$(jq -cn \
+    --arg uuid "$client_uuid" \
+    --arg subId "$sub_id" \
+    '{
+      clients: [
+        {
+          id: $uuid,
+          flow: "xtls-rprx-vision",
+          email: "OmniRelayAdmin",
+          limitIp: 0,
+          totalGB: 0,
+          expiryTime: 0,
+          enable: true,
+          tgId: "",
+          subId: $subId,
+          comment: "",
+          reset: 0
+        }
+      ],
+      decryption: "none",
+      encryption: "none"
+    }')"
+
+  stream_settings_json="$(jq -cn \
+    --arg target "$GATEWAY_TARGET" \
+    --arg sni "$GATEWAY_SNI" \
+    --arg privateKey "$private_key" \
+    --arg publicKey "$public_key" \
+    --argjson shortIds "$short_ids_json" \
+    '{
+      network: "tcp",
+      security: "reality",
+      externalProxy: [],
+      realitySettings: {
+        show: false,
+        xver: 0,
+        target: $target,
+        serverNames: [$sni],
+        privateKey: $privateKey,
+        minClientVer: "",
+        maxClientVer: "",
+        maxTimediff: 0,
+        shortIds: $shortIds,
+        mldsa65Seed: "",
+        settings: {
+          publicKey: $publicKey,
+          fingerprint: "chrome",
+          serverName: "",
+          spiderX: "/",
+          mldsa65Verify: ""
+        }
+      },
+      tcpSettings: {
+        acceptProxyProtocol: false,
+        header: {
+          type: "none"
+        }
+      }
+    }')"
+
+  sniffing_json='{"enabled":false,"destOverride":["http","tls","quic","fakedns"],"metadataOnly":false,"routeOnly":false}'
+  add_resp="$(curl --fail --silent --show-error --cookie "$XUI_COOKIE_JAR" \
+    --header 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
+    --data-urlencode "up=0" \
+    --data-urlencode "down=0" \
+    --data-urlencode "total=0" \
+    --data-urlencode "remark=omni-relay" \
+    --data-urlencode "enable=true" \
+    --data-urlencode "expiryTime=0" \
+    --data-urlencode "trafficReset=never" \
+    --data-urlencode "lastTrafficResetTime=0" \
+    --data-urlencode "listen=" \
+    --data-urlencode "port=${PUBLIC_PORT}" \
+    --data-urlencode "protocol=vless" \
+    --data-urlencode "settings=${settings_json}" \
+    --data-urlencode "streamSettings=${stream_settings_json}" \
+    --data-urlencode "sniffing=${sniffing_json}" \
+    "${api_base}/inbounds/add")"
+
+  success="$(printf '%s' "$add_resp" | jq -r '.success // false')"
+  [[ "$success" == "true" ]] || die "Failed to create managed inbound via 3x-ui API: $(printf '%s' "$add_resp" | jq -r '.msg // "unknown error"')"
+
+  INBOUND_ID="$(printf '%s' "$add_resp" | jq -r '.obj.id // empty')"
+  [[ -n "$INBOUND_ID" && "$INBOUND_ID" != "null" ]] || die "Unable to capture managed inbound id from 3x-ui response."
+}
+
+generate_panel_tls_cert() {
+  local cert_dir cert_path key_path server_name detected_ip san_index tmp_cfg
+  cert_dir="${METADATA_DIR}/certs"
+  cert_path="${cert_dir}/omnipanel.crt"
+  key_path="${cert_dir}/omnipanel.key"
   mkdir -p "$cert_dir"
   chmod 0700 "$cert_dir"
 
@@ -510,61 +747,154 @@ EOF
   chmod 0600 "$key_path"
   chmod 0644 "$cert_path"
   chown root:root "$key_path" "$cert_path"
-
-  if [[ -f "$db_path" ]]; then
-    python3 - "$db_path" "$cert_path" "$key_path" <<'PY'
-import sqlite3
-import sys
-
-db_path, cert_path, key_path = sys.argv[1], sys.argv[2], sys.argv[3]
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
-cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings';")
-if cur.fetchone() is not None:
-    for key, value in (("webCertFile", cert_path), ("webKeyFile", key_path)):
-        cur.execute("SELECT id FROM settings WHERE key = ?", (key,))
-        row = cur.fetchone()
-        if row:
-            cur.execute("UPDATE settings SET value = ? WHERE id = ?", (value, row[0]))
-        else:
-            cur.execute("INSERT INTO settings(key, value) VALUES(?, ?)", (key, value))
-conn.commit()
-conn.close()
-PY
-  fi
-
-  systemctl restart x-ui
-
-  panel_probe_code="$(curl --silent --output /dev/null --write-out '%{http_code}' --insecure "https://127.0.0.1:${PANEL_PORT}/${PANEL_BASE_PATH}/" || true)"
-  if [[ "$panel_probe_code" == "000" || -z "$panel_probe_code" ]]; then
-    log "WARNING: Panel local HTTPS probe failed at https://127.0.0.1:${PANEL_PORT}/${PANEL_BASE_PATH}/ (HTTP ${panel_probe_code})"
-  fi
 }
 
-reset_stale_xray_template_config() {
-  progress 82 "Cleaning stale Xray template settings"
+deploy_omnipanel_artifact() {
+  progress 88 "Deploying OmniPanel artifact"
+  local download_url release_id release_dir tmp_tar current_dir nested_dir panel_public_host
 
-  local db_path="/etc/x-ui/x-ui.db"
-  if [[ ! -f "$db_path" ]]; then
-    return 0
+  download_url="https://omnirelay.net/download/omni-gateway"
+  tmp_tar="/tmp/omni-gateway.tar.gz"
+  release_id="$(date +%Y%m%d%H%M%S)"
+  release_dir="${OMNIPANEL_APP_DIR}/releases/${release_id}"
+  current_dir="${OMNIPANEL_APP_DIR}/current"
+
+  mkdir -p "$release_dir"
+  curl --fail --silent --show-error --location "$download_url" --output "$tmp_tar"
+  tar -xzf "$tmp_tar" -C "$release_dir"
+
+  if [[ ! -f "${release_dir}/server.js" ]]; then
+    nested_dir="$(find "$release_dir" -mindepth 1 -maxdepth 1 -type d | head -n1 || true)"
+    if [[ -n "$nested_dir" && -f "${nested_dir}/server.js" ]]; then
+      cp -a "${nested_dir}/." "$release_dir/"
+    fi
+  fi
+  [[ -f "${release_dir}/server.js" ]] || die "Downloaded OmniPanel artifact is invalid (missing server.js)."
+
+  if ! id -u omnigateway >/dev/null 2>&1; then
+    useradd --system --home "$OMNIPANEL_APP_DIR" --shell /usr/sbin/nologin omnigateway
   fi
 
-  python3 - "$db_path" <<'PY'
-import sqlite3
-import sys
+  OMNIPANEL_INTERNAL_PORT="$(choose_random_port 22000 52000 "$PUBLIC_PORT" "$PANEL_PORT" "$BACKEND_PORT" "$BOOTSTRAP_SOCKS_PORT" "$XUI_PANEL_PORT")"
+  SESSION_SECRET="$(openssl rand -hex 32 | tr -d '\r\n')"
+  panel_public_host="$VPS_IP"
+  if [[ -z "$panel_public_host" ]]; then
+    panel_public_host="$(detect_vps_ip || true)"
+  fi
+  if [[ -z "$panel_public_host" ]]; then
+    panel_public_host="localhost"
+  fi
 
-db_path = sys.argv[1]
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
-cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings';")
-if cur.fetchone() is not None:
-    cur.execute("DELETE FROM settings WHERE key = ?", ("xrayTemplateConfig",))
-conn.commit()
-conn.close()
-PY
+  cat > "$OMNIPANEL_ENV_FILE" <<EOF
+NODE_ENV=production
+HOSTNAME=127.0.0.1
+PORT=${OMNIPANEL_INTERNAL_PORT}
+SESSION_SECRET=${SESSION_SECRET}
+XUI_BASE_URL=$(xui_api_base_url)
+XUI_INBOUND_ID=${INBOUND_ID}
+PANEL_PUBLIC_PORT=${PANEL_PORT}
+PANEL_PUBLIC_HOST=${panel_public_host}
+EOF
+  chmod 0600 "$OMNIPANEL_ENV_FILE"
 
-  rm -f /etc/x-ui/omnirelay-xray-template.json || true
-  systemctl restart x-ui
+  cat > "/etc/systemd/system/${OMNIPANEL_SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=OmniRelay OmniPanel
+After=network.target x-ui.service
+Requires=x-ui.service
+
+[Service]
+Type=simple
+User=omnigateway
+Group=omnigateway
+WorkingDirectory=${release_dir}
+EnvironmentFile=${OMNIPANEL_ENV_FILE}
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  ln -sfn "$release_dir" "$current_dir"
+  chown -R omnigateway:omnigateway "$OMNIPANEL_APP_DIR"
+
+  systemctl daemon-reload
+  systemctl enable --now "$OMNIPANEL_SERVICE_NAME"
+  systemctl restart "$OMNIPANEL_SERVICE_NAME"
+}
+
+configure_nginx_for_omnipanel() {
+  progress 92 "Configuring nginx HTTPS reverse-proxy for OmniPanel"
+  local nginx_conf cert_path key_path
+  generate_panel_tls_cert
+
+  cert_path="${METADATA_DIR}/certs/omnipanel.crt"
+  key_path="${METADATA_DIR}/certs/omnipanel.key"
+  nginx_conf="/etc/nginx/sites-available/omnirelay-omnipanel.conf"
+  cat > "$nginx_conf" <<EOF
+server {
+    listen ${PANEL_PORT} ssl;
+    server_name _;
+
+    ssl_certificate ${cert_path};
+    ssl_certificate_key ${key_path};
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_pass http://127.0.0.1:${OMNIPANEL_INTERNAL_PORT};
+    }
+}
+EOF
+
+  ln -sfn "$nginx_conf" /etc/nginx/sites-enabled/omnirelay-omnipanel.conf
+  rm -f /etc/nginx/sites-enabled/default || true
+  nginx -t
+  systemctl enable --now nginx
+  systemctl restart nginx
+}
+
+write_gateway_metadata() {
+  progress 95 "Persisting managed gateway metadata"
+  ensure_metadata_dir
+
+  jq -n \
+    --arg inboundId "$INBOUND_ID" \
+    --arg xuiPort "$XUI_PANEL_PORT" \
+    --arg xuiPath "$PANEL_BASE_PATH" \
+    --arg xuiUser "$PANEL_USER" \
+    --arg xuiPassword "$PANEL_PASSWORD" \
+    --arg panelPort "$PANEL_PORT" \
+    --arg panelInternalPort "$OMNIPANEL_INTERNAL_PORT" \
+    --arg publicPort "$PUBLIC_PORT" \
+    --arg gatewaySni "$GATEWAY_SNI" \
+    --arg gatewayTarget "$GATEWAY_TARGET" \
+    '{
+      inbound_id: $inboundId,
+      xui_panel_port: ($xuiPort | tonumber),
+      xui_base_path: $xuiPath,
+      xui_username: $xuiUser,
+      xui_password: $xuiPassword,
+      omnipanel_public_port: ($panelPort | tonumber),
+      omnipanel_internal_port: ($panelInternalPort | tonumber),
+      public_port: ($publicPort | tonumber),
+      gateway_sni: $gatewaySni,
+      gateway_target: $gatewayTarget,
+      created_at_utc: now | todate
+    }' > "$METADATA_FILE"
+
+  chmod 0600 "$METADATA_FILE"
 }
 
 build_dns_json_array() {
@@ -947,17 +1277,36 @@ ensure_ssh_service_resolved() {
   detect_ssh_service || SSH_SERVICE="ssh"
 }
 
+metadata_value() {
+  local key="$1"
+  if [[ -f "$METADATA_FILE" ]]; then
+    jq -r "$key // empty" "$METADATA_FILE" 2>/dev/null || true
+  fi
+}
+
 status_impl() {
   ensure_ssh_service_resolved
-  local ssh_state xui_state fail2ban_state tunnel_listener ingress_listener panel_listener socks_listener dns_json
-  local dns_config_present dns_rule_active doh_reachable udp53_ready dns_path_healthy dns_mode dns_udp_only doh_endpoints
+  local ssh_state xui_state omnipanel_state nginx_state fail2ban_state tunnel_listener ingress_listener panel_listener socks_listener dns_json
+  local omnipanel_internal_listener dns_config_present dns_rule_active doh_reachable udp53_ready dns_path_healthy dns_mode dns_udp_only doh_endpoints
+  local metadata_inbound_id metadata_internal_port metadata_xui_panel_port
+
   ssh_state="$(systemctl is-active "$SSH_SERVICE" 2>/dev/null || echo inactive)"
   xui_state="$(systemctl is-active x-ui 2>/dev/null || echo inactive)"
+  omnipanel_state="$(systemctl is-active "$OMNIPANEL_SERVICE_NAME" 2>/dev/null || echo inactive)"
+  nginx_state="$(systemctl is-active nginx 2>/dev/null || echo inactive)"
   fail2ban_state="disabled"
   tunnel_listener="$(check_listener "$BACKEND_PORT")"
   ingress_listener="$(check_listener "$PUBLIC_PORT")"
   panel_listener="$(check_listener "$PANEL_PORT")"
   socks_listener="$(check_listener "$BOOTSTRAP_SOCKS_PORT")"
+  metadata_internal_port="$(metadata_value '.omnipanel_internal_port')"
+  metadata_xui_panel_port="$(metadata_value '.xui_panel_port')"
+  metadata_inbound_id="$(metadata_value '.inbound_id')"
+  if [[ -n "$metadata_internal_port" ]]; then
+    omnipanel_internal_listener="$(check_listener "$metadata_internal_port")"
+  else
+    omnipanel_internal_listener="false"
+  fi
   dns_json="$(dns_status_json)"
   dns_config_present="$(printf '%s' "$dns_json" | grep -o '"dnsConfigPresent":[^,}]*' | cut -d: -f2)"
   dns_rule_active="$(printf '%s' "$dns_json" | grep -o '"dnsRuleActive":[^,}]*' | cut -d: -f2)"
@@ -969,18 +1318,24 @@ status_impl() {
   doh_endpoints="$(printf '%s' "$dns_json" | grep -o '"dohEndpoints":"[^"]*"' | sed 's/"dohEndpoints":"//;s/"$//')"
 
   if (( STATUS_JSON == 1 )); then
-    printf '{"sshState":"%s","xuiState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"bootstrapSocksListener":%s,"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' \
+    printf '{"sshState":"%s","xuiState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"bootstrapSocksListener":%s,"inboundId":"%s","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' \
       "$(json_escape "$ssh_state")" \
       "$(json_escape "$xui_state")" \
+      "$(json_escape "$omnipanel_state")" \
+      "$(json_escape "$nginx_state")" \
       "$(json_escape "$fail2ban_state")" \
       "$BACKEND_PORT" \
       "$PUBLIC_PORT" \
       "$PANEL_PORT" \
+      "${metadata_internal_port:-0}" \
+      "${metadata_xui_panel_port:-0}" \
       "$BOOTSTRAP_SOCKS_PORT" \
       "$tunnel_listener" \
       "$ingress_listener" \
       "$panel_listener" \
+      "$omnipanel_internal_listener" \
       "$socks_listener" \
+      "$(json_escape "$metadata_inbound_id")" \
       "$dns_config_present" \
       "$dns_rule_active" \
       "$doh_reachable" \
@@ -996,10 +1351,15 @@ status_impl() {
 Gateway status:
   sshd:      ${ssh_state}
   x-ui:      ${xui_state}
+  omniPanel: ${omnipanel_state}
+  nginx:     ${nginx_state}
   fail2ban:  ${fail2ban_state}
   backend listener 127.0.0.1:${BACKEND_PORT}: ${tunnel_listener}
   public listener 0.0.0.0:${PUBLIC_PORT}: ${ingress_listener}
-  panel listener 0.0.0.0:${PANEL_PORT}: ${panel_listener}
+  omniPanel listener 0.0.0.0:${PANEL_PORT}: ${panel_listener}
+  omniPanel internal 127.0.0.1:${metadata_internal_port:-0}: ${omnipanel_internal_listener}
+  hidden 3x-ui panel port: ${metadata_xui_panel_port:-unknown}
+  managed inbound id: ${metadata_inbound_id:-unknown}
   bootstrap socks 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}: ${socks_listener}
   dns mode: ${dns_mode}
   dns udp only: ${dns_udp_only}
@@ -1014,11 +1374,14 @@ EOF
 health_impl() {
   ensure_ssh_service_resolved
   progress 5 "Running gateway health checks"
-  local ssh_state xui_state fail2ban_state tunnel_listener ingress_listener panel_listener socks_listener healthy dns_json
+  local ssh_state xui_state omnipanel_state nginx_state fail2ban_state tunnel_listener ingress_listener panel_listener socks_listener healthy dns_json
+  local omnipanel_internal_listener metadata_internal_port metadata_xui_panel_port metadata_inbound_id
   local dns_config_present dns_rule_active doh_reachable udp53_ready dns_path_healthy dns_mode dns_udp_only doh_endpoints dns_last_error
 
   ssh_state="$(systemctl is-active "$SSH_SERVICE" 2>/dev/null || echo inactive)"
   xui_state="$(systemctl is-active x-ui 2>/dev/null || echo inactive)"
+  omnipanel_state="$(systemctl is-active "$OMNIPANEL_SERVICE_NAME" 2>/dev/null || echo inactive)"
+  nginx_state="$(systemctl is-active nginx 2>/dev/null || echo inactive)"
   fail2ban_state="disabled"
 
   progress 45 "Checking expected listeners"
@@ -1026,6 +1389,14 @@ health_impl() {
   ingress_listener="$(check_listener "$PUBLIC_PORT")"
   panel_listener="$(check_listener "$PANEL_PORT")"
   socks_listener="$(check_listener "$BOOTSTRAP_SOCKS_PORT")"
+  metadata_internal_port="$(metadata_value '.omnipanel_internal_port')"
+  metadata_xui_panel_port="$(metadata_value '.xui_panel_port')"
+  metadata_inbound_id="$(metadata_value '.inbound_id')"
+  if [[ -n "$metadata_internal_port" ]]; then
+    omnipanel_internal_listener="$(check_listener "$metadata_internal_port")"
+  else
+    omnipanel_internal_listener="false"
+  fi
   dns_json="$(dns_status_json)"
   dns_config_present="$(printf '%s' "$dns_json" | grep -o '"dnsConfigPresent":[^,}]*' | cut -d: -f2)"
   dns_rule_active="$(printf '%s' "$dns_json" | grep -o '"dnsRuleActive":[^,}]*' | cut -d: -f2)"
@@ -1039,7 +1410,10 @@ health_impl() {
   healthy=true
   [[ "$ssh_state" == "active" ]] || healthy=false
   [[ "$xui_state" == "active" ]] || healthy=false
+  [[ "$omnipanel_state" == "active" ]] || healthy=false
+  [[ "$nginx_state" == "active" ]] || healthy=false
   [[ "$panel_listener" == "true" ]] || healthy=false
+  [[ "$omnipanel_internal_listener" == "true" ]] || healthy=false
   [[ "$tunnel_listener" == "true" ]] || healthy=false
   [[ "$socks_listener" == "true" ]] || healthy=false
   [[ "$dns_path_healthy" == "true" ]] || healthy=false
@@ -1062,19 +1436,25 @@ health_impl() {
   progress 100 "Health checks completed"
 
   if (( HEALTH_JSON == 1 )); then
-    printf '{"healthy":%s,"sshState":"%s","xuiState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"bootstrapSocksListener":%s,"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsLastError":"%s"}\n' \
+    printf '{"healthy":%s,"sshState":"%s","xuiState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"bootstrapSocksListener":%s,"inboundId":"%s","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsLastError":"%s"}\n' \
       "$healthy" \
       "$(json_escape "$ssh_state")" \
       "$(json_escape "$xui_state")" \
+      "$(json_escape "$omnipanel_state")" \
+      "$(json_escape "$nginx_state")" \
       "$(json_escape "$fail2ban_state")" \
       "$BACKEND_PORT" \
       "$PUBLIC_PORT" \
       "$PANEL_PORT" \
+      "${metadata_internal_port:-0}" \
+      "${metadata_xui_panel_port:-0}" \
       "$BOOTSTRAP_SOCKS_PORT" \
       "$tunnel_listener" \
       "$ingress_listener" \
       "$panel_listener" \
+      "$omnipanel_internal_listener" \
       "$socks_listener" \
+      "$(json_escape "$metadata_inbound_id")" \
       "$dns_config_present" \
       "$dns_rule_active" \
       "$doh_reachable" \
@@ -1091,10 +1471,15 @@ health_impl() {
 Gateway health: ${healthy}
   sshd:      ${ssh_state}
   x-ui:      ${xui_state}
+  omniPanel: ${omnipanel_state}
+  nginx:     ${nginx_state}
   fail2ban:  ${fail2ban_state}
   backend listener 127.0.0.1:${BACKEND_PORT}: ${tunnel_listener}
   public listener 0.0.0.0:${PUBLIC_PORT}: ${ingress_listener}
-  panel listener 0.0.0.0:${PANEL_PORT}: ${panel_listener}
+  omniPanel listener 0.0.0.0:${PANEL_PORT}: ${panel_listener}
+  omniPanel internal 127.0.0.1:${metadata_internal_port:-0}: ${omnipanel_internal_listener}
+  hidden 3x-ui panel port: ${metadata_xui_panel_port:-unknown}
+  managed inbound id: ${metadata_inbound_id:-unknown}
   bootstrap socks 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}: ${socks_listener}
   dns config present: ${dns_config_present}
   dns rule active: ${dns_rule_active}
@@ -1109,29 +1494,49 @@ start_impl() {
   ensure_ssh_service_resolved
   progress 12 "Starting sshd"
   systemctl start "$SSH_SERVICE"
-  progress 75 "Starting x-ui"
+  progress 45 "Starting x-ui"
   systemctl start x-ui
+  progress 78 "Starting OmniPanel"
+  systemctl start "$OMNIPANEL_SERVICE_NAME" || true
+  progress 90 "Ensuring nginx is running"
+  systemctl start nginx || true
   progress 100 "Gateway services started"
 }
 
 stop_impl() {
   require_root
-  progress 20 "Stopping x-ui"
+  progress 20 "Stopping OmniPanel"
+  systemctl stop "$OMNIPANEL_SERVICE_NAME" || true
+  progress 60 "Stopping x-ui"
   systemctl stop x-ui || true
   progress 100 "Gateway service stop completed"
 }
 
 uninstall_impl() {
   require_root
-  progress 10 "Stopping x-ui"
+  progress 8 "Stopping OmniPanel and x-ui"
+  systemctl disable --now "$OMNIPANEL_SERVICE_NAME" || true
   systemctl disable --now x-ui || true
 
-  progress 40 "Removing x-ui files"
+  progress 20 "Removing OmniPanel runtime"
+  rm -rf "$OMNIPANEL_APP_DIR"
+  rm -f "/etc/systemd/system/${OMNIPANEL_SERVICE_NAME}.service"
+  rm -f "$OMNIPANEL_ENV_FILE"
+  rm -f "$METADATA_FILE"
+  rm -rf "$METADATA_DIR"
+  systemctl daemon-reload || true
+
+  progress 32 "Removing OmniPanel nginx configuration"
+  rm -f /etc/nginx/sites-enabled/omnirelay-omnipanel.conf
+  rm -f /etc/nginx/sites-available/omnirelay-omnipanel.conf
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
+
+  progress 50 "Removing x-ui files"
   rm -rf /usr/local/x-ui /etc/x-ui /var/log/x-ui
   rm -f /usr/bin/x-ui /etc/systemd/system/x-ui.service
   rm -f /usr/local/sbin/omnirelay-gatewayctl
 
-  progress 70 "Cleaning managed sshd drop-in"
+  progress 74 "Cleaning managed sshd drop-in"
   rm -f /etc/ssh/sshd_config.d/99-omnirelay.conf
   sshd -t || true
   if [[ -n "$SSH_SERVICE" ]]; then
@@ -1143,7 +1548,7 @@ uninstall_impl() {
 
 print_summary() {
   ensure_ssh_service_resolved
-  local endpoint panel_url
+  local endpoint panel_url metadata_inbound_id metadata_xui_panel_port
   endpoint="$VPS_IP"
   if [[ -z "$endpoint" ]]; then
     endpoint="$(detect_vps_ip || true)"
@@ -1152,7 +1557,9 @@ print_summary() {
     endpoint="<VPS_IP_OR_HOSTNAME>"
   fi
 
-  panel_url="https://${endpoint}:${PANEL_PORT}/${PANEL_BASE_PATH}/"
+  panel_url="https://${endpoint}:${PANEL_PORT}/"
+  metadata_inbound_id="$(metadata_value '.inbound_id')"
+  metadata_xui_panel_port="$(metadata_value '.xui_panel_port')"
 
   cat <<EOF
 
@@ -1162,12 +1569,19 @@ OmniRelay VPS 3x-ui online install complete.
 Services:
   - sshd:      $(systemctl is-active "$SSH_SERVICE" || true)
   - x-ui:      $(systemctl is-active x-ui || true)
+  - omnipanel: $(systemctl is-active "$OMNIPANEL_SERVICE_NAME" || true)
+  - nginx:     $(systemctl is-active nginx || true)
   - fail2ban:  disabled
 
-Panel:
+OmniPanel:
   URL:      ${panel_url}
   Username: ${PANEL_USER}
   Password: ${PANEL_PASSWORD}
+  Inbound:  ${metadata_inbound_id:-unknown}
+
+Hidden 3x-ui:
+  Base path: /${PANEL_BASE_PATH}
+  Loopback port: ${metadata_xui_panel_port:-unknown}
 
 Traffic model:
   Client -> VPS:${PUBLIC_PORT} -> x-ui/Xray -> http://127.0.0.1:${BACKEND_PORT}
@@ -1188,7 +1602,10 @@ install_impl() {
   disable_haproxy
   install_3xui_online
   configure_panel_credentials
-  enable_panel_tls
+  provision_managed_inbound
+  deploy_omnipanel_artifact
+  configure_nginx_for_omnipanel
+  write_gateway_metadata
   reset_stale_xray_template_config
   apply_dns_profile
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
@@ -1215,6 +1632,14 @@ parse_args() {
         ;;
       --backend-port)
         BACKEND_PORT="${2:-}"
+        shift 2
+        ;;
+      --gateway-sni)
+        GATEWAY_SNI="${2:-}"
+        shift 2
+        ;;
+      --gateway-target)
+        GATEWAY_TARGET="${2:-}"
         shift 2
         ;;
       --ssh-port)
@@ -1304,6 +1729,8 @@ validate_common() {
   PROXY_CHECK_URL="${PROXY_CHECK_URL%\"}"
   PROXY_CHECK_URL="${PROXY_CHECK_URL#\'}"
   PROXY_CHECK_URL="${PROXY_CHECK_URL%\'}"
+  GATEWAY_SNI="$(printf '%s' "$GATEWAY_SNI" | tr -d '\r\n' | xargs)"
+  GATEWAY_TARGET="$(printf '%s' "$GATEWAY_TARGET" | tr -d '\r\n' | xargs)"
 
   if [[ "$PUBLIC_PORT" == "$PANEL_PORT" ]]; then
     die "--public-port and --panel-port must be different."
@@ -1322,6 +1749,11 @@ validate_common() {
     host_key|password|both) ;;
     *) die "Invalid --tunnel-auth value: ${TUNNEL_AUTH_METHOD}. Expected host_key|password|both." ;;
   esac
+
+  if [[ "$COMMAND" == "install" ]]; then
+    [[ -n "$GATEWAY_SNI" ]] || die "--gateway-sni is required for install."
+    [[ -n "$GATEWAY_TARGET" ]] || die "--gateway-target is required for install."
+  fi
 }
 
 main() {
