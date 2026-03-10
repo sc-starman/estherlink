@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 
 export function LoginClient() {
   const router = useRouter();
@@ -19,7 +20,7 @@ export function LoginClient() {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password }),
       });
 
       const payload = (await response.json()) as { message?: string };
@@ -41,9 +42,22 @@ export function LoginClient() {
     <main className="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center px-6 py-12">
       <section className="card w-full max-w-md p-8">
         <div className="mb-6">
-          <p className="text-xs uppercase tracking-[0.35em] text-cyan-700">OmniRelay</p>
-          <h1 className="mt-2 text-3xl font-semibold text-slate-900">OmniPanel</h1>
-          <p className="mt-2 text-sm text-slate-600">Sign in with your gateway panel credentials.</p>
+          <p className="text-xs uppercase tracking-[0.35em] text-cyan-700">
+            OmniRelay
+          </p>
+          <div className="flex items-center gap-3">
+            <Image
+              src="/images/logo.png"
+              width={40}
+              height={40}
+              alt="OmniPanel Logo"
+              className="rounded-lg"
+            />
+            <h1 className="text-3xl font-semibold text-slate-900">OmniPanel</h1>
+          </div>
+          <p className="mt-2 text-sm text-slate-600">
+            Sign in with your gateway panel credentials.
+          </p>
         </div>
 
         <form className="space-y-4" onSubmit={handleSubmit}>

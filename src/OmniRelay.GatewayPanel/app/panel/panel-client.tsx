@@ -36,6 +36,7 @@ export function PanelClient() {
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
   const [selectedConfig, setSelectedConfig] = useState<ConfigPayload | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const activeClients = useMemo(() => clients.filter((client) => client.enable).length, [clients]);
 
@@ -138,6 +139,21 @@ export function PanelClient() {
     }
 
     setSelectedConfig(payload);
+    setCopied(false);
+  }
+
+  async function copyConfigUri() {
+    if (!selectedConfig) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(selectedConfig.uri);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Failed to copy config.");
+    }
   }
 
   async function logout() {
@@ -152,8 +168,11 @@ export function PanelClient() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.35em] text-cyan-700">Gateway Panel</p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900">OmniPanel</h1>
-            <p className="mt-1 text-sm text-slate-600">Manage inbound clients without exposing 3x-ui.</p>
+            <div className="flex items-center gap-3">
+              <Image src="/images/logo.png" width={40} height={40} alt="OmniPanel Logo" className="rounded-lg" />
+              <h1 className="text-3xl font-semibold text-slate-900">OmniPanel</h1>
+            </div>
+            <p className="mt-1 text-sm text-slate-600">Manage gateway clients.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="rounded-xl border border-slate-300 px-4 py-2 text-sm" onClick={() => void loadInbound()}>
@@ -181,12 +200,12 @@ export function PanelClient() {
 
         <div className="mt-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
           <label className="min-w-64 flex-1 text-sm text-slate-700">
-            New Client Email
+            New Client Memo
             <input
               className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="client@example.com"
+              placeholder="Client Memo (e.g. user email or note)"
             />
           </label>
           <button className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white" onClick={() => void addClient()}>
@@ -254,18 +273,34 @@ export function PanelClient() {
       </section>
 
       {selectedConfig ? (
-        <section className="card mt-6 p-6">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-xl font-semibold text-slate-900">Client Config</h2>
-            <button className="rounded-xl border border-slate-300 px-3 py-1 text-sm" onClick={() => setSelectedConfig(null)}>
-              Close
-            </button>
-          </div>
-          <textarea readOnly className="mt-4 h-28 w-full rounded-xl border border-slate-300 p-3 font-[var(--font-mono)] text-xs" value={selectedConfig.uri} />
-          <div className="mt-4 flex justify-center">
-            <Image src={selectedConfig.qrCodeDataUrl} width={240} height={240} alt="QR Code" className="rounded-xl border border-slate-200" />
-          </div>
-        </section>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setSelectedConfig(null)}>
+          <section className="card w-full max-w-xl p-6" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-xl font-semibold text-slate-900">Client Config</h2>
+              <button className="rounded-xl border border-slate-300 px-3 py-1 text-sm" onClick={() => setSelectedConfig(null)}>
+                Close
+              </button>
+            </div>
+            <div className="mt-4 flex items-start gap-2">
+              <textarea readOnly className="h-28 w-full rounded-xl border border-slate-300 p-3 font-[var(--font-mono)] text-xs" value={selectedConfig.uri} />
+              <button
+                title="Copy config"
+                aria-label="Copy config"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100"
+                onClick={() => void copyConfigUri()}
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <rect x="9" y="9" width="10" height="10" rx="2" />
+                  <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+                </svg>
+              </button>
+            </div>
+            {copied ? <p className="mt-2 text-xs text-emerald-700">Copied.</p> : null}
+            <div className="mt-4 flex justify-center">
+              <Image src={selectedConfig.qrCodeDataUrl} width={240} height={240} alt="QR Code" className="rounded-xl border border-slate-200" />
+            </div>
+          </section>
+        </div>
       ) : null}
     </main>
   );
