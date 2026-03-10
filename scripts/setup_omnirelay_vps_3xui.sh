@@ -29,6 +29,7 @@ XUI_PANEL_PORT=0
 OMNIPANEL_INTERNAL_PORT=0
 INBOUND_ID=""
 SESSION_SECRET=""
+XUI_API_SCHEME="http"
 METADATA_DIR="/etc/omnirelay/gateway"
 METADATA_FILE="/etc/omnirelay/gateway/metadata.json"
 OMNIPANEL_ENV_FILE="/etc/omnirelay/gateway/omnipanel.env"
@@ -225,6 +226,13 @@ write_file_if_changed() {
   return 0
 }
 
+disable_proxy_env() {
+  unset ALL_PROXY HTTPS_PROXY HTTP_PROXY
+  unset all_proxy https_proxy http_proxy
+  export NO_PROXY="127.0.0.1,localhost"
+  export no_proxy="127.0.0.1,localhost"
+}
+
 json_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -319,6 +327,31 @@ install_packages_online() {
     sqlite3 \
     nginx \
     nodejs
+}
+
+ensure_nodejs_runtime() {
+  local major
+  major=0
+  if command -v node >/dev/null 2>&1; then
+    major="$(node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0)"
+  fi
+
+  if (( major >= 18 )); then
+    return 0
+  fi
+
+  progress 36 "Upgrading Node.js runtime to v20"
+  configure_online_proxy_env
+  curl --fail --silent --show-error --location "https://deb.nodesource.com/setup_20.x" --output /tmp/omnirelay-nodesource-setup.sh
+  bash /tmp/omnirelay-nodesource-setup.sh
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs
+
+  major=0
+  if command -v node >/dev/null 2>&1; then
+    major="$(node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0)"
+  fi
+
+  (( major >= 18 )) || die "Node.js 18+ is required for OmniPanel, but detected version is too old."
 }
 
 setup_tunnel_user() {
@@ -475,6 +508,13 @@ detect_vps_ip() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}'
 }
 
+apply_hidden_panel_settings() {
+  /usr/local/x-ui/x-ui setting -username "$PANEL_USER" -password "$PANEL_PASSWORD" -resetTwoFactor true >/dev/null
+  /usr/local/x-ui/x-ui setting -port "$XUI_PANEL_PORT" >/dev/null
+  /usr/local/x-ui/x-ui setting -webBasePath "$PANEL_BASE_PATH" >/dev/null
+  /usr/local/x-ui/x-ui setting -listenIP "127.0.0.1" >/dev/null
+}
+
 configure_panel_credentials() {
   progress 68 "Configuring hidden 3x-ui panel credentials"
   local canonical_base_path panel_probe_code
@@ -483,7 +523,7 @@ configure_panel_credentials() {
     PANEL_USER="omniadmin_$(random_string 6)"
   fi
   if [[ -z "$PANEL_PASSWORD" ]]; then
-    PANEL_PASSWORD="$(openssl rand -base64 24 | tr -d '\n' | tr '/+' 'AB' | cut -c1-24)"
+    PANEL_PASSWORD="$(random_string 24)"
   fi
   if [[ -z "$PANEL_BASE_PATH" ]]; then
     PANEL_BASE_PATH="$(random_string 18)"
@@ -495,18 +535,14 @@ configure_panel_credentials() {
   canonical_base_path="${PANEL_BASE_PATH}"
   XUI_PANEL_PORT="$(choose_random_port 12000 48000 "$PUBLIC_PORT" "$PANEL_PORT" "$BACKEND_PORT" "$BOOTSTRAP_SOCKS_PORT")"
 
-  /usr/local/x-ui/x-ui setting \
-    -username "$PANEL_USER" \
-    -password "$PANEL_PASSWORD" \
-    -port "$XUI_PANEL_PORT" \
-    -webBasePath "$canonical_base_path" \
-    -listenIP "127.0.0.1" >/dev/null
+  apply_hidden_panel_settings
 
   systemctl restart x-ui
   sleep 2
 
   # Best-effort local probe so operators can distinguish path mismatch from process readiness issues.
-  panel_probe_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${XUI_PANEL_PORT}/${canonical_base_path}/" || true)"
+  disable_proxy_env
+  panel_probe_code="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${XUI_PANEL_PORT}/${canonical_base_path}/" || true)"
   if [[ "$panel_probe_code" == "404" || "$panel_probe_code" == "000" || -z "$panel_probe_code" ]]; then
     log "WARNING: Hidden panel local probe returned HTTP ${panel_probe_code} at http://127.0.0.1:${XUI_PANEL_PORT}/${canonical_base_path}/"
   fi
@@ -543,29 +579,161 @@ ensure_metadata_dir() {
 }
 
 xui_api_base_url() {
-  printf 'http://127.0.0.1:%s/%s' "$XUI_PANEL_PORT" "$PANEL_BASE_PATH"
+  printf '%s://127.0.0.1:%s/%s' "$XUI_API_SCHEME" "$XUI_PANEL_PORT" "$PANEL_BASE_PATH"
+}
+
+xui_wait_for_panel_ready() {
+  local retries=30
+  local probe_path
+  PANEL_BASE_PATH="${PANEL_BASE_PATH#/}"
+  PANEL_BASE_PATH="${PANEL_BASE_PATH%/}"
+  probe_path="/${PANEL_BASE_PATH}/"
+
+  disable_proxy_env
+  for ((i=1; i<=retries; i++)); do
+    if curl --noproxy '*' --silent --output /dev/null --insecure --max-time 4 "http://127.0.0.1:${XUI_PANEL_PORT}${probe_path}" 2>/dev/null; then
+      return 0
+    fi
+    if curl --noproxy '*' --silent --output /dev/null --insecure --max-time 4 "https://127.0.0.1:${XUI_PANEL_PORT}${probe_path}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+xui_detect_api_scheme() {
+  local login_path code
+  login_path="/${PANEL_BASE_PATH}/login/"
+
+  disable_proxy_env
+
+  # Prefer HTTPS first because x-ui may enforce HTTPS with HTTP 307 redirects.
+  code="$(curl --noproxy '*' --silent --insecure --output /dev/null --write-out '%{http_code}' "https://127.0.0.1:${XUI_PANEL_PORT}${login_path}" 2>/dev/null || true)"
+  if [[ "$code" != "000" && -n "$code" ]]; then
+    XUI_API_SCHEME="https"
+    return 0
+  fi
+
+  code="$(curl --noproxy '*' --silent --insecure --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${XUI_PANEL_PORT}${login_path}" 2>/dev/null || true)"
+  if [[ "$code" != "000" && -n "$code" ]]; then
+    XUI_API_SCHEME="http"
+    return 0
+  fi
+
+  return 1
 }
 
 xui_api_login() {
   progress 74 "Authenticating with hidden 3x-ui API"
-  local login_url status retries=20
+  local login_url status retries=20 login_success body_success body_msg
+  local fallback_user fallback_pass update_url update_resp update_success update_msg
+  xui_wait_for_panel_ready || log "WARNING: Hidden panel did not become ready within expected time on 127.0.0.1:${XUI_PANEL_PORT}."
+  xui_detect_api_scheme || die "Unable to detect hidden 3x-ui API scheme on 127.0.0.1:${XUI_PANEL_PORT}."
   login_url="$(xui_api_base_url)/login/"
   XUI_COOKIE_JAR="$(mktemp)"
+  disable_proxy_env
+  login_success=0
 
   for ((i=1; i<=retries; i++)); do
-    status="$(curl --silent --show-error --output /tmp/omnirelay-xui-login.json --write-out '%{http_code}' \
+    status="$(curl --noproxy '*' --silent --show-error --insecure --output /tmp/omnirelay-xui-login.json --write-out '%{http_code}' \
+      --location \
       --cookie-jar "$XUI_COOKIE_JAR" \
+      --cookie "$XUI_COOKIE_JAR" \
       --data-urlencode "username=${PANEL_USER}" \
       --data-urlencode "password=${PANEL_PASSWORD}" \
       --data-urlencode "twoFactorCode=" \
       "$login_url" || true)"
-    if [[ "$status" == "200" || "$status" == "204" ]]; then
+    if grep -q '3x-ui' "$XUI_COOKIE_JAR" 2>/dev/null; then
+      login_success=1
       break
+    fi
+    if [[ "$status" == "200" || "$status" == "204" ]]; then
+      body_success="$(jq -r '.success // empty' /tmp/omnirelay-xui-login.json 2>/dev/null || true)"
+      body_msg="$(jq -r '.msg // empty' /tmp/omnirelay-xui-login.json 2>/dev/null || true)"
+      if [[ "$body_success" == "true" ]]; then
+        login_success=1
+        break
+      fi
+      if [[ "$i" -eq 3 ]]; then
+        log "Hidden API login not accepted yet (status=${status}, success=${body_success:-n/a}, msg=${body_msg:-n/a}); reapplying panel settings and restarting x-ui once."
+        apply_hidden_panel_settings
+        systemctl restart x-ui
+        sleep 2
+        xui_detect_api_scheme || true
+      fi
     fi
     sleep 2
   done
 
-  grep -q '3x-ui' "$XUI_COOKIE_JAR" || die "Failed to authenticate against hidden 3x-ui API."
+  if [[ "$login_success" != "1" ]]; then
+    fallback_user="admin"
+    fallback_pass="admin"
+    log "Primary generated credentials were rejected; trying fallback login with default bootstrap credentials."
+    for ((i=1; i<=8; i++)); do
+      status="$(curl --noproxy '*' --silent --show-error --insecure --output /tmp/omnirelay-xui-login.json --write-out '%{http_code}' \
+        --location \
+        --cookie-jar "$XUI_COOKIE_JAR" \
+        --cookie "$XUI_COOKIE_JAR" \
+        --data-urlencode "username=${fallback_user}" \
+        --data-urlencode "password=${fallback_pass}" \
+        --data-urlencode "twoFactorCode=" \
+        "$login_url" || true)"
+      if grep -q '3x-ui' "$XUI_COOKIE_JAR" 2>/dev/null; then
+        login_success=1
+        break
+      fi
+      sleep 2
+    done
+  fi
+
+  if [[ "$login_success" == "1" ]] && ! grep -q '3x-ui' "$XUI_COOKIE_JAR" 2>/dev/null; then
+    login_success=0
+  fi
+
+  if [[ "$login_success" == "1" ]]; then
+    # If we only got in using fallback credentials, immediately rotate to generated credentials.
+    if [[ "${fallback_user:-}" == "admin" ]] && [[ "${fallback_pass:-}" == "admin" ]] && [[ "$PANEL_USER" != "admin" || "$PANEL_PASSWORD" != "admin" ]]; then
+      update_url="$(xui_api_base_url)/panel/setting/updateUser"
+      update_resp="$(curl --noproxy '*' --silent --show-error --insecure --location \
+        --cookie "$XUI_COOKIE_JAR" \
+        --cookie-jar "$XUI_COOKIE_JAR" \
+        --data-urlencode "oldUsername=admin" \
+        --data-urlencode "oldPassword=admin" \
+        --data-urlencode "newUsername=${PANEL_USER}" \
+        --data-urlencode "newPassword=${PANEL_PASSWORD}" \
+        "$update_url" || true)"
+      update_success="$(printf '%s' "$update_resp" | jq -r '.success // empty' 2>/dev/null || true)"
+      update_msg="$(printf '%s' "$update_resp" | jq -r '.msg // empty' 2>/dev/null || true)"
+      [[ "$update_success" == "true" ]] || die "Authenticated with fallback credentials, but failed to rotate panel credentials (msg=${update_msg:-n/a})."
+
+      rm -f "$XUI_COOKIE_JAR"
+      XUI_COOKIE_JAR="$(mktemp)"
+      login_success=0
+      for ((i=1; i<=8; i++)); do
+        status="$(curl --noproxy '*' --silent --show-error --insecure --output /tmp/omnirelay-xui-login.json --write-out '%{http_code}' \
+          --location \
+          --cookie-jar "$XUI_COOKIE_JAR" \
+          --cookie "$XUI_COOKIE_JAR" \
+          --data-urlencode "username=${PANEL_USER}" \
+          --data-urlencode "password=${PANEL_PASSWORD}" \
+          --data-urlencode "twoFactorCode=" \
+          "$login_url" || true)"
+        if grep -q '3x-ui' "$XUI_COOKIE_JAR" 2>/dev/null; then
+          login_success=1
+          break
+        fi
+        sleep 2
+      done
+    fi
+  fi
+
+  if [[ "$login_success" != "1" ]]; then
+    body_success="$(jq -r '.success // empty' /tmp/omnirelay-xui-login.json 2>/dev/null || true)"
+    body_msg="$(jq -r '.msg // empty' /tmp/omnirelay-xui-login.json 2>/dev/null || true)"
+    die "Failed to authenticate against hidden 3x-ui API (status=${status:-n/a}, success=${body_success:-n/a}, msg=${body_msg:-n/a})."
+  fi
 }
 
 generate_short_ids_json() {
@@ -581,17 +749,54 @@ print(json.dumps(ids))
 PY
 }
 
+find_existing_managed_inbound_id() {
+  local api_base="$1"
+  local list_resp existing_id
+
+  list_resp="$(curl --noproxy '*' --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" "${api_base}/inbounds/list" 2>/dev/null || true)"
+  if [[ -z "$list_resp" ]]; then
+    return 1
+  fi
+
+  existing_id="$(printf '%s' "$list_resp" | jq -r --argjson port "$PUBLIC_PORT" '
+    if .success != true then
+      empty
+    else
+      (.obj // []) as $inbounds |
+      (
+        ($inbounds | map(select(((.port | tonumber?) == $port) and (.remark == "omni-relay"))) | .[0].id) //
+        ($inbounds | map(select((.port | tonumber?) == $port)) | .[0].id) //
+        empty
+      )
+    end
+  ' 2>/dev/null || true)"
+
+  if [[ -n "$existing_id" && "$existing_id" != "null" ]]; then
+    INBOUND_ID="$existing_id"
+    return 0
+  fi
+
+  return 1
+}
+
 provision_managed_inbound() {
   progress 78 "Creating managed VLESS REALITY inbound"
   local api_base cert_json private_key public_key client_uuid sub_id short_ids_json
-  local settings_json stream_settings_json sniffing_json add_resp success
+  local settings_json stream_settings_json sniffing_json add_resp success add_msg
 
   [[ -n "$GATEWAY_SNI" ]] || die "--gateway-sni is required for install."
   [[ -n "$GATEWAY_TARGET" ]] || die "--gateway-target is required for install."
 
   xui_api_login
   api_base="$(xui_api_base_url)/panel/api"
-  cert_json="$(curl --fail --silent --show-error --cookie "$XUI_COOKIE_JAR" "${api_base}/server/getNewX25519Cert")"
+  disable_proxy_env
+
+  if find_existing_managed_inbound_id "$api_base"; then
+    log "Reusing existing managed inbound on port ${PUBLIC_PORT} (inbound_id=${INBOUND_ID})."
+    return 0
+  fi
+
+  cert_json="$(curl --noproxy '*' --fail --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" "${api_base}/server/getNewX25519Cert")"
   private_key="$(printf '%s' "$cert_json" | jq -r '.obj.privateKey // empty')"
   public_key="$(printf '%s' "$cert_json" | jq -r '.obj.publicKey // empty')"
   [[ -n "$private_key" && -n "$public_key" ]] || die "3x-ui getNewX25519Cert did not return private/public key."
@@ -661,7 +866,7 @@ provision_managed_inbound() {
     }')"
 
   sniffing_json='{"enabled":false,"destOverride":["http","tls","quic","fakedns"],"metadataOnly":false,"routeOnly":false}'
-  add_resp="$(curl --fail --silent --show-error --cookie "$XUI_COOKIE_JAR" \
+  add_resp="$(curl --noproxy '*' --fail --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" \
     --header 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
     --data-urlencode "up=0" \
     --data-urlencode "down=0" \
@@ -680,7 +885,16 @@ provision_managed_inbound() {
     "${api_base}/inbounds/add")"
 
   success="$(printf '%s' "$add_resp" | jq -r '.success // false')"
-  [[ "$success" == "true" ]] || die "Failed to create managed inbound via 3x-ui API: $(printf '%s' "$add_resp" | jq -r '.msg // "unknown error"')"
+  if [[ "$success" != "true" ]]; then
+    add_msg="$(printf '%s' "$add_resp" | jq -r '.msg // "unknown error"' 2>/dev/null || printf 'unknown error')"
+    if [[ "$add_msg" == *"Port already exists"* ]]; then
+      if find_existing_managed_inbound_id "$api_base"; then
+        log "Detected existing inbound after port-conflict; reusing inbound_id=${INBOUND_ID}."
+        return 0
+      fi
+    fi
+    die "Failed to create managed inbound via 3x-ui API: ${add_msg}"
+  fi
 
   INBOUND_ID="$(printf '%s' "$add_resp" | jq -r '.obj.id // empty')"
   [[ -n "$INBOUND_ID" && "$INBOUND_ID" != "null" ]] || die "Unable to capture managed inbound id from 3x-ui response."
@@ -751,15 +965,24 @@ EOF
 
 deploy_omnipanel_artifact() {
   progress 88 "Deploying OmniPanel artifact"
-  local download_url release_id release_dir tmp_tar current_dir nested_dir panel_public_host
+  local download_url release_id release_dir tmp_tar current_dir nested_dir panel_public_host app_parent_dir
+  local panel_ready=false
 
+  ensure_metadata_dir
+  configure_online_proxy_env
   download_url="https://omnirelay.net/download/omni-gateway"
   tmp_tar="/tmp/omni-gateway.tar.gz"
   release_id="$(date +%Y%m%d%H%M%S)"
   release_dir="${OMNIPANEL_APP_DIR}/releases/${release_id}"
   current_dir="${OMNIPANEL_APP_DIR}/current"
+  app_parent_dir="$(dirname "$OMNIPANEL_APP_DIR")"
 
-  mkdir -p "$release_dir"
+  # Ensure systemd service user can traverse working directory path.
+  install -d -m 0755 "$app_parent_dir"
+  install -d -m 0755 "$OMNIPANEL_APP_DIR"
+  install -d -m 0755 "${OMNIPANEL_APP_DIR}/releases"
+
+  install -d -m 0755 "$release_dir"
   curl --fail --silent --show-error --location "$download_url" --output "$tmp_tar"
   tar -xzf "$tmp_tar" -C "$release_dir"
 
@@ -790,6 +1013,7 @@ NODE_ENV=production
 HOSTNAME=127.0.0.1
 PORT=${OMNIPANEL_INTERNAL_PORT}
 SESSION_SECRET=${SESSION_SECRET}
+NODE_TLS_REJECT_UNAUTHORIZED=0
 XUI_BASE_URL=$(xui_api_base_url)
 XUI_INBOUND_ID=${INBOUND_ID}
 PANEL_PUBLIC_PORT=${PANEL_PORT}
@@ -821,15 +1045,33 @@ EOF
 
   ln -sfn "$release_dir" "$current_dir"
   chown -R omnigateway:omnigateway "$OMNIPANEL_APP_DIR"
+  chmod 0755 "$app_parent_dir" "$OMNIPANEL_APP_DIR" "${OMNIPANEL_APP_DIR}/releases" "$release_dir"
 
   systemctl daemon-reload
   systemctl enable --now "$OMNIPANEL_SERVICE_NAME"
   systemctl restart "$OMNIPANEL_SERVICE_NAME"
+
+  for ((i=1; i<=30; i++)); do
+    if [[ "$(systemctl is-active "$OMNIPANEL_SERVICE_NAME" 2>/dev/null || true)" == "active" ]] && [[ "$(check_listener "$OMNIPANEL_INTERNAL_PORT")" == "true" ]]; then
+      panel_ready=true
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ "$panel_ready" != "true" ]]; then
+    log "OmniPanel service did not become ready on 127.0.0.1:${OMNIPANEL_INTERNAL_PORT}."
+    log "---- omnipanel systemd status ----"
+    systemctl --no-pager --full status "$OMNIPANEL_SERVICE_NAME" || true
+    log "---- omnipanel journal (last 80 lines) ----"
+    journalctl --no-pager -u "$OMNIPANEL_SERVICE_NAME" -n 80 || true
+    die "OmniPanel service failed to start."
+  fi
 }
 
 configure_nginx_for_omnipanel() {
   progress 92 "Configuring nginx HTTPS reverse-proxy for OmniPanel"
-  local nginx_conf cert_path key_path
+  local nginx_conf cert_path key_path panel_ready=false
   generate_panel_tls_cert
 
   cert_path="${METADATA_DIR}/certs/omnipanel.crt"
@@ -863,6 +1105,33 @@ EOF
   nginx -t
   systemctl enable --now nginx
   systemctl restart nginx
+
+  for ((i=1; i<=15; i++)); do
+    if [[ "$(check_listener "$PANEL_PORT")" == "true" ]]; then
+      panel_ready=true
+      break
+    fi
+    sleep 1
+  done
+
+  [[ "$panel_ready" == "true" ]] || die "nginx did not open panel port ${PANEL_PORT}."
+}
+
+configure_host_firewall() {
+  progress 94 "Configuring host firewall rules"
+
+  if ! command -v ufw >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! ufw status 2>/dev/null | grep -q "^Status: active"; then
+    return 0
+  fi
+
+  # Keep rules idempotent. ufw allow is safe to call repeatedly.
+  ufw allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
+  ufw allow "${PUBLIC_PORT}/tcp" >/dev/null 2>&1 || true
+  ufw allow "${SSH_PORT}/tcp" >/dev/null 2>&1 || true
 }
 
 write_gateway_metadata() {
@@ -1599,12 +1868,14 @@ install_impl() {
   configure_sshd
   progress 8 "Bootstrap SOCKS pre-check skipped; using live online install checks"
   install_packages_online
+  ensure_nodejs_runtime
   disable_haproxy
   install_3xui_online
   configure_panel_credentials
   provision_managed_inbound
   deploy_omnipanel_artifact
   configure_nginx_for_omnipanel
+  configure_host_firewall
   write_gateway_metadata
   reset_stale_xray_template_config
   apply_dns_profile

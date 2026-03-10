@@ -24,13 +24,27 @@ export function getInboundId(): string {
   return requireEnv("XUI_INBOUND_ID");
 }
 
-function extractXuiCookie(setCookieHeader: string | null): string | null {
-  if (!setCookieHeader) {
-    return null;
+function extractXuiCookie(headers: Headers): string | null {
+  const headerBag = headers as Headers & { getSetCookie?: () => string[] };
+  const values: string[] = [];
+
+  if (typeof headerBag.getSetCookie === "function") {
+    values.push(...headerBag.getSetCookie());
   }
 
-  const match = setCookieHeader.match(/3x-ui=[^;]+/i);
-  return match ? match[0] : null;
+  const merged = headers.get("set-cookie");
+  if (merged) {
+    values.push(merged);
+  }
+
+  for (const value of values) {
+    const match = value.match(/3x-ui=[^;]+/i);
+    if (match) {
+      return match[0];
+    }
+  }
+
+  return null;
 }
 
 async function loginAndStoreCookie(session: OmniSession, username: string, password: string): Promise<boolean> {
@@ -39,18 +53,33 @@ async function loginAndStoreCookie(session: OmniSession, username: string, passw
   body.set("password", password);
   body.set("twoFactorCode", "");
 
-  const response = await fetch(`${getXuiBaseUrl()}/login/`, {
+  const loginUrl = `${getXuiBaseUrl()}/login/`;
+  let response = await fetch(loginUrl, {
     method: "POST",
     body,
     redirect: "manual",
     cache: "no-store"
   });
 
+  // 3x-ui can redirect /login between http/https depending on panel SSL settings.
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("location");
+    if (location) {
+      const redirectedUrl = new URL(location, loginUrl).toString();
+      response = await fetch(redirectedUrl, {
+        method: "POST",
+        body,
+        redirect: "manual",
+        cache: "no-store"
+      });
+    }
+  }
+
   if (!response.ok) {
     return false;
   }
 
-  const cookie = extractXuiCookie(response.headers.get("set-cookie"));
+  const cookie = extractXuiCookie(response.headers);
   if (!cookie) {
     return false;
   }
