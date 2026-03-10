@@ -10,38 +10,51 @@ public sealed class GatewayRuntime
 {
     private readonly object _sync = new();
     private readonly ConfigStore _configStore;
+    private readonly PolicyStore _policyStore;
     private readonly FileLogWriter _log;
 
     private ServiceConfig _config;
     private IReadOnlyList<string> _whitelistEntries;
-    private WhitelistSet _whitelist;
+    private IReadOnlyList<string> _blacklistEntries;
+    private PolicyAddressIndex _whitelistIndex;
+    private PolicyAddressIndex _blacklistIndex;
+    private long _policyRevision;
+    private DateTimeOffset _policyUpdatedAtUtc;
     private bool _proxyRequested;
     private bool _licenseTransferRequested;
     private GatewayStatus _status;
     private long _tunnelRestartRequestVersion;
 
-    public GatewayRuntime(ConfigStore configStore, FileLogWriter log)
+    public GatewayRuntime(ConfigStore configStore, PolicyStore policyStore, FileLogWriter log)
     {
         _configStore = configStore;
+        _policyStore = policyStore;
         _log = log;
 
         var persisted = _configStore.Load();
         _config = CloneConfig(persisted.Config);
-        _whitelistEntries = persisted.WhitelistEntries.ToList();
+        _whitelistEntries = [];
+        _blacklistEntries = [];
+        _whitelistIndex = PolicyAddressIndex.Build([]);
+        _blacklistIndex = PolicyAddressIndex.Build([]);
+        _status = new GatewayStatus();
 
-        if (!WhitelistSet.TryCreate(_whitelistEntries, out _whitelist, out var errors))
+        var policySnapshot = _policyStore.Load();
+        if (policySnapshot.WhitelistEntries.Count == 0 && persisted.WhitelistEntries.Count > 0)
         {
-            _whitelist = WhitelistSet.Empty;
-            _whitelistEntries = [];
-            _log.Warn($"Invalid persisted whitelist ignored: {string.Join("; ", errors)}");
+            _policyStore.ImportLegacyWhitelistIfEmpty(persisted.WhitelistEntries);
+            policySnapshot = _policyStore.Load();
         }
+
+        ApplyPolicySnapshotLocked(policySnapshot);
 
         _status = new GatewayStatus
         {
             ServiceRunning = true,
             ProxyRunning = false,
             ProxyListenPort = _config.LocalProxyListenPort,
-            WhitelistCount = _whitelist.Rules.Count
+            WhitelistCount = _whitelistEntries.Count,
+            BlacklistCount = _blacklistEntries.Count
         };
 
         // Keep relay data-plane active by default after service startup.
@@ -57,19 +70,36 @@ public sealed class GatewayRuntime
         }
     }
 
-    public WhitelistSet GetWhitelistSnapshot()
-    {
-        lock (_sync)
-        {
-            return _whitelist;
-        }
-    }
-
     public IReadOnlyList<string> GetWhitelistEntriesSnapshot()
     {
         lock (_sync)
         {
             return _whitelistEntries.ToList();
+        }
+    }
+
+    public IReadOnlyList<string> GetBlacklistEntriesSnapshot()
+    {
+        lock (_sync)
+        {
+            return _blacklistEntries.ToList();
+        }
+    }
+
+    public PolicyListSnapshot GetPolicyListSnapshot(string listType)
+    {
+        lock (_sync)
+        {
+            var normalized = PolicyListTypes.Normalize(listType);
+            var entries = normalized == PolicyListTypes.Blacklist
+                ? _blacklistEntries
+                : _whitelistEntries;
+            return new PolicyListSnapshot(
+                normalized,
+                entries.ToList(),
+                entries.Count,
+                _policyRevision,
+                _policyUpdatedAtUtc);
         }
     }
 
@@ -126,34 +156,53 @@ public sealed class GatewayRuntime
 
     public bool TryUpdateWhitelist(IEnumerable<string> entries, out string? error)
     {
-        var normalized = entries
-            .Select(x => (x ?? string.Empty).Trim())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .ToList();
+        return TryApplyPolicyUpdate(
+            PolicyListTypes.Whitelist,
+            PolicyUpdateModes.Replace,
+            entries.ToList(),
+            out _,
+            out error);
+    }
 
-        if (!WhitelistSet.TryCreate(normalized, out var parsed, out var errors))
-        {
-            error = string.Join("; ", errors);
-            return false;
-        }
-
+    public bool TryApplyPolicyUpdate(
+        string listType,
+        string mode,
+        IReadOnlyList<string> entries,
+        out PolicyCommitResult? result,
+        out string? error)
+    {
         lock (_sync)
         {
-            _whitelist = parsed;
-            _whitelistEntries = normalized;
-            _status.WhitelistCount = parsed.Rules.Count;
-            PersistLocked();
+            try
+            {
+                result = _policyStore.ApplyUpdate(listType, mode, entries);
+                ApplyPolicySnapshotLocked(_policyStore.Load());
+                PersistLocked();
+                error = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                result = null;
+                error = ex.Message;
+                return false;
+            }
         }
-
-        error = null;
-        return true;
     }
 
     public bool ShouldUseWhitelistAdapter(IPAddress? destinationAddress)
     {
         lock (_sync)
         {
-            return _whitelist.MatchesDestination(destinationAddress);
+            return _whitelistIndex.Matches(destinationAddress);
+        }
+    }
+
+    public bool ShouldBlockDestination(IPAddress? destinationAddress)
+    {
+        lock (_sync)
+        {
+            return _blacklistIndex.Matches(destinationAddress);
         }
     }
 
@@ -294,6 +343,7 @@ public sealed class GatewayRuntime
                 WhitelistAdapterIp = _status.WhitelistAdapterIp,
                 DefaultAdapterIp = _status.DefaultAdapterIp,
                 WhitelistCount = _status.WhitelistCount,
+                BlacklistCount = _status.BlacklistCount,
                 LastError = _status.LastError
             };
         }
@@ -301,7 +351,7 @@ public sealed class GatewayRuntime
 
     private void PersistLocked()
     {
-        _configStore.Save(_config, _whitelistEntries);
+        _configStore.Save(_config);
     }
 
     private void RequestTunnelRestartLocked(string reason)
@@ -402,5 +452,50 @@ public sealed class GatewayRuntime
             TunnelPassword = config.TunnelPassword,
             LicenseKey = config.LicenseKey
         };
+    }
+
+    private void ApplyPolicySnapshotLocked(PolicyStoreSnapshot snapshot)
+    {
+        _policyRevision = snapshot.Revision;
+        _policyUpdatedAtUtc = snapshot.UpdatedAtUtc;
+        _whitelistEntries = snapshot.WhitelistEntries
+            .Select(x => (x ?? string.Empty).Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _blacklistEntries = snapshot.BlacklistEntries
+            .Select(x => (x ?? string.Empty).Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _whitelistIndex = BuildIndex(_whitelistEntries, PolicyListTypes.Whitelist);
+        _blacklistIndex = BuildIndex(_blacklistEntries, PolicyListTypes.Blacklist);
+        _status.WhitelistCount = _whitelistEntries.Count;
+        _status.BlacklistCount = _blacklistEntries.Count;
+    }
+
+    private PolicyAddressIndex BuildIndex(IReadOnlyList<string> entries, string listType)
+    {
+        var rules = new List<NetworkRule>(entries.Count);
+        var errors = new List<string>();
+        foreach (var entry in entries)
+        {
+            if (NetworkRule.TryParse(entry, out var rule, out var error) && rule is not null)
+            {
+                rules.Add(rule);
+            }
+            else if (!string.IsNullOrWhiteSpace(error))
+            {
+                errors.Add(error);
+            }
+        }
+
+        if (errors.Count > 0)
+        {
+            _log.Warn($"Invalid persisted {listType} entries ignored: {string.Join("; ", errors.Take(12))}");
+        }
+
+        return PolicyAddressIndex.Build(rules);
     }
 }

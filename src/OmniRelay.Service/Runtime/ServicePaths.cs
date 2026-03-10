@@ -7,6 +7,7 @@ public static class ServicePaths
         "OmniRelay");
 
     public static string ConfigPath { get; } = Path.Combine(RootDirectory, "config.json");
+    public static string PolicyDbPath { get; } = Path.Combine(RootDirectory, "policy.db");
     public static string LicenseCachePath { get; } = Path.Combine(RootDirectory, "license.cache");
     public static string LicensePublicKeysCachePath { get; } = Path.Combine(RootDirectory, "license_public_keys.cache");
     public static string LogsDirectory { get; } = Path.Combine(RootDirectory, "logs");

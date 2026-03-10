@@ -71,6 +71,12 @@ public partial class GatewayManagementViewModel : ObservableObject
     public string PasswordState =>
         string.IsNullOrWhiteSpace(State.TunnelPassword) ? "Not set" : "Configured";
 
+    public string HostKeyFileState =>
+        string.IsNullOrWhiteSpace(State.TunnelKeyPath) ? "Not set" : "Configured";
+
+    public string AuthenticationDetailLabel =>
+        IsHostKeyAuthSelected ? "Host Key File" : "Password";
+
     [ObservableProperty]
     private string feedback = string.Empty;
 
@@ -141,6 +147,7 @@ public partial class GatewayManagementViewModel : ObservableObject
         BrowseTunnelKeyCommand.NotifyCanExecuteChanged();
         SetKeyPassphraseCommand.NotifyCanExecuteChanged();
         ClearKeyPassphraseCommand.NotifyCanExecuteChanged();
+        ClearTunnelKeyPathCommand.NotifyCanExecuteChanged();
         SetTunnelPasswordCommand.NotifyCanExecuteChanged();
         ClearTunnelPasswordCommand.NotifyCanExecuteChanged();
 
@@ -293,6 +300,12 @@ public partial class GatewayManagementViewModel : ObservableObject
     private void ClearKeyPassphrase()
     {
         State.TunnelKeyPassphrase = string.Empty;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private void ClearTunnelKeyPath()
+    {
+        State.TunnelKeyPath = string.Empty;
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
@@ -911,12 +924,14 @@ public partial class GatewayManagementViewModel : ObservableObject
             OnPropertyChanged(nameof(IsHostKeyAuthSelected));
             OnPropertyChanged(nameof(IsPasswordAuthSelected));
             OnPropertyChanged(nameof(TunnelAuthMethodIndex));
+            OnPropertyChanged(nameof(AuthenticationDetailLabel));
         }
 
-        if (e.PropertyName is nameof(GatewayStateStore.TunnelKeyPassphrase) or nameof(GatewayStateStore.TunnelPassword))
+        if (e.PropertyName is nameof(GatewayStateStore.TunnelKeyPassphrase) or nameof(GatewayStateStore.TunnelPassword) or nameof(GatewayStateStore.TunnelKeyPath))
         {
             OnPropertyChanged(nameof(KeyPassphraseState));
             OnPropertyChanged(nameof(PasswordState));
+            OnPropertyChanged(nameof(HostKeyFileState));
         }
 
         if (e.PropertyName == nameof(GatewayStateStore.GatewayInitialPanelPassword))

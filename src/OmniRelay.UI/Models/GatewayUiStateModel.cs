@@ -30,5 +30,4 @@ public sealed class GatewayUiStateModel
     public string EncryptedTunnelPassword { get; set; } = string.Empty;
     public string EncryptedLicenseKey { get; set; } = string.Empty;
 
-    public string WhitelistText { get; set; } = string.Empty;
 }

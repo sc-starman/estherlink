@@ -7,7 +7,7 @@ namespace OmniRelay.Service.Runtime;
 
 public sealed class ConfigStore
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -69,6 +69,12 @@ public sealed class ConfigStore
                 migrated = true;
             }
 
+            if (stored.SchemaVersion < 5)
+            {
+                stored.SchemaVersion = 5;
+                migrated = true;
+            }
+
             var state = new PersistedState(
                 new ServiceConfig
                 {
@@ -91,9 +97,9 @@ public sealed class ConfigStore
                 },
                 stored.WhitelistEntries ?? []);
 
-            if (migrated)
+            if (migrated || (stored.WhitelistEntries?.Count ?? 0) > 0)
             {
-                Save(state.Config, state.WhitelistEntries);
+                Save(state.Config);
                 _log.Info($"Migrated legacy config to schema version {CurrentSchemaVersion}.");
             }
 
@@ -106,7 +112,7 @@ public sealed class ConfigStore
         }
     }
 
-    public void Save(ServiceConfig config, IReadOnlyList<string> whitelistEntries)
+    public void Save(ServiceConfig config, IReadOnlyList<string>? whitelistEntries = null)
     {
         try
         {
@@ -129,7 +135,7 @@ public sealed class ConfigStore
                 EncryptedTunnelKeyPassphrase = Encrypt(config.TunnelPrivateKeyPassphrase),
                 EncryptedTunnelPassword = Encrypt(config.TunnelPassword),
                 EncryptedLicenseKey = Encrypt(config.LicenseKey),
-                WhitelistEntries = whitelistEntries.ToList()
+                WhitelistEntries = null
             };
 
             var json = JsonSerializer.Serialize(stored, JsonOptions);

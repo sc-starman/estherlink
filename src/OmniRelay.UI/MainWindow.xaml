@@ -167,15 +167,24 @@
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding PageIconGlyph}" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource Brush.Primary}" FontSize="18" Margin="0,0,8,0"/>
+                        <TextBlock Text="{Binding PageIconGlyph}"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   Foreground="{DynamicResource Brush.Primary}"
+                                   FontSize="18"
+                                   VerticalAlignment="Center"
+                                   Margin="0,2,8,0"/>
                         <TextBlock Text="{Binding PageTitle}" FontSize="20" FontWeight="Bold"/>
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Style="{StaticResource SecondaryButtonStyle}" Padding="10,6" Margin="0,0,10,0" Command="{Binding ToggleThemeCommand}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE706;" FontFamily="Segoe MDL2 Assets" Margin="0,0,6,0"/>
-                                <TextBlock Text="{Binding ThemeLabel}"/>
+                                <TextBlock Text="&#xE706;"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           VerticalAlignment="Center"
+                                           Margin="0,2,6,0"/>
+                                <TextBlock Text="{Binding ThemeLabel}"
+                                           VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                     </StackPanel>

@@ -132,6 +132,15 @@ public sealed class HttpConnectProxyEngine
         {
             var request = await ReadConnectRequestAsync(stream, connectionCts.Token);
             var destinationIp = await ResolveDestinationIpv4Async(request.Host, connectionCts.Token);
+            var shouldBlock = _runtime.ShouldBlockDestination(destinationIp);
+            if (shouldBlock)
+            {
+                await SendHttpErrorAsync(stream, 403, "Forbidden");
+                _fileLog.Info(
+                    $"CONNECT blocked source={sourceAddress} target={request.Host}:{request.Port} ip={destinationIp} blacklistMatch=true");
+                return;
+            }
+
             var shouldUseWhitelist = _runtime.ShouldUseWhitelistAdapter(destinationIp);
             var adapterIndex = shouldUseWhitelist ? config.WhitelistAdapterIfIndex : config.DefaultAdapterIfIndex;
 

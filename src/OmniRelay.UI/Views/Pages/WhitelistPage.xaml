@@ -4,35 +4,107 @@
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       mc:Ignorable="d"
-      Title="Whitelist Rules"
+      Title="Policy Lists"
       Background="{DynamicResource Brush.Background}">
     <Grid Margin="28">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Margin="0,0,0,12">
-            <TextBlock Text="Whitelist Rules" Style="{StaticResource SectionTitleTextStyle}"/>
-            <TextBlock Text="CIDR/IP per line; comments with # are allowed." Style="{StaticResource MutedTextStyle}"/>
-        </StackPanel>
+        <DockPanel Grid.Row="0" Margin="0,0,0,12" LastChildFill="False">
+            <StackPanel DockPanel.Dock="Left">
+                <TextBlock Text="Policy Lists" Style="{StaticResource SectionTitleTextStyle}"/>
+                <TextBlock Text="Manage whitelist (route via IC1) and blacklist (block with HTTP 403). Supports TXT/CSV import." Style="{StaticResource MutedTextStyle}"/>
+            </StackPanel>
+            <Button DockPanel.Dock="Right"
+                    Content="Refresh"
+                    Command="{Binding RefreshCommand}"
+                    Style="{StaticResource SecondaryButtonStyle}"
+                    Margin="12,0,0,0"/>
+        </DockPanel>
 
-        <TextBox Grid.Row="1"
-                 Text="{Binding State.WhitelistText, UpdateSourceTrigger=PropertyChanged}"
-                 AcceptsReturn="True"
-                 VerticalScrollBarVisibility="Auto"
-                 HorizontalScrollBarVisibility="Auto"
-                 FontFamily="Consolas"
-                 Style="{StaticResource MultilineTextBoxStyle}"/>
+        <TabControl Grid.Row="1"
+                    Style="{StaticResource AppTabControlStyle}">
+            <TabItem Header="Whitelist"
+                     Style="{StaticResource AppTabItemStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-        <WrapPanel Grid.Row="2" Margin="0,12,0,0">
-            <Button Content="Validate" Command="{Binding ValidateCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,10,0"/>
-            <Button Content="Update Whitelist" Command="{Binding UpdateWhitelistCommand}" Style="{StaticResource PrimaryButtonStyle}"/>
-        </WrapPanel>
+                    <TextBlock Grid.Row="0"
+                               Text="{Binding WhitelistSummary}"
+                               Style="{StaticResource MutedTextStyle}"
+                               Margin="0,0,0,8"/>
 
-        <StackPanel Grid.Row="3" Margin="0,12,0,0">
+                    <TextBox Grid.Row="1"
+                             Text="{Binding WhitelistText, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas"
+                             Style="{StaticResource MultilineTextBoxStyle}"/>
+
+                    <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+                        <Button Content="Import TXT/CSV"
+                                Command="{Binding ImportWhitelistCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="0,0,10,0"/>
+                        <Button Content="Validate"
+                                Command="{Binding ValidateCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="0,0,10,0"/>
+                        <Button Content="Apply Replace"
+                                Command="{Binding UpdateWhitelistCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}"/>
+                    </WrapPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Blacklist"
+                     Style="{StaticResource AppTabItemStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0"
+                               Text="{Binding BlacklistSummary}"
+                               Style="{StaticResource MutedTextStyle}"
+                               Margin="0,0,0,8"/>
+
+                    <TextBox Grid.Row="1"
+                             Text="{Binding BlacklistText, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas"
+                             Style="{StaticResource MultilineTextBoxStyle}"/>
+
+                    <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+                        <Button Content="Import TXT/CSV"
+                                Command="{Binding ImportBlacklistCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="0,0,10,0"/>
+                        <Button Content="Validate"
+                                Command="{Binding ValidateBlacklistCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="0,0,10,0"/>
+                        <Button Content="Apply Replace"
+                                Command="{Binding UpdateBlacklistCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}"/>
+                    </WrapPanel>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <StackPanel Grid.Row="2" Margin="0,10,0,0">
             <TextBlock Text="{Binding ValidationSummary}" Style="{StaticResource ValidationTextStyle}"/>
             <TextBlock Text="{Binding Feedback}" Style="{StaticResource FeedbackTextStyle}" Margin="0,6,0,0"/>
         </StackPanel>

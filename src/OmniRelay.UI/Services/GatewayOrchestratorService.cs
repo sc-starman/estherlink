@@ -1,5 +1,6 @@
 using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Networking;
+using OmniRelay.Core.Policy;
 using OmniRelay.Core.Status;
 using OmniRelay.Ipc;
 using OmniRelay.UI.Models;
@@ -91,7 +92,6 @@ public sealed class GatewayOrchestratorService
             _state.TunnelKeyPassphrase = GatewayStatePersistenceService.Unprotect(persisted.EncryptedTunnelKeyPassphrase);
             _state.TunnelPassword = GatewayStatePersistenceService.Unprotect(persisted.EncryptedTunnelPassword);
             _state.LicenseKey = GatewayStatePersistenceService.Unprotect(persisted.EncryptedLicenseKey);
-            _state.WhitelistText = persisted.WhitelistText ?? string.Empty;
             _state.LicenseActivated = false;
             _state.LicenseActivatedExpiresAtUtc = null;
         }
@@ -202,21 +202,145 @@ public sealed class GatewayOrchestratorService
         return SetAction(false, $"IC1 preflight failed. {probe.Message}");
     }
 
-    public async Task<OperationResult> UpdateWhitelistAsync(CancellationToken cancellationToken = default)
+    public async Task<PolicyListResult> GetPolicyListAsync(string listType, CancellationToken cancellationToken = default)
     {
-        var entries = _state.WhitelistText
-            .Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-            .Select(x => x.Trim())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .ToList();
-
-        var response = await _gatewayClient.UpdateWhitelistAsync(entries, cancellationToken);
-        if (response?.Success == true)
+        var normalizedListType = PolicyListTypes.Normalize(listType);
+        var response = await _gatewayClient.GetPolicyListAsync(normalizedListType, cancellationToken);
+        if (response?.Success != true)
         {
-            return SetAction(true, $"Whitelist updated ({entries.Count} lines).");
+            if (IsMissingPolicyCapability(response?.Error, IpcCommands.GetPolicyList))
+            {
+                const string upgradeMessage = "Relay service is outdated and does not support policy list APIs. Please update/reinstall the Relay service.";
+                SetAction(false, upgradeMessage);
+                return new PolicyListResult(false, upgradeMessage, normalizedListType, [], 0, 0, DateTimeOffset.MinValue);
+            }
+
+            var message = $"Policy fetch failed: {response?.Error ?? "service unavailable"}";
+            SetAction(false, message);
+            return new PolicyListResult(false, message, normalizedListType, [], 0, 0, DateTimeOffset.MinValue);
         }
 
-        return SetAction(false, $"Whitelist update failed: {response?.Error ?? "service unavailable"}");
+        var payload = IpcJson.Deserialize<GetPolicyListResponse>(response.JsonPayload);
+        if (payload is null)
+        {
+            const string invalidPayload = "Policy fetch failed: invalid response payload.";
+            SetAction(false, invalidPayload);
+            return new PolicyListResult(false, invalidPayload, normalizedListType, [], 0, 0, DateTimeOffset.MinValue);
+        }
+
+        var messageText = $"{payload.ListType} loaded ({payload.Count} entries).";
+        SetAction(true, messageText);
+        return new PolicyListResult(
+            true,
+            messageText,
+            payload.ListType,
+            payload.Entries,
+            payload.Count,
+            payload.Revision,
+            payload.UpdatedAtUtc);
+    }
+
+    public async Task<PolicyCommitSummary> UpdatePolicyListAsync(
+        string listType,
+        string mode,
+        IReadOnlyList<string> entries,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedListType = PolicyListTypes.Normalize(listType);
+        var normalizedMode = PolicyUpdateModes.Normalize(mode);
+
+        var begin = await _gatewayClient.BeginPolicyUpdateAsync(normalizedListType, normalizedMode, cancellationToken);
+        if (begin?.Success != true)
+        {
+            if (IsMissingPolicyCapability(begin?.Error, IpcCommands.BeginPolicyUpdate))
+            {
+                const string upgradeMessage = "Relay service is outdated and does not support large policy updates. Please update/reinstall the Relay service.";
+                SetAction(false, upgradeMessage);
+                return new PolicyCommitSummary(false, upgradeMessage, normalizedListType, normalizedMode, 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+            }
+
+            var error = begin?.Error ?? "service unavailable";
+            var message = $"Policy update failed: {error}";
+            SetAction(false, message);
+            return new PolicyCommitSummary(false, message, normalizedListType, normalizedMode, 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+        }
+
+        var beginPayload = IpcJson.Deserialize<BeginPolicyUpdateResponse>(begin.JsonPayload);
+        if (beginPayload is null || string.IsNullOrWhiteSpace(beginPayload.SessionId))
+        {
+            const string invalidBegin = "Policy update failed: invalid begin session payload.";
+            SetAction(false, invalidBegin);
+            return new PolicyCommitSummary(false, invalidBegin, normalizedListType, normalizedMode, 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+        }
+
+        var sessionId = beginPayload.SessionId;
+        try
+        {
+            const int chunkSize = 10_000;
+            for (var i = 0; i < entries.Count; i += chunkSize)
+            {
+                var chunk = entries.Skip(i).Take(chunkSize).ToArray();
+                var append = await _gatewayClient.AppendPolicyEntriesAsync(sessionId, chunk, cancellationToken);
+                if (append?.Success != true)
+                {
+                    if (IsMissingPolicyCapability(append?.Error, IpcCommands.AppendPolicyEntries))
+                    {
+                        const string upgradeMessage = "Relay service is outdated and does not support chunked policy appends. Please update/reinstall the Relay service.";
+                        SetAction(false, upgradeMessage);
+                        return new PolicyCommitSummary(false, upgradeMessage, normalizedListType, normalizedMode, 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+                    }
+
+                    var appendError = append?.Error ?? "service unavailable";
+                    var appendMessage = $"Policy update append failed: {appendError}";
+                    SetAction(false, appendMessage);
+                    return new PolicyCommitSummary(false, appendMessage, normalizedListType, normalizedMode, 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+                }
+            }
+
+            var commit = await _gatewayClient.CommitPolicyUpdateAsync(sessionId, cancellationToken);
+            if (commit?.Success != true)
+            {
+                if (IsMissingPolicyCapability(commit?.Error, IpcCommands.CommitPolicyUpdate))
+                {
+                    const string upgradeMessage = "Relay service is outdated and does not support policy commit APIs. Please update/reinstall the Relay service.";
+                    SetAction(false, upgradeMessage);
+                    return new PolicyCommitSummary(false, upgradeMessage, normalizedListType, normalizedMode, 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+                }
+
+                var commitError = commit?.Error ?? "service unavailable";
+                var commitMessage = $"Policy update commit failed: {commitError}";
+                SetAction(false, commitMessage);
+                return new PolicyCommitSummary(false, commitMessage, normalizedListType, normalizedMode, 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+            }
+
+            var commitPayload = IpcJson.Deserialize<CommitPolicyUpdateResponse>(commit.JsonPayload);
+            if (commitPayload is null)
+            {
+                const string invalidCommit = "Policy update failed: invalid commit payload.";
+                SetAction(false, invalidCommit);
+                return new PolicyCommitSummary(false, invalidCommit, normalizedListType, normalizedMode, 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+            }
+
+            var successMessage =
+                $"{commitPayload.ListType} updated. applied={commitPayload.AppliedCount}, duplicates={commitPayload.DuplicateDroppedCount}, invalid={commitPayload.InvalidCount}, total={commitPayload.Count}.";
+            SetAction(true, successMessage);
+            return new PolicyCommitSummary(
+                true,
+                successMessage,
+                commitPayload.ListType,
+                commitPayload.Mode,
+                commitPayload.AppliedCount,
+                commitPayload.DuplicateDroppedCount,
+                commitPayload.InvalidCount,
+                commitPayload.Count,
+                commitPayload.Revision,
+                commitPayload.UpdatedAtUtc);
+        }
+        catch
+        {
+            await _gatewayClient.CancelPolicyUpdateAsync(sessionId, CancellationToken.None);
+            throw;
+        }
     }
 
     public async Task<OperationResult> VerifyLicenseAsync(CancellationToken cancellationToken = default)
@@ -442,17 +566,6 @@ public sealed class GatewayOrchestratorService
             return config;
         }
 
-        var whitelist = await RetryForServiceReadinessAsync(
-            ct => UpdateWhitelistAsync(ct),
-            stepName: "Whitelist update",
-            maxAttempts: 10,
-            delayBetweenAttempts: TimeSpan.FromSeconds(1),
-            cancellationToken: cancellationToken);
-        if (!whitelist.Success)
-        {
-            return whitelist;
-        }
-
         var startProxy = await RetryForServiceReadinessAsync(
             ct => StartProxyAsync(ct),
             stepName: "Proxy start",
@@ -492,9 +605,9 @@ public sealed class GatewayOrchestratorService
             : SetAction(false, $"Proxy stop failed: {response?.Error ?? "service unavailable"}");
     }
 
-    public IReadOnlyList<string> ValidateWhitelistLines()
+    public IReadOnlyList<string> ValidatePolicyLines(string? text)
     {
-        var lines = _state.WhitelistText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+        var lines = (text ?? string.Empty).Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
         var errors = new List<string>();
         for (var i = 0; i < lines.Length; i++)
         {
@@ -629,8 +742,7 @@ public sealed class GatewayOrchestratorService
             TunnelKeyPath = _state.TunnelKeyPath,
             EncryptedTunnelKeyPassphrase = GatewayStatePersistenceService.Protect(_state.TunnelKeyPassphrase),
             EncryptedTunnelPassword = GatewayStatePersistenceService.Protect(_state.TunnelPassword),
-            EncryptedLicenseKey = GatewayStatePersistenceService.Protect(_state.LicenseKey),
-            WhitelistText = _state.WhitelistText
+            EncryptedLicenseKey = GatewayStatePersistenceService.Protect(_state.LicenseKey)
         };
 
         _statePersistence.Save(snapshot);
@@ -865,6 +977,17 @@ public sealed class GatewayOrchestratorService
                error.Contains("temporarily", StringComparison.OrdinalIgnoreCase) ||
                error.Contains("http", StringComparison.OrdinalIgnoreCase) ||
                error.Contains("network", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsMissingPolicyCapability(string? error, string commandName)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return false;
+        }
+
+        return error.Contains("Unknown command", StringComparison.OrdinalIgnoreCase) &&
+               error.Contains(commandName, StringComparison.OrdinalIgnoreCase);
     }
 
 }

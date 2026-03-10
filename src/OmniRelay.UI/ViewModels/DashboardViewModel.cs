@@ -35,6 +35,9 @@ public partial class DashboardViewModel : ObservableObject
     private int whitelistCount;
 
     [ObservableProperty]
+    private int blacklistCount;
+
+    [ObservableProperty]
     private string feedback = string.Empty;
 
     [ObservableProperty]
@@ -113,6 +116,7 @@ public partial class DashboardViewModel : ObservableObject
         LicenseState = status is null ? "Unavailable" : (status.LicenseValid ? "Valid" : "Invalid");
         TunnelState = status is null ? "Unavailable" : (status.TunnelConnected ? "Connected" : "Disconnected");
         WhitelistCount = status?.WhitelistCount ?? 0;
+        BlacklistCount = status?.BlacklistCount ?? 0;
     }
 
     private async Task RunBusyAsync(Func<Task> action)

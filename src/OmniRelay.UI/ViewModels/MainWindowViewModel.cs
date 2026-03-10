@@ -132,7 +132,7 @@ public partial class MainWindowViewModel : ObservableObject
             "dashboard" => "Dashboard",
             "relay" => "Relay Service",
             "gateway" => "Gateway Control",
-            "whitelist" => "Whitelists",
+            "whitelist" => "Policies",
             "license" => "License Management",
             "logs" => "Logs",
             "settings" => "Settings",

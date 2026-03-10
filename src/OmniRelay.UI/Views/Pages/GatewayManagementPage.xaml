@@ -83,12 +83,13 @@
                                                 </StackPanel>
 
                                                 <TextBlock Grid.Row="2"
-                                                           Text="Password"
+                                                           Text="{Binding AuthenticationDetailLabel}"
                                                            Style="{StaticResource FormLabelStyle}"/>
                                                 <StackPanel Grid.Row="2"
                                                             Grid.Column="1"
                                                             Orientation="Horizontal"
-                                                            VerticalAlignment="Center">
+                                                            VerticalAlignment="Center"
+                                                            Visibility="{Binding IsPasswordAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}">
                                                     <TextBlock Text="{Binding PasswordState}"
                                                                Style="{StaticResource ValueTextStyle}"
                                                                Width="75"/>
@@ -98,6 +99,27 @@
                                                             Margin="0,6,0,6"/>
                                                     <Button Content="Clear"
                                                             Command="{Binding ClearTunnelPasswordCommand}"
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Margin="10,6,0,6"/>
+                                                </StackPanel>
+                                                <StackPanel Grid.Row="2"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal"
+                                                            VerticalAlignment="Center"
+                                                            Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                    <TextBlock Text="{Binding HostKeyFileState}"
+                                                               Style="{StaticResource ValueTextStyle}"
+                                                               Width="75"/>
+                                                    <Button Content="Browse Key"
+                                                            Command="{Binding BrowseTunnelKeyCommand}"
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Margin="0,6,0,6"/>
+                                                    <Button Content="Passphrase"
+                                                            Command="{Binding SetKeyPassphraseCommand}"
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Margin="10,6,0,6"/>
+                                                    <Button Content="Clear"
+                                                            Command="{Binding ClearTunnelKeyPathCommand}"
                                                             Style="{StaticResource SecondaryButtonStyle}"
                                                             Margin="10,6,0,6"/>
                                                 </StackPanel>

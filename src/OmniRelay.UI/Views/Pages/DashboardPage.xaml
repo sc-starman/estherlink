@@ -39,6 +39,20 @@
                     </StackPanel>
                 </Border>
             </UniformGrid>
+            <UniformGrid Columns="2" Margin="0,0,0,16">
+                <Border Style="{StaticResource CardStyle}" Margin="0,0,10,0">
+                    <StackPanel>
+                        <TextBlock Text="Whitelist Rules" Style="{StaticResource CardLabelStyle}"/>
+                        <TextBlock Text="{Binding WhitelistCount}" Style="{StaticResource CardValueStyle}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardStyle}" Margin="0,0,10,0">
+                    <StackPanel>
+                        <TextBlock Text="Blacklist Rules" Style="{StaticResource CardLabelStyle}"/>
+                        <TextBlock Text="{Binding BlacklistCount}" Style="{StaticResource CardValueStyle}"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
 
             <WrapPanel Margin="0,0,0,12">
                 <Button Content="Refresh Status" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,10,0"/>

@@ -26,5 +26,6 @@ public sealed class GatewayStatus
     public string? WhitelistAdapterIp { get; set; }
     public string? DefaultAdapterIp { get; set; }
     public int WhitelistCount { get; set; }
+    public int BlacklistCount { get; set; }
     public string? LastError { get; set; }
 }

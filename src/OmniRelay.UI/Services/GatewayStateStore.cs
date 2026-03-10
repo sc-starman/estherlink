@@ -93,9 +93,6 @@ public partial class GatewayStateStore : ObservableObject
     private string licenseKey = string.Empty;
 
     [ObservableProperty]
-    private string whitelistText = string.Empty;
-
-    [ObservableProperty]
     private string serviceState = "Unknown";
 
     [ObservableProperty]

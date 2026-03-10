@@ -33,11 +33,10 @@ public sealed class GatewayStatePersistenceService : IGatewayStatePersistenceSer
             var json = File.ReadAllText(StatePath);
             var parsed = JsonSerializer.Deserialize<GatewayUiStateModel>(json, JsonOptions) ?? new GatewayUiStateModel();
             parsed.TunnelKeyPath ??= string.Empty;
-            parsed.WhitelistText ??= string.Empty;
 
-            if (ContainsLegacyLicenseFields(json))
+            if (ContainsLegacyLicenseFields(json) || ContainsLegacyPolicyFields(json))
             {
-                // Rewrite once on startup to remove legacy tamper-prone fields.
+                // Rewrite once on startup to remove legacy fields no longer persisted by UI.
                 Save(parsed);
             }
 
@@ -91,6 +90,22 @@ public sealed class GatewayStatePersistenceService : IGatewayStatePersistenceSer
             return root.ValueKind == JsonValueKind.Object &&
                    (root.TryGetProperty("licenseActivated", out _) ||
                     root.TryGetProperty("licenseActivatedExpiresAtUtc", out _));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ContainsLegacyPolicyFields(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                   (root.TryGetProperty("whitelistText", out _) ||
+                    root.TryGetProperty("blacklistText", out _));
         }
         catch
         {

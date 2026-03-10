@@ -11,6 +11,11 @@ public interface IGatewayClientService
     Task<IpcResponse?> RequestLicenseTransferAsync(CancellationToken cancellationToken = default);
     Task<IpcResponse?> SetConfigAsync(ServiceConfig config, CancellationToken cancellationToken = default);
     Task<IpcResponse?> UpdateWhitelistAsync(IReadOnlyList<string> entries, CancellationToken cancellationToken = default);
+    Task<IpcResponse?> GetPolicyListAsync(string listType, CancellationToken cancellationToken = default);
+    Task<IpcResponse?> BeginPolicyUpdateAsync(string listType, string mode, CancellationToken cancellationToken = default);
+    Task<IpcResponse?> AppendPolicyEntriesAsync(string sessionId, IReadOnlyList<string> entries, CancellationToken cancellationToken = default);
+    Task<IpcResponse?> CommitPolicyUpdateAsync(string sessionId, CancellationToken cancellationToken = default);
+    Task<IpcResponse?> CancelPolicyUpdateAsync(string sessionId, CancellationToken cancellationToken = default);
     Task<IpcResponse?> VerifyLicenseAsync(CancellationToken cancellationToken = default);
     Task<IpcResponse?> StartProxyAsync(CancellationToken cancellationToken = default);
     Task<IpcResponse?> StopProxyAsync(CancellationToken cancellationToken = default);

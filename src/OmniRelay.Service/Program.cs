@@ -10,6 +10,7 @@ builder.Services.AddWindowsService(options => options.ServiceName = "OmniRelay.S
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<FileLogWriter>();
 builder.Services.AddSingleton<ConfigStore>();
+builder.Services.AddSingleton<PolicyStore>();
 builder.Services.AddSingleton<GatewayRuntime>();
 builder.Services.AddSingleton<LicenseValidator>();
 builder.Services.AddSingleton<TunnelConnectionTester>();

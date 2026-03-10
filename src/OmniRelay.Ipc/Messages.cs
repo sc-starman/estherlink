@@ -1,5 +1,6 @@
 using System.Text.Json;
 using OmniRelay.Core.Configuration;
+using OmniRelay.Core.Policy;
 using OmniRelay.Core.Status;
 
 namespace OmniRelay.Ipc;
@@ -10,6 +11,11 @@ public static class IpcCommands
     public const string GetStatus = "get_status";
     public const string SetConfig = "set_config";
     public const string UpdateWhitelist = "update_whitelist";
+    public const string GetPolicyList = "get_policy_list";
+    public const string BeginPolicyUpdate = "begin_policy_update";
+    public const string AppendPolicyEntries = "append_policy_entries";
+    public const string CommitPolicyUpdate = "commit_policy_update";
+    public const string CancelPolicyUpdate = "cancel_policy_update";
     public const string StartProxy = "start_proxy";
     public const string StopProxy = "stop_proxy";
     public const string VerifyLicense = "verify_license";
@@ -26,6 +32,28 @@ public sealed record IpcResponse(bool Success, string? Error = null, string? Jso
 public sealed record SetConfigRequest(ServiceConfig Config);
 
 public sealed record UpdateWhitelistRequest(IReadOnlyList<string> Entries);
+public sealed record GetPolicyListRequest(string ListType);
+public sealed record GetPolicyListResponse(
+    string ListType,
+    IReadOnlyList<string> Entries,
+    int Count,
+    long Revision,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record BeginPolicyUpdateRequest(string ListType, string Mode);
+public sealed record BeginPolicyUpdateResponse(string SessionId, string ListType, string Mode);
+public sealed record AppendPolicyEntriesRequest(string SessionId, IReadOnlyList<string> Entries);
+public sealed record CommitPolicyUpdateRequest(string SessionId);
+public sealed record CancelPolicyUpdateRequest(string SessionId);
+public sealed record CommitPolicyUpdateResponse(
+    string ListType,
+    string Mode,
+    int AppliedCount,
+    int DuplicateDroppedCount,
+    int InvalidCount,
+    int Count,
+    long Revision,
+    DateTimeOffset UpdatedAtUtc);
 
 public sealed record StatusResponse(GatewayStatus Status);
 

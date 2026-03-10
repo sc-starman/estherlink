@@ -37,6 +37,31 @@ public sealed class GatewayClientService : IGatewayClientService
         return SendAsync(IpcCommands.UpdateWhitelist, new UpdateWhitelistRequest(entries), cancellationToken, TimeSpan.FromSeconds(15));
     }
 
+    public Task<IpcResponse?> GetPolicyListAsync(string listType, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.GetPolicyList, new GetPolicyListRequest(listType), cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> BeginPolicyUpdateAsync(string listType, string mode, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.BeginPolicyUpdate, new BeginPolicyUpdateRequest(listType, mode), cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> AppendPolicyEntriesAsync(string sessionId, IReadOnlyList<string> entries, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.AppendPolicyEntries, new AppendPolicyEntriesRequest(sessionId, entries), cancellationToken, TimeSpan.FromSeconds(60));
+    }
+
+    public Task<IpcResponse?> CommitPolicyUpdateAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.CommitPolicyUpdate, new CommitPolicyUpdateRequest(sessionId), cancellationToken, TimeSpan.FromSeconds(60));
+    }
+
+    public Task<IpcResponse?> CancelPolicyUpdateAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.CancelPolicyUpdate, new CancelPolicyUpdateRequest(sessionId), cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
     public Task<IpcResponse?> VerifyLicenseAsync(CancellationToken cancellationToken = default)
     {
         return SendAsync(IpcCommands.VerifyLicense, null, cancellationToken, TimeSpan.FromSeconds(130));
