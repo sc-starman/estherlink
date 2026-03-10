@@ -36,7 +36,7 @@
 
                     <TextBlock Text="License Key" Style="{StaticResource FormLabelStyle}" Margin="0,0,0,6"/>
                     <DockPanel LastChildFill="False">
-                        <TextBox Width="520"
+                        <TextBox Width="350"
                                  Text="{Binding State.LicenseKey, UpdateSourceTrigger=PropertyChanged}"
                                  Style="{StaticResource FormTextBoxStyle}"
                                  VerticalAlignment="Center"/>

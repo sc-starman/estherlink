@@ -19,7 +19,6 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Text="Dark Theme" Style="{StaticResource FormLabelStyle}"/>
@@ -27,9 +26,6 @@
 
                 <TextBlock Grid.Row="1" Text="Refresh Interval (sec)" Style="{StaticResource FormLabelStyle}"/>
                 <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RefreshIntervalSeconds}" Style="{StaticResource FormTextBoxStyle}"/>
-
-                <TextBlock Grid.Row="2" Text="Compact Mode" Style="{StaticResource FormLabelStyle}"/>
-                <CheckBox Grid.Row="2" Grid.Column="1" IsChecked="{Binding CompactMode}" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Text}"/>
             </Grid>
         </Border>
 

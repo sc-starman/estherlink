@@ -9,11 +9,10 @@ public sealed class NavigationService : INavigationService
     private readonly List<NavigationItemModel> _items =
     [
         new() { Route = "dashboard", Title = "Dashboard", IconGlyph = "\uE80F" },
-        new() { Route = "relay", Title = "Relay Management", IconGlyph = "\uE968" },
-        new() { Route = "gateway", Title = "Gateway Management", IconGlyph = "\uE9D9" },
+        new() { Route = "relay", Title = "Relay Service", IconGlyph = "\uE968" },
+        new() { Route = "gateway", Title = "Gateway Control", IconGlyph = "\uE9D9" },
         new() { Route = "whitelist", Title = "Whitelists", IconGlyph = "\uE73E" },
         new() { Route = "license", Title = "License", IconGlyph = "\uE8A7" },
-        new() { Route = "settings", Title = "Settings", IconGlyph = "\uE713" },
         new() { Route = "logs", Title = "Logs", IconGlyph = "\uE8A5" }
     ];
 

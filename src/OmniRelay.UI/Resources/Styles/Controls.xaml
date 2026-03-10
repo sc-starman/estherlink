@@ -228,6 +228,7 @@
                                                  ClickMode="Press"
                                                  HorizontalContentAlignment="Stretch"
                                                  VerticalContentAlignment="Center"
+                                                 Foreground="{TemplateBinding Foreground}"
                                                  Background="Transparent"
                                                  BorderBrush="{x:Null}"
                                                  BorderThickness="0"
@@ -236,6 +237,7 @@
                                 <ContentPresenter Margin="12,0,36,0"
                                                   VerticalAlignment="Center"
                                                   HorizontalAlignment="Stretch"
+                                                  TextElement.Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ComboBox}}"
                                                   Content="{TemplateBinding SelectionBoxItem}"
                                                   ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                                   ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>

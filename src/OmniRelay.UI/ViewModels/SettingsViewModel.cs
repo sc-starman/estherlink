@@ -24,9 +24,6 @@ public partial class SettingsViewModel : ObservableObject
     private int refreshIntervalSeconds = 5;
 
     [ObservableProperty]
-    private bool compactMode;
-
-    [ObservableProperty]
     private string feedback = string.Empty;
 
     [ObservableProperty]
@@ -60,8 +57,7 @@ public partial class SettingsViewModel : ObservableObject
             var settings = new UiSettingsModel
             {
                 Theme = DarkThemeEnabled ? "Dark" : "Light",
-                RefreshIntervalSeconds = RefreshIntervalSeconds,
-                CompactMode = CompactMode
+                RefreshIntervalSeconds = RefreshIntervalSeconds
             };
 
             _settingsService.Save(settings);
@@ -79,7 +75,6 @@ public partial class SettingsViewModel : ObservableObject
     {
         DarkThemeEnabled = true;
         RefreshIntervalSeconds = 5;
-        CompactMode = false;
         Save();
     }
 
@@ -88,6 +83,5 @@ public partial class SettingsViewModel : ObservableObject
         var settings = _settingsService.Load();
         DarkThemeEnabled = !string.Equals(settings.Theme, "Light", StringComparison.OrdinalIgnoreCase);
         RefreshIntervalSeconds = settings.RefreshIntervalSeconds <= 0 ? 5 : settings.RefreshIntervalSeconds;
-        CompactMode = settings.CompactMode;
     }
 }

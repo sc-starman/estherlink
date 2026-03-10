@@ -6,15 +6,77 @@
         mc:Ignorable="d"
         Title="OmniRelay"
         Icon="Assets/app.ico"
-        Width="1020"
+        WindowStyle="None"
+        ResizeMode="CanMinimize"
+        Width="800"
         Height="640"
-        MinWidth="1020"
+        MinWidth="800"
         MinHeight="540">
     <Grid>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="280"/>
-            <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="40"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Background="{DynamicResource Brush.HeaderBackground}"
+                BorderBrush="{DynamicResource Brush.Border}"
+                BorderThickness="0,0,0,1"
+                MouseLeftButtonDown="TitleBar_OnMouseLeftButtonDown">
+            <Grid Margin="12,0,8,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Image Source="pack://application:,,,/Assets/logo.png"
+                           Width="18"
+                           Height="18"
+                           Margin="0,0,8,0"/>
+                    <TextBlock Text="OmniRelay"
+                               FontWeight="SemiBold"
+                               FontSize="13"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Width="30"
+                            Height="24"
+                            MinHeight="24"
+                            Margin="0,0,6,0"
+                            Padding="0"
+                            ToolTip="Minimize"
+                            Click="MinimizeButton_OnClick"
+                            Style="{StaticResource SecondaryButtonStyle}">
+                        <TextBlock Text="&#xE921;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Button>
+                    <Button Width="30"
+                            Height="24"
+                            MinHeight="24"
+                            Padding="0"
+                            ToolTip="Close"
+                            Click="CloseButton_OnClick"
+                            Style="{StaticResource SecondaryButtonStyle}">
+                        <TextBlock Text="&#xE8BB;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="200"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
 
         <Border Grid.Column="0"
                 Background="{DynamicResource Brush.SidebarBackground}"
@@ -63,7 +125,7 @@
                         </Border>
                         <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                             <TextBlock Text="OmniRelay" Style="{StaticResource SidebarTitleStyle}"/>
-                            <TextBlock Text="Secure Network Admin" Style="{StaticResource SidebarSubTitleStyle}"/>
+                            <TextBlock Text="Own Connectivity" Style="{StaticResource SidebarSubTitleStyle}"/>
                         </StackPanel>
                     </StackPanel>
 
@@ -76,7 +138,7 @@
                                         Command="{Binding DataContext.NavigateCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                         CommandParameter="{Binding Item.Route}">
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding Item.IconGlyph}" FontFamily="Segoe Fluent Icons" FontSize="16" Width="24" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Item.IconGlyph}" FontFamily="Segoe MDL2 Assets" FontSize="16" Width="24" VerticalAlignment="Center"/>
                                         <TextBlock Text="{Binding Item.Title}" VerticalAlignment="Center" FontSize="13"/>
                                     </StackPanel>
                                 </Button>
@@ -105,19 +167,16 @@
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="&#xE72E;" FontFamily="Segoe Fluent Icons" Foreground="{DynamicResource Brush.Primary}" FontSize="18" Margin="0,0,8,0"/>
+                        <TextBlock Text="{Binding PageIconGlyph}" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource Brush.Primary}" FontSize="18" Margin="0,0,8,0"/>
                         <TextBlock Text="{Binding PageTitle}" FontSize="20" FontWeight="Bold"/>
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Style="{StaticResource SecondaryButtonStyle}" Padding="10,6" Margin="0,0,10,0" Command="{Binding ToggleThemeCommand}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE706;" FontFamily="Segoe Fluent Icons" Margin="0,0,6,0"/>
+                                <TextBlock Text="&#xE706;" FontFamily="Segoe MDL2 Assets" Margin="0,0,6,0"/>
                                 <TextBlock Text="{Binding ThemeLabel}"/>
                             </StackPanel>
-                        </Button>
-                        <Button Style="{StaticResource SecondaryButtonStyle}" Padding="10,6" IsEnabled="False">
-                            <TextBlock Text="&#xE7F4;" FontFamily="Segoe Fluent Icons"/>
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -135,6 +194,7 @@
                     Padding="14,6">
                 <TextBlock Text="{Binding StatusSummary}" FontSize="12" Foreground="{DynamicResource Brush.MutedText}" TextTrimming="CharacterEllipsis"/>
             </Border>
+        </Grid>
         </Grid>
     </Grid>
 </Window>

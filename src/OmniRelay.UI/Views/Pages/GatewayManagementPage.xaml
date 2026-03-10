@@ -4,211 +4,230 @@
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       mc:Ignorable="d"
-      Title="Gateway Management"
+      Title="Gateway Control"
       Background="{DynamicResource Brush.Background}">
     <Page.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
     </Page.Resources>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="28"
-                MaxWidth="1080">
-            <TextBlock Text="Gateway Management"
-                    Style="{StaticResource SectionTitleTextStyle}"/>
-            <TextBlock Text="Configure tunnel/gateway parameters and manage VPS gateway lifecycle independently."
-                       Style="{StaticResource MutedTextStyle}"
-                       Margin="0,0,0,16"/>
+    <Grid>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="25"
+                        MaxWidth="1080">
+                <TextBlock Text="Configure tunnel/gateway parameters and manage VPS gateway lifecycle independently."
+                           Style="{StaticResource MutedTextStyle}"
+                           Margin="0,0,0,16"/>
 
-            <TabControl Margin="0,0,0,8"
-                        Style="{StaticResource AppTabControlStyle}"
-                        ItemContainerStyle="{StaticResource AppTabItemStyle}">
-                <TabItem Header="Configurations">
-                    <StackPanel Margin="8">
-                        <Border Style="{StaticResource CardStyle}"
-                                Margin="0,0,0,14">
-                            <StackPanel>
-                                <TextBlock Text="Tunnel Configuration"
-                                        FontWeight="SemiBold"
-                                        Margin="0,0,0,10"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="220"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
+                <TabControl Margin="0,0,0,8"
+                            Style="{StaticResource AppTabControlStyle}"
+                            ItemContainerStyle="{StaticResource AppTabItemStyle}">
+                    <TabItem Header="Configurations">
+                        <StackPanel Margin="8">
+                            <Border Style="{StaticResource CardStyle}"
+                                    Margin="0,0,0,14">
+                                <StackPanel>
 
-                                    <TextBlock Grid.Row="0"
-                                            Text="Tunnel Host"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="0"
-                                            Grid.Column="1"
-                                            Text="{Binding State.TunnelHost, UpdateSourceTrigger=PropertyChanged}"
-                                            Style="{StaticResource FormTextBoxStyle}"/>
+                                    <Border BorderBrush="{DynamicResource Brush.Border}"
+                                            BorderThickness="1"
+                                            CornerRadius="10"
+                                            Padding="12"
+                                            Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <TextBlock Text="1. Host Configuration"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,0,0,8"/>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="180"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
 
-                                    <TextBlock Grid.Row="1"
-                                            Text="Tunnel SSH Port"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="1"
-                                            Grid.Column="1"
-                                            Text="{Binding State.TunnelSshPortText, UpdateSourceTrigger=PropertyChanged}"
-                                            Style="{StaticResource FormTextBoxStyle}"/>
+                                                <TextBlock Grid.Row="0"
+                                                           Text="Address / Port"
+                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                <StackPanel Grid.Row="0"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal">
+                                                    <TextBox Width="170"
+                                                             Margin="0,6,8,6"
+                                                             Text="{Binding State.TunnelHost, UpdateSourceTrigger=PropertyChanged}"
+                                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                                    <TextBox Width="70"
+                                                             Margin="0,6,0,6"
+                                                             Text="{Binding State.TunnelSshPortText, UpdateSourceTrigger=PropertyChanged}"
+                                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                                </StackPanel>
 
-                                    <TextBlock Grid.Row="2"
-                                            Text="Tunnel Remote Port"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="2"
-                                            Grid.Column="1"
-                                            Text="{Binding State.TunnelRemotePortText, UpdateSourceTrigger=PropertyChanged}"
-                                            Style="{StaticResource FormTextBoxStyle}"/>
+                                                <TextBlock Grid.Row="1"
+                                                           Text="User / Authentication Method"
+                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                <StackPanel Grid.Row="1"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal">
+                                                    <TextBox Width="100"
+                                                             Margin="0,6,8,6"
+                                                             Text="{Binding State.TunnelUser, UpdateSourceTrigger=PropertyChanged}"
+                                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                                    <ComboBox Width="140"
+                                                              Margin="0,6,0,6"
+                                                              SelectedIndex="{Binding TunnelAuthMethodIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                              Style="{StaticResource FormComboBoxStyle}">
+                                                        <ComboBoxItem Content="Host Key File"/>
+                                                        <ComboBoxItem Content="Password"/>
+                                                    </ComboBox>
+                                                </StackPanel>
 
-                                    <TextBlock Grid.Row="3"
-                                            Text="Tunnel User"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="3"
-                                            Grid.Column="1"
-                                            Text="{Binding State.TunnelUser, UpdateSourceTrigger=PropertyChanged}"
-                                            Style="{StaticResource FormTextBoxStyle}"/>
+                                                <TextBlock Grid.Row="2"
+                                                           Text="Password"
+                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                <StackPanel Grid.Row="2"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal"
+                                                            VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding PasswordState}"
+                                                               Style="{StaticResource ValueTextStyle}"
+                                                               Width="75"/>
+                                                    <Button Content="Set Password"
+                                                            Command="{Binding SetTunnelPasswordCommand}"
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Margin="0,6,0,6"/>
+                                                    <Button Content="Clear"
+                                                            Command="{Binding ClearTunnelPasswordCommand}"
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Margin="10,6,0,6"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
 
-                                    <TextBlock Grid.Row="4"
-                                            Text="Authentication Method"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <ComboBox Grid.Row="4"
-                                            Grid.Column="1"
-                                              SelectedValue="{Binding State.TunnelAuthMethod}"
-                                              SelectedValuePath="Tag"
-                                              Style="{StaticResource FormComboBoxStyle}">
-                                        <ComboBoxItem Content="Host Key File"
-                                                Tag="host_key"/>
-                                        <ComboBoxItem Content="Password"
-                                                Tag="password"/>
-                                    </ComboBox>
+                                    <Border BorderBrush="{DynamicResource Brush.Border}"
+                                            BorderThickness="1"
+                                            CornerRadius="10"
+                                            Padding="12"
+                                            Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <TextBlock Text="2. Tunnel Configuration"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,0,0,8"/>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="220"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
 
-                                    <TextBlock Grid.Row="5"
-                                               Text="Host Key File"
-                                               Style="{StaticResource FormLabelStyle}"
-                                               Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                                    <StackPanel Grid.Row="5"
-                                                Grid.Column="1"
-                                                Orientation="Horizontal"
-                                                Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}">
-                                        <TextBox Width="520"
-                                                Text="{Binding State.TunnelKeyPath, UpdateSourceTrigger=PropertyChanged}"
-                                                Style="{StaticResource FormTextBoxStyle}"/>
-                                        <Button Content="Choose File"
-                                                Margin="10,6,0,6"
-                                                Command="{Binding BrowseTunnelKeyCommand}"
-                                                Style="{StaticResource SecondaryButtonStyle}"/>
-                                    </StackPanel>
+                                                <TextBlock Grid.Row="0"
+                                                    
+                                                           Text="Remote Port"
+                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                
+                                                <StackPanel Grid.Row="0"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal">
+                                                <TextBox
+                                                    Width="210"
+                                                         Text="{Binding State.TunnelRemotePortText, UpdateSourceTrigger=PropertyChanged}"
+                                                         Style="{StaticResource FormTextBoxStyle}"/>
+                                                         </StackPanel>
+                                                <TextBlock Grid.Row="1"
+                                                           Text="Bootstrap SOCKS Local / Remote Port"
+                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                <StackPanel Grid.Row="1"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal">
+                                                    <TextBox Width="100"
+                                                             Margin="0,6,8,6"
+                                                             Text="{Binding State.BootstrapSocksLocalPortText, UpdateSourceTrigger=PropertyChanged}"
+                                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                                    <TextBox Width="100"
+                                                             Margin="0,6,0,6"
+                                                             Text="{Binding State.BootstrapSocksRemotePortText, UpdateSourceTrigger=PropertyChanged}"
+                                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
 
-                                    <TextBlock Grid.Row="6"
-                                               Text="Key Passphrase"
-                                               Style="{StaticResource FormLabelStyle}"
-                                               Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                                    <StackPanel Grid.Row="6"
-                                                Grid.Column="1"
-                                                Orientation="Horizontal"
-                                                VerticalAlignment="Center"
-                                                Visibility="{Binding IsHostKeyAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}">
-                                        <TextBlock Text="{Binding KeyPassphraseState}"
-                                                Style="{StaticResource ValueTextStyle}"
-                                                Width="130"/>
-                                        <Button Content="Set Passphrase"
-                                                Command="{Binding SetKeyPassphraseCommand}"
-                                                Style="{StaticResource SecondaryButtonStyle}"
-                                                Margin="0,6,0,6"/>
-                                        <Button Content="Clear"
-                                                Command="{Binding ClearKeyPassphraseCommand}"
-                                                Style="{StaticResource SecondaryButtonStyle}"
-                                                Margin="10,6,0,6"/>
-                                    </StackPanel>
+                                    <Border BorderBrush="{DynamicResource Brush.Border}"
+                                            BorderThickness="1"
+                                            CornerRadius="10"
+                                            Padding="12">
+                                        <StackPanel>
+                                            <TextBlock Text="3. Panel / VLESS Reality Configuration"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,0,0,8"/>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="220"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
 
-                                    <TextBlock Grid.Row="7"
-                                               Text="Tunnel Password"
-                                               Style="{StaticResource FormLabelStyle}"
-                                               Visibility="{Binding IsPasswordAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                                    <StackPanel Grid.Row="7"
-                                                Grid.Column="1"
-                                                Orientation="Horizontal"
-                                                VerticalAlignment="Center"
-                                                Visibility="{Binding IsPasswordAuthSelected, Converter={StaticResource BoolToVisibilityConverter}}">
-                                        <TextBlock Text="{Binding PasswordState}"
-                                                Style="{StaticResource ValueTextStyle}"
-                                                Width="130"/>
-                                        <Button Content="Set Password"
-                                                Command="{Binding SetTunnelPasswordCommand}"
-                                                Style="{StaticResource SecondaryButtonStyle}"
-                                                Margin="0,6,0,6"/>
-                                        <Button Content="Clear"
-                                                Command="{Binding ClearTunnelPasswordCommand}"
-                                                Style="{StaticResource SecondaryButtonStyle}"
-                                                Margin="10,6,0,6"/>
-                                    </StackPanel>
+                                                <TextBlock Grid.Row="0"
+                                                           Text="VLESS Reality / OmniPanel Port"
+                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                <StackPanel Grid.Row="0"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal">
+                                                    <TextBox Width="100"
+                                                             Margin="0,6,8,6"
+                                                             Text="{Binding State.GatewayPublicPortText, UpdateSourceTrigger=PropertyChanged}"
+                                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                                    <TextBox Width="100"
+                                                             Margin="0,6,0,6"
+                                                             Text="{Binding State.GatewayPanelPortText, UpdateSourceTrigger=PropertyChanged}"
+                                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                                </StackPanel>
 
-                                    <TextBlock Grid.Row="8"
-                                            Text="Bootstrap SOCKS Local Port"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="8"
-                                            Grid.Column="1"
-                                            Text="{Binding State.BootstrapSocksLocalPortText, UpdateSourceTrigger=PropertyChanged}"
-                                            Style="{StaticResource FormTextBoxStyle}"/>
+                                                <TextBlock Grid.Row="1"
+                                                           Text="Gateway SNI"
+                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                <StackPanel Grid.Row="1"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal">
+                                                    <TextBox Width="120"
+                                                             Text="{Binding State.GatewaySni, UpdateSourceTrigger=PropertyChanged}"
+                                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                                    <Button Content="⟳ Switch"
+                                                            Command="{Binding SwitchRealityPairCommand}"
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Margin="10,6,0,6"/>
+                                                </StackPanel>
 
-                                    <TextBlock Grid.Row="9"
-                                            Text="Bootstrap SOCKS Remote Port"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="9"
-                                            Grid.Column="1"
-                                            Text="{Binding State.BootstrapSocksRemotePortText, UpdateSourceTrigger=PropertyChanged}"
-                                            Style="{StaticResource FormTextBoxStyle}"/>
+                                                <TextBlock Grid.Row="2"
+                                                           Text="Gateway Target"
+                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                                     <StackPanel Grid.Row="2"
+                                                            Grid.Column="1"
+                                                            Orientation="Horizontal">
+                                  <TextBox Grid.Row="2"
+                                                            Width="210"
+                                                         Grid.Column="1"
+                                                         Text="{Binding State.GatewayTarget, UpdateSourceTrigger=PropertyChanged}"
+                                                         Style="{StaticResource FormTextBoxStyle}"/>
+                                                </StackPanel>
+              
 
-                                    <TextBlock Grid.Row="10"
-                                            Text="Gateway Public/OmniPanel Ports"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <StackPanel Grid.Row="10"
-                                            Grid.Column="1"
-                                            Orientation="Horizontal">
-                                        <TextBox Width="180"
-                                                Margin="0,6,8,6"
-                                                Text="{Binding State.GatewayPublicPortText, UpdateSourceTrigger=PropertyChanged}"
-                                                Style="{StaticResource FormTextBoxStyle}"/>
-                                        <TextBox Width="180"
-                                                Margin="0,6,0,6"
-                                                Text="{Binding State.GatewayPanelPortText, UpdateSourceTrigger=PropertyChanged}"
-                                                Style="{StaticResource FormTextBoxStyle}"/>
-                                    </StackPanel>
 
-                                    <TextBlock Grid.Row="11"
-                                            Text="Gateway SNI"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="11"
-                                            Grid.Column="1"
-                                             Text="{Binding State.GatewaySni, UpdateSourceTrigger=PropertyChanged}"
-                                             Style="{StaticResource FormTextBoxStyle}"/>
-
-                                    <TextBlock Grid.Row="12"
-                                            Text="Gateway Target"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="12"
-                                            Grid.Column="1"
-                                             Text="{Binding State.GatewayTarget, UpdateSourceTrigger=PropertyChanged}"
-                                             Style="{StaticResource FormTextBoxStyle}"/>
-
-                                    <WrapPanel Grid.Row="13"
-                                            Grid.Column="1">
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                    <WrapPanel Margin="8"
+                                            Grid.Row="3"
+                                               Grid.Column="0">
                                         <Button Content="Apply Gateway Config"
                                                 Command="{Binding ApplyGatewayConfigCommand}"
                                                 Style="{StaticResource PrimaryButtonStyle}"
@@ -218,239 +237,425 @@
                                                 Style="{StaticResource SecondaryButtonStyle}"
                                                 Margin="0,0,8,0"/>
                                     </WrapPanel>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
+                                </StackPanel>
+                            </Border>
 
-                        <Border Style="{StaticResource CardStyle}"
-                                Margin="0,0,0,8">
-                            <StackPanel>
-                                <TextBlock Text="DNS Configuration"
-                                        FontWeight="SemiBold"
-                                        Margin="0,0,0,10"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="220"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
+                            <Border Style="{StaticResource CardStyle}"
+                                    Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="DNS Configuration"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,10"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="220"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
 
-                                    <TextBlock Grid.Row="0"
-                                            Text="Gateway DNS Mode"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <ComboBox Grid.Row="0"
-                                            Grid.Column="1"
-                                              SelectedValue="{Binding State.GatewayDnsMode}"
-                                              SelectedValuePath="Tag"
-                                              Style="{StaticResource FormComboBoxStyle}">
-                                        <ComboBoxItem Content="Hybrid (UDP + DoH)"
-                                                Tag="hybrid"/>
-                                        <ComboBoxItem Content="DoH Only"
-                                                Tag="doh"/>
-                                        <ComboBoxItem Content="UDP DNS Only"
-                                                Tag="udp"/>
-                                    </ComboBox>
+                                        <TextBlock Grid.Row="0"
+                                                   Text="Gateway DNS Mode"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <ComboBox Grid.Row="0"
+                                                  Grid.Column="1"
+                                                  SelectedValue="{Binding State.GatewayDnsMode}"
+                                                  SelectedValuePath="Tag"
+                                                  Style="{StaticResource FormComboBoxStyle}">
+                                            <ComboBoxItem Content="Hybrid (UDP + DoH)"
+                                                          Tag="hybrid"/>
+                                            <ComboBoxItem Content="DoH Only"
+                                                          Tag="doh"/>
+                                            <ComboBoxItem Content="UDP DNS Only"
+                                                          Tag="udp"/>
+                                        </ComboBox>
 
-                                    <TextBlock Grid.Row="1"
-                                            Text="DoH Endpoints (CSV)"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBox Grid.Row="1"
-                                            Grid.Column="1"
-                                             Text="{Binding State.GatewayDohEndpointsText, UpdateSourceTrigger=PropertyChanged}"
-                                             Style="{StaticResource FormTextBoxStyle}"/>
+                                        <TextBlock Grid.Row="1"
+                                                   Text="DoH Endpoints (CSV)"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBox Grid.Row="1"
+                                                 Grid.Column="1"
+                                                 Text="{Binding State.GatewayDohEndpointsText, UpdateSourceTrigger=PropertyChanged}"
+                                                 Style="{StaticResource FormTextBoxStyle}"/>
 
-                                    <TextBlock Grid.Row="2"
-                                            Text="Block Non-DNS UDP"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <CheckBox Grid.Row="2"
-                                            Grid.Column="1"
-                                              VerticalAlignment="Center"
-                                              IsChecked="{Binding State.GatewayDnsUdpOnly}"
-                                              Content="Allow only UDP/53 and block other UDP"
-                                              Margin="0,6,0,6"/>
+                                        <TextBlock Grid.Row="2"
+                                                   Text="Block Non-DNS UDP"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <CheckBox Grid.Row="2"
+                                                  Grid.Column="1"
+                                                  VerticalAlignment="Center"
+                                                  IsChecked="{Binding State.GatewayDnsUdpOnly}"
+                                                  Content="Allow only UDP/53 and block other UDP"
+                                                  Margin="0,6,0,6"/>
 
-                                    <WrapPanel Grid.Row="3"
-                                            Grid.Column="1">
-                                        <Button Content="Apply DNS Config"
-                                                Command="{Binding ApplyGatewayDnsCommand}"
+                                    </Grid>
+                                                                            <WrapPanel Grid.Row="3"
+                                                   Grid.Column="0">
+                                            <Button Content="Apply DNS Config"
+                                                    Command="{Binding ApplyGatewayDnsCommand}"
+                                                    Style="{StaticResource SecondaryButtonStyle}"
+                                                    Margin="0,0,8,0"/>
+                                            <Button Content="Check DNS Path"
+                                                    Command="{Binding CheckGatewayDnsCommand}"
+                                                    Style="{StaticResource SecondaryButtonStyle}"
+                                                    Margin="0,0,8,0"/>
+                                            <Button Content="Repair DNS"
+                                                    Command="{Binding RepairGatewayDnsCommand}"
+                                                    Style="{StaticResource SecondaryButtonStyle}"
+                                                    Margin="0,0,8,0"/>
+                                        </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </TabItem>
+
+                    <TabItem Header="Operation Center">
+                        <StackPanel Margin="8">
+                            <Border Style="{StaticResource CardStyle}"
+                                    Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="Gateway Operations"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,10"/>
+                                    <WrapPanel Margin="0,0,0,10">
+                                        <Button Content="Bootstrap Check"
+                                                Command="{Binding GatewayBootstrapCheckCommand}"
                                                 Style="{StaticResource SecondaryButtonStyle}"
                                                 Margin="0,0,8,0"/>
-                                        <Button Content="Check DNS Path"
-                                                Command="{Binding CheckGatewayDnsCommand}"
+                                        <Button Content="Install Gateway"
+                                                Command="{Binding InstallGatewayCommand}"
                                                 Style="{StaticResource SecondaryButtonStyle}"
                                                 Margin="0,0,8,0"/>
-                                        <Button Content="Repair DNS"
-                                                Command="{Binding RepairGatewayDnsCommand}"
+                                        <Button Content="Clear Session Sudo"
+                                                Command="{Binding ClearCachedSudoPasswordCommand}"
+                                                Style="{StaticResource SecondaryButtonStyle}"/>
+                                    </WrapPanel>
+                                    <WrapPanel Margin="0,0,0,10">
+                                        <Button Content="Start"
+                                                Command="{Binding StartGatewayCommand}"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Margin="0,0,8,0"/>
+                                        <Button Content="Stop"
+                                                Command="{Binding StopGatewayCommand}"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Margin="0,0,8,0"/>
+                                        <Button Content="Uninstall"
+                                                Command="{Binding UninstallGatewayCommand}"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Margin="0,0,8,0"/>
+                                        <Button Content="Health Check"
+                                                Command="{Binding HealthCheckGatewayCommand}"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Margin="0,0,8,0"/>
+                                        <Button Content="Refresh"
+                                                Command="{Binding RefreshCommand}"
                                                 Style="{StaticResource SecondaryButtonStyle}"
                                                 Margin="0,0,8,0"/>
                                     </WrapPanel>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </TabItem>
+                                    <Border Margin="0,0,0,10"
+                                            Padding="10,8"
+                                            CornerRadius="8"
+                                            BorderBrush="{DynamicResource Brush.Border}"
+                                            BorderThickness="1"
+                                            Background="{DynamicResource Brush.InputBackground}"
+                                            Visibility="{Binding IsGatewayProgressVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
 
-                <TabItem Header="Operations">
-                    <StackPanel Margin="8">
-                        <Border Style="{StaticResource CardStyle}"
-                                Margin="0,0,0,14">
-                            <StackPanel>
-                                <TextBlock Text="Gateway Operations"
-                                        FontWeight="SemiBold"
-                                        Margin="0,0,0,10"/>
-                                <WrapPanel Margin="0,0,0,10">
-                                    <Button Content="Bootstrap Check"
-                                            Command="{Binding GatewayBootstrapCheckCommand}"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Margin="0,0,8,0"/>
-                                    <Button Content="Install Gateway"
-                                            Command="{Binding InstallGatewayCommand}"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Margin="0,0,8,0"/>
-                                    <Button Content="Start"
-                                            Command="{Binding StartGatewayCommand}"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Margin="0,0,8,0"/>
-                                    <Button Content="Stop"
-                                            Command="{Binding StopGatewayCommand}"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Margin="0,0,8,0"/>
-                                    <Button Content="Uninstall"
-                                            Command="{Binding UninstallGatewayCommand}"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Margin="0,0,8,0"/>
-                                    <Button Content="Health Check"
-                                            Command="{Binding HealthCheckGatewayCommand}"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Margin="0,0,8,0"/>
-                                    <Button Content="Refresh"
-                                            Command="{Binding RefreshCommand}"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Margin="0,0,8,0"/>
-                                    <Button Content="Clear Session Sudo"
-                                            Command="{Binding ClearCachedSudoPasswordCommand}"
-                                            Style="{StaticResource SecondaryButtonStyle}"/>
-                                </WrapPanel>
+                                            <TextBlock Grid.Row="0"
+                                                       Grid.ColumnSpan="2"
+                                                       Text="{Binding GatewayProgressMessage}"
+                                                       Style="{StaticResource ValueTextStyle}"
+                                                       TextWrapping="Wrap"/>
 
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="220"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
+                                            <ProgressBar Grid.Row="1"
+                                                         Grid.Column="0"
+                                                         Margin="0,8,10,0"
+                                                         Height="8"
+                                                         Minimum="0"
+                                                         Maximum="100"
+                                                         Value="{Binding GatewayProgressPercent}"
+                                                         IsIndeterminate="{Binding IsGatewayProgressIndeterminate}"
+                                                         Foreground="{DynamicResource Brush.Primary}"/>
 
-                                    <TextBlock Grid.Row="0"
-                                            Text="Gateway Service State"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBlock Grid.Row="0"
-                                            Grid.Column="1"
-                                            Text="{Binding GatewayServiceState}"
-                                            TextWrapping="Wrap"
-                                            Style="{StaticResource ValueTextStyle}"/>
+                                            <TextBlock Grid.Row="1"
+                                                       Grid.Column="1"
+                                                       Margin="0,4,0,0"
+                                                       VerticalAlignment="Center"
+                                                       Text="{Binding GatewayProgressPercentText}"
+                                                       Style="{StaticResource ValueTextStyle}"/>
+                                        </Grid>
+                                    </Border>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="220"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
 
-                                    <TextBlock Grid.Row="1"
-                                            Text="Bootstrap Check"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBlock Grid.Row="1"
-                                            Grid.Column="1"
-                                            Text="{Binding GatewayBootstrapState}"
-                                            Style="{StaticResource ValueTextStyle}"/>
+                                        <TextBlock Grid.Row="0"
+                                                   Text="Gateway Service State"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBlock Grid.Row="0"
+                                                   Grid.Column="1"
+                                                   Text="{Binding GatewayServiceState}"
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource ValueTextStyle}"/>
 
-                                    <TextBlock Grid.Row="2"
-                                            Text="Health"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBlock Grid.Row="2"
-                                            Grid.Column="1"
-                                            Text="{Binding GatewayHealthSummary}"
-                                            TextWrapping="Wrap"
-                                            Style="{StaticResource ValueTextStyle}"/>
+                                        <TextBlock Grid.Row="1"
+                                                   Text="Bootstrap Check"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBlock Grid.Row="1"
+                                                   Grid.Column="1"
+                                                   Text="{Binding GatewayBootstrapState}"
+                                                   Style="{StaticResource ValueTextStyle}"/>
 
-                                    <TextBlock Grid.Row="3"
-                                            Text="Sudo Password Cache"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBlock Grid.Row="3"
-                                            Grid.Column="1"
-                                            Text="{Binding HasCachedSudoPassword}"
-                                            Style="{StaticResource ValueTextStyle}"/>
+                                        <TextBlock Grid.Row="2"
+                                                   Text="Health"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBlock Grid.Row="2"
+                                                   Grid.Column="1"
+                                                   Text="{Binding GatewayHealthSummary}"
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource ValueTextStyle}"/>
 
-                                    <TextBlock Grid.Row="4"
-                                            Text="DNS Summary"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBlock Grid.Row="4"
-                                            Grid.Column="1"
-                                            Text="{Binding GatewayDnsSummary}"
-                                            TextWrapping="Wrap"
-                                            Style="{StaticResource ValueTextStyle}"/>
+                                        <TextBlock Grid.Row="3"
+                                                   Text="Sudo Password Cache"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBlock Grid.Row="3"
+                                                   Grid.Column="1"
+                                                   Text="{Binding HasCachedSudoPassword}"
+                                                   Style="{StaticResource ValueTextStyle}"/>
 
-                                    <TextBlock Grid.Row="5"
-                                            Text="Panel URL"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBlock Grid.Row="5"
-                                            Grid.Column="1"
-                                            Text="{Binding State.GatewayPanelUrl}"
-                                            TextWrapping="Wrap"
-                                            Style="{StaticResource ValueTextStyle}"/>
+                                        <TextBlock Grid.Row="4"
+                                                   Text="DNS Summary"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBlock Grid.Row="4"
+                                                   Grid.Column="1"
+                                                   Text="{Binding GatewayDnsSummary}"
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource ValueTextStyle}"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
 
-                                    <TextBlock Grid.Row="6"
-                                            Text="Panel Username"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBlock Grid.Row="6"
-                                            Grid.Column="1"
-                                            Text="{Binding State.GatewayPanelUsername}"
-                                            TextWrapping="Wrap"
-                                            Style="{StaticResource ValueTextStyle}"/>
+                            <Border Style="{StaticResource CardStyle}"
+                                    Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="Gateway Panel Access"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,10"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
 
-                                    <TextBlock Grid.Row="7"
-                                            Text="Initial Password"
-                                            Style="{StaticResource FormLabelStyle}"/>
-                                    <TextBlock Grid.Row="7"
-                                            Grid.Column="1"
-                                            Text="{Binding State.GatewayInitialPanelPassword}"
-                                            TextWrapping="Wrap"
-                                            Style="{StaticResource ValueTextStyle}"/>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
+                                        <TextBlock Grid.Row="0"
+                                                   Text="Panel URL"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBlock Grid.Row="0"
+                                                   Grid.Column="1"
+                                                   Text="{Binding State.GatewayPanelUrl}"
+                                                   VerticalAlignment="Center"
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource ValueTextStyle}"/>
+                                        <Button Grid.Row="0"
+                                                Grid.Column="2"
+                                                Command="{Binding OpenPanelUrlCommand}"
+                                                ToolTip="Open Panel URL"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Width="25"
+                                                MinWidth="25"
+                                                MinHeight="25"
+                                                Height="25"
+                                                Padding="0"
+                                                VerticalAlignment="Center"
+                                                HorizontalAlignment="Right"
+                                                Margin="8,0,0,0">
+                                            <TextBlock FontFamily="Segoe MDL2 Assets"
+                                                       Text="&#xE8A7;"
+                                                       FontSize="14"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                        </Button>
 
-                        <Border Style="{StaticResource CardStyle}"
-                                Margin="0,0,0,8">
-                            <StackPanel>
-                                <TextBlock Text="Gateway Operation Log"
-                                        FontWeight="SemiBold"
-                                        Margin="0,0,0,10"/>
-                                <TextBox Text="{Binding OperationLog}"
-                                         IsReadOnly="True"
-                                         Height="220"
-                                         VerticalScrollBarVisibility="Auto"
-                                         HorizontalScrollBarVisibility="Auto"
-                                         TextWrapping="Wrap"
-                                         Style="{StaticResource MultilineTextBoxStyle}"/>
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </TabItem>
-            </TabControl>
 
-            <TextBlock Text="{Binding Feedback}"
-                    Style="{StaticResource FeedbackTextStyle}"
-                    Margin="0,10,0,0"/>
-        </StackPanel>
-    </ScrollViewer>
+                                        <TextBlock Grid.Row="1"
+                                                   Text="Panel Username"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBlock Grid.Row="1"
+                                                   Grid.Column="1"
+                                                   Text="{Binding State.GatewayPanelUsername}"
+                                                   VerticalAlignment="Center"
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource ValueTextStyle}"/>
+                                        <Button Grid.Row="1"
+                                                Grid.Column="2"
+                                                Command="{Binding CopyPanelUsernameCommand}"
+                                                ToolTip="Copy Username"
+                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                Width="25"
+                                                MinWidth="25"
+                                                MinHeight="25"
+                                                Height="25"
+                                                Padding="0"
+                                                VerticalAlignment="Center"
+                                                HorizontalAlignment="Right"
+
+                                                Margin="8,0,0,0">
+                                            <TextBlock FontFamily="Segoe MDL2 Assets"
+                                                       Text="&#xE8C8;"
+                                                       FontSize="14"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                        </Button>
+
+
+                                        <TextBlock Grid.Row="2"
+                                                   Text="Initial Password"
+                                                   Style="{StaticResource FormLabelStyle}"/>
+                                        <TextBlock Grid.Row="2"
+                                                   Grid.Column="1"
+                                                   Text="{Binding PanelPasswordDisplay}"
+                                                   VerticalAlignment="Center"
+                                                   TextWrapping="Wrap"
+                                                   Style="{StaticResource ValueTextStyle}"/>
+                                        <StackPanel Grid.Row="2"
+                                                    Grid.Column="2"
+                                                    Orientation="Horizontal"
+                                                    VerticalAlignment="Center"
+                                                    Margin="8,0,0,0">
+                                            <Button Command="{Binding TogglePanelPasswordVisibilityCommand}"
+                                                    ToolTip="{Binding PanelPasswordToggleText}"
+                                                    Style="{StaticResource SecondaryButtonStyle}"
+                                                    Width="25"
+                                                    MinWidth="25"
+                                                    MinHeight="25"
+                                                    Height="25"
+                                                    Padding="0"
+                                                    VerticalAlignment="Center">
+                                                <TextBlock FontFamily="Segoe MDL2 Assets"
+                                                           Text="{Binding PanelPasswordToggleIconGlyph}"
+                                                           FontSize="14"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"/>
+                                            </Button>
+                                            <Button Command="{Binding CopyPanelPasswordCommand}"
+                                                    ToolTip="Copy Password"
+                                                    Style="{StaticResource SecondaryButtonStyle}"
+                                                    Width="25"
+                                                    MinWidth="25"
+                                                    MinHeight="25"
+                                                    Height="25"
+                                                    Padding="0"
+                                                    VerticalAlignment="Center"
+                                                    Margin="8,0,0,0">
+                                                <TextBlock FontFamily="Segoe MDL2 Assets"
+                                                           Text="&#xE8C8;"
+                                                           FontSize="14"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"/>
+                                            </Button>
+                                        </StackPanel>
+
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource CardStyle}"
+                                    Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="Gateway Operation Log"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,10"/>
+                                    <TextBox Text="{Binding OperationLog}"
+                                             IsReadOnly="True"
+                                             Height="220"
+                                             VerticalScrollBarVisibility="Auto"
+                                             HorizontalScrollBarVisibility="Auto"
+                                             TextWrapping="Wrap"
+                                             Style="{StaticResource MultilineTextBoxStyle}"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </TabItem>
+                </TabControl>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,24,24"
+                MaxWidth="520"
+                Padding="14"
+                CornerRadius="12"
+                Background="#111827"
+                BorderBrush="#334155"
+                BorderThickness="1"
+                Visibility="{Binding IsFeedbackVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="18"
+                                  ShadowDepth="3"
+                                  Opacity="0.35"/>
+            </Border.Effect>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Gateway Notification"
+                               Foreground="#93C5FD"
+                               FontWeight="SemiBold"
+                               FontSize="12"/>
+                    <TextBlock Text="{Binding Feedback}"
+                               Margin="0,4,10,0"
+                               Foreground="White"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1"
+                        Content="✕"
+                        Width="25"
+                        Height="25"
+                        FontWeight="Bold"
+                        ToolTip="Close"
+                        Command="{Binding DismissFeedbackCommand}"
+                        Background="#1F2937"
+                        Foreground="#E5E7EB"
+                        BorderBrush="#475569"
+                        BorderThickness="1"
+                        Cursor="Hand"/>
+            </Grid>
+        </Border>
+    </Grid>
 </Page>

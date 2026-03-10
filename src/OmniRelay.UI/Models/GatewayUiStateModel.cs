@@ -14,8 +14,8 @@ public sealed class GatewayUiStateModel
     public string GatewayPublicPortText { get; set; } = "443";
     public string GatewayPanelPortText { get; set; } = "2054";
     public string GatewayBackendPortText { get; set; } = "15000";
-    public string GatewaySni { get; set; } = "nobitex.ir";
-    public string GatewayTarget { get; set; } = "nobitex.ir:443";
+    public string GatewaySni { get; set; } = string.Empty;
+    public string GatewayTarget { get; set; } = string.Empty;
     public string GatewayDnsMode { get; set; } = "hybrid";
     public string GatewayDohEndpointsText { get; set; } = "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query";
     public bool GatewayDnsUdpOnly { get; set; } = true;

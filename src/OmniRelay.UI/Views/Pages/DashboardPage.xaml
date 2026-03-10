@@ -11,7 +11,7 @@
             <TextBlock Text="Operational Overview" Style="{StaticResource SectionTitleTextStyle}"/>
             <TextBlock Text="Live gateway health and quick control actions." Style="{StaticResource MutedTextStyle}" Margin="0,0,0,16"/>
 
-            <UniformGrid Columns="5" Margin="0,0,0,16">
+            <UniformGrid Columns="2" Margin="0,0,0,16">
                 <Border Style="{StaticResource CardStyle}" Margin="0,0,10,0">
                     <StackPanel>
                         <TextBlock Text="Service" Style="{StaticResource CardLabelStyle}"/>
@@ -24,6 +24,8 @@
                         <TextBlock Text="{Binding ProxyState}" Style="{StaticResource CardValueStyle}"/>
                     </StackPanel>
                 </Border>
+            </UniformGrid>
+            <UniformGrid Columns="2" Margin="0,0,0,16">
                 <Border Style="{StaticResource CardStyle}" Margin="0,0,10,0">
                     <StackPanel>
                         <TextBlock Text="License" Style="{StaticResource CardLabelStyle}"/>
@@ -34,12 +36,6 @@
                     <StackPanel>
                         <TextBlock Text="Tunnel" Style="{StaticResource CardLabelStyle}"/>
                         <TextBlock Text="{Binding TunnelState}" Style="{StaticResource CardValueStyle}"/>
-                    </StackPanel>
-                </Border>
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel>
-                        <TextBlock Text="Whitelist" Style="{StaticResource CardLabelStyle}"/>
-                        <TextBlock Text="{Binding WhitelistCount}" Style="{StaticResource CardValueStyle}"/>
                     </StackPanel>
                 </Border>
             </UniformGrid>

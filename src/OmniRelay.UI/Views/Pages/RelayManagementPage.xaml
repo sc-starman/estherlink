@@ -4,11 +4,10 @@
       xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       mc:Ignorable="d"
-      Title="Relay Management"
+      Title="Relay Service"
       Background="{DynamicResource Brush.Background}">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="28" MaxWidth="980">
-            <TextBlock Text="Relay Management" Style="{StaticResource SectionTitleTextStyle}"/>
             <TextBlock Text="Configure and operate the Windows Relay service independently from VPS gateway operations."
                        Style="{StaticResource MutedTextStyle}"
                        Margin="0,0,0,16"/>
@@ -49,10 +48,12 @@
                     <TextBlock Text="Relay Service Operations" FontWeight="SemiBold" Margin="0,0,0,10"/>
                     <WrapPanel>
                         <Button Content="Apply Relay Config" Command="{Binding ApplyRelayConfigCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0"/>
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButtonStyle}"/>
+                    </WrapPanel>
+                                        <WrapPanel Margin="0,10,0,0">
                         <Button Content="Install/Start Relay" Command="{Binding InstallStartRelayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Stop Relay" Command="{Binding StopRelayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                         <Button Content="Uninstall Relay" Command="{Binding UninstallRelayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
-                        <Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButtonStyle}"/>
                     </WrapPanel>
                 </StackPanel>
             </Border>

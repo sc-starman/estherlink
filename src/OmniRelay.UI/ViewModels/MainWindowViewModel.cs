@@ -53,13 +53,13 @@ public partial class MainWindowViewModel : ObservableObject
     private string pageTitle = "License Management";
 
     [ObservableProperty]
+    private string pageIconGlyph = "\uE8A7";
+
+    [ObservableProperty]
     private string statusSummary = "Ready.";
 
     [ObservableProperty]
     private string themeLabel = "Dark";
-
-    [ObservableProperty]
-    private bool compactMode;
 
     [ObservableProperty]
     private string sidebarVersionText = $"Version {ResolveInstallerPackageVersion()}";
@@ -68,7 +68,6 @@ public partial class MainWindowViewModel : ObservableObject
     {
         _orchestrator.Initialize();
         var settings = _uiSettingsService.Load();
-        CompactMode = settings.CompactMode;
 
         await _orchestrator.RefreshStatusAsync();
         _navigationService.Navigate(IsLicenseActivated() ? "dashboard" : "license");
@@ -124,12 +123,15 @@ public partial class MainWindowViewModel : ObservableObject
             item.IsActive = string.Equals(item.Item.Route, route, StringComparison.OrdinalIgnoreCase);
         }
         UpdateNavigationLockState();
+        PageIconGlyph = NavigationItems
+            .FirstOrDefault(x => string.Equals(x.Item.Route, route, StringComparison.OrdinalIgnoreCase))
+            ?.Item.IconGlyph ?? "\uE72E";
 
         PageTitle = route switch
         {
             "dashboard" => "Dashboard",
-            "relay" => "Relay Management",
-            "gateway" => "Gateway Management",
+            "relay" => "Relay Service",
+            "gateway" => "Gateway Control",
             "whitelist" => "Whitelists",
             "license" => "License Management",
             "logs" => "Logs",
@@ -172,7 +174,6 @@ public partial class MainWindowViewModel : ObservableObject
 
     private void OnSettingsChanged(object? sender, UiSettingsModel settings)
     {
-        CompactMode = settings.CompactMode;
         _statusTimer.Interval = TimeSpan.FromSeconds(settings.RefreshIntervalSeconds <= 0 ? 5 : settings.RefreshIntervalSeconds);
     }
 

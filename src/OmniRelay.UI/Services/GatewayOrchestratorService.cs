@@ -76,8 +76,9 @@ public sealed class GatewayOrchestratorService
             _state.GatewayPublicPortText = NormalizeOrDefault(persisted.GatewayPublicPortText, "443");
             _state.GatewayPanelPortText = NormalizeOrDefault(persisted.GatewayPanelPortText, "2054");
             _state.GatewayBackendPortText = NormalizeOrDefault(persisted.GatewayBackendPortText, _state.TunnelRemotePortText);
-            _state.GatewaySni = NormalizeOrDefault(persisted.GatewaySni, "nobitex.ir");
-            _state.GatewayTarget = NormalizeOrDefault(persisted.GatewayTarget, "nobitex.ir:443");
+            var defaultReality = GatewayRealityTargetCatalog.GetRandom();
+            _state.GatewaySni = NormalizeOrDefault(persisted.GatewaySni, defaultReality.Sni);
+            _state.GatewayTarget = NormalizeOrDefault(persisted.GatewayTarget, defaultReality.Target);
             _state.GatewayDnsMode = NormalizeDnsModeOrDefault(persisted.GatewayDnsMode, "hybrid");
             _state.GatewayDohEndpointsText = NormalizeOrDefault(persisted.GatewayDohEndpointsText, "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query");
             _state.GatewayDnsUdpOnly = persisted.GatewayDnsUdpOnly;

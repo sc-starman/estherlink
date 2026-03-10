@@ -8,6 +8,13 @@ namespace OmniRelay.UI.Services;
 
 public partial class GatewayStateStore : ObservableObject
 {
+    public GatewayStateStore()
+    {
+        var pair = GatewayRealityTargetCatalog.GetRandom();
+        gatewaySni = pair.Sni;
+        gatewayTarget = pair.Target;
+    }
+
     public ObservableCollection<AdapterChoiceModel> Adapters { get; } = [];
 
     [ObservableProperty]
@@ -44,10 +51,10 @@ public partial class GatewayStateStore : ObservableObject
     private string gatewayBackendPortText = "15000";
 
     [ObservableProperty]
-    private string gatewaySni = "nobitex.ir";
+    private string gatewaySni = string.Empty;
 
     [ObservableProperty]
-    private string gatewayTarget = "nobitex.ir:443";
+    private string gatewayTarget = string.Empty;
 
     [ObservableProperty]
     private string gatewayDnsMode = "hybrid";
