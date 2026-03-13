@@ -49,6 +49,13 @@ OPENVPN_SERVICE="omnirelay-openvpn"
 OPENVPN_REDSOCKS_SERVICE="omnirelay-redsocks"
 OPENVPN_REDSOCKS_CONFIG="${OPENVPN_DIR}/redsocks.conf"
 OPENVPN_REDSOCKS_LOCAL_PORT=12345
+OPENVPN_MANAGEMENT_PORT=17505
+OPENVPN_STATUS_FILE="/var/log/openvpn/omnirelay-status.log"
+OPENVPN_ACCOUNTING_DB="${OPENVPN_DIR}/accounting.db"
+OPENVPN_ACCOUNTING_SCRIPT="${OPENVPN_DIR}/accounting-loop.sh"
+OPENVPN_ACCOUNTING_HEARTBEAT="${OPENVPN_DIR}/accounting-heartbeat.json"
+OPENVPN_ACCOUNTING_SERVICE="omnirelay-openvpn-accounting"
+OPENVPN_ACCOUNTING_TIMER="omnirelay-openvpn-accounting.timer"
 
 OMNIPANEL_INTERNAL_PORT=0
 STATUS_JSON=0
@@ -69,7 +76,7 @@ ensure_meta(){ install -d -m 0755 "$METADATA_DIR"; }
 
 usage(){
   cat <<EOF
-Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair|sync-clients> [options]
+Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients> [options]
 --public-port <port>
 --panel-port <port>
 --backend-port <port>
@@ -89,6 +96,10 @@ Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|status|health|dns-app
 --panel-base-path <path>
 --json
 EOF
+}
+
+get_protocol_cmd(){
+  echo "openvpn_tcp_relay"
 }
 
 configure_proxy(){
@@ -158,7 +169,7 @@ install_packages(){
   apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -y
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ca-certificates curl jq tar gzip openssl python3 \
-    openvpn easy-rsa iptables redsocks nginx nodejs
+    openvpn easy-rsa iptables redsocks nginx nodejs sqlite3 socat
   clear_proxy
 }
 
@@ -198,8 +209,38 @@ PY
 ensure_clients_seed_file(){
   install -d -m 0755 "$(dirname "$OPENVPN_CLIENTS_FILE")" "$OPENVPN_EXPORT_DIR"
   if [[ ! -f "$OPENVPN_CLIENTS_FILE" ]]; then
-    jq -n --arg id "$(random_string 16)" --arg p "$(random_string 24)" '[{id:$id,email:"omni-client@local",enable:true,username:"ovpn_client",password:$p}]' > "$OPENVPN_CLIENTS_FILE"
+    jq -n --arg id "$(random_string 16)" --arg p "$(random_string 24)" '[{id:$id,email:"omni-client@local",enable:true,username:"ovpn_client",password:$p,totalGB:0,expiryTime:0}]' > "$OPENVPN_CLIENTS_FILE"
   fi
+}
+
+init_openvpn_accounting_db(){
+  install -d -m 0755 "$OPENVPN_DIR"
+  sqlite3 "$OPENVPN_ACCOUNTING_DB" <<'SQL'
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+CREATE TABLE IF NOT EXISTS clients (
+  client_id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  total_bytes_limit INTEGER NOT NULL DEFAULT 0,
+  expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_totals (
+  client_id TEXT PRIMARY KEY,
+  used_bytes INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_counters (
+  session_key TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  last_rx INTEGER NOT NULL DEFAULT 0,
+  last_tx INTEGER NOT NULL DEFAULT 0,
+  last_seen_at INTEGER NOT NULL
+);
+SQL
+  chmod 0640 "$OPENVPN_ACCOUNTING_DB"
 }
 
 setup_openvpn_pki(){
@@ -239,13 +280,32 @@ write_openvpn_auth_scripts(){
 #!/usr/bin/env bash
 set -Eeuo pipefail
 AUTH_DB="${OPENVPN_AUTH_FILE}"
+ACCOUNTING_DB="${OPENVPN_ACCOUNTING_DB}"
 INPUT_FILE="\${1:-}"
-[[ -n "\$INPUT_FILE" && -f "\$INPUT_FILE" && -f "\$AUTH_DB" ]] || exit 1
+[[ -n "\$INPUT_FILE" && -f "\$INPUT_FILE" && -f "\$AUTH_DB" && -f "\$ACCOUNTING_DB" ]] || exit 1
 USERNAME="\$(sed -n '1p' "\$INPUT_FILE" | tr -d '\r\n')"
 PASSWORD="\$(sed -n '2p' "\$INPUT_FILE" | tr -d '\r\n')"
 [[ -n "\$USERNAME" && -n "\$PASSWORD" ]] || exit 1
 HASH="\$(printf '%s' "\$PASSWORD" | sha256sum | awk '{print \$1}')"
 awk -F: -v user="\$USERNAME" -v hash="\$HASH" '\$1==user && \$2==hash {ok=1} END{exit(ok?0:1)}' "\$AUTH_DB"
+escape_sql_literal(){ printf '%s' "\$1" | sed "s/'/''/g"; }
+SQL_USER="\$(escape_sql_literal "\$USERNAME")"
+POLICY_ROW="\$(sqlite3 -csv -noheader "\$ACCOUNTING_DB" "SELECT c.enabled, c.total_bytes_limit, c.expiry_unix_ms, COALESCE(u.used_bytes, 0) FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.username = '\${SQL_USER}' LIMIT 1;" 2>/dev/null || true)"
+[[ -n "\$POLICY_ROW" ]] || exit 1
+IFS=',' read -r ENABLED TOTAL_BYTES_LIMIT EXPIRY_UNIX_MS USED_BYTES <<<"\$POLICY_ROW"
+ENABLED="\${ENABLED:-0}"
+TOTAL_BYTES_LIMIT="\${TOTAL_BYTES_LIMIT:-0}"
+EXPIRY_UNIX_MS="\${EXPIRY_UNIX_MS:-0}"
+USED_BYTES="\${USED_BYTES:-0}"
+NOW_MS=\$(( \$(date +%s) * 1000 ))
+[[ "\$ENABLED" == "1" ]] || exit 1
+if [[ "\$EXPIRY_UNIX_MS" =~ ^[0-9]+$ ]] && (( EXPIRY_UNIX_MS > 0 )) && (( NOW_MS >= EXPIRY_UNIX_MS )); then
+  exit 1
+fi
+if [[ "\$TOTAL_BYTES_LIMIT" =~ ^[0-9]+$ ]] && (( TOTAL_BYTES_LIMIT > 0 )); then
+  [[ "\$USED_BYTES" =~ ^[0-9]+$ ]] || USED_BYTES=0
+  (( USED_BYTES < TOTAL_BYTES_LIMIT )) || exit 1
+fi
 EOF
   chmod 0755 "$OPENVPN_VERIFY_SCRIPT"
   cat > "$OPENVPN_IPTABLES_UP" <<EOF
@@ -275,6 +335,163 @@ EOF
   chmod 0755 "$OPENVPN_IPTABLES_DOWN"
 }
 
+write_openvpn_accounting_script(){
+  cat > "$OPENVPN_ACCOUNTING_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DB="${OPENVPN_ACCOUNTING_DB}"
+STATUS_FILE="${OPENVPN_STATUS_FILE}"
+HEARTBEAT_FILE="${OPENVPN_ACCOUNTING_HEARTBEAT}"
+MGMT_PORT="${OPENVPN_MANAGEMENT_PORT}"
+STALE_AFTER_SEC=600
+
+escape_sql_literal(){ printf '%s' "\$1" | sed "s/'/''/g"; }
+
+write_heartbeat(){
+  local ok_flag="\$1" error_msg="\$2" now_epoch
+  now_epoch="\$(date +%s)"
+  jq -n --argjson ok "\$ok_flag" --arg err "\$error_msg" --argjson now "\$now_epoch" '{ok:\$ok,error:\$err,runAtEpoch:\$now,runAtUtc:(\$now|todate)}' > "\${HEARTBEAT_FILE}.tmp"
+  mv -f "\${HEARTBEAT_FILE}.tmp" "\$HEARTBEAT_FILE"
+  chmod 0640 "\$HEARTBEAT_FILE" || true
+}
+
+init_db(){
+  sqlite3 "\$DB" <<'SQL'
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+CREATE TABLE IF NOT EXISTS clients (
+  client_id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  total_bytes_limit INTEGER NOT NULL DEFAULT 0,
+  expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_totals (
+  client_id TEXT PRIMARY KEY,
+  used_bytes INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_counters (
+  session_key TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  last_rx INTEGER NOT NULL DEFAULT 0,
+  last_tx INTEGER NOT NULL DEFAULT 0,
+  last_seen_at INTEGER NOT NULL
+);
+SQL
+}
+
+kill_user(){
+  local username="\$1"
+  [[ -n "\$username" ]] || return 0
+  printf 'kill %s\nquit\n' "\$username" | timeout 5 socat - "TCP:127.0.0.1:\${MGMT_PORT},connect-timeout=3" >/dev/null 2>&1 || true
+}
+
+main(){
+  init_db
+  declare -A delta_by_client=()
+  declare -A active_users=()
+  local now_sec now_ms cutoff_sec
+  now_sec="\$(date +%s)"
+  now_ms=\$(( now_sec * 1000 ))
+  cutoff_sec=\$(( now_sec - STALE_AFTER_SEC ))
+
+  if [[ -f "\$STATUS_FILE" ]]; then
+    while IFS= read -r line; do
+      [[ "\$line" == CLIENT_LIST,* ]] || continue
+      IFS=',' read -r _ common_name real_addr virtual_addr _ bytes_rx bytes_tx _ _ username peer_id _ _ <<< "\$line"
+      [[ "\$bytes_rx" =~ ^[0-9]+$ ]] || bytes_rx=0
+      [[ "\$bytes_tx" =~ ^[0-9]+$ ]] || bytes_tx=0
+      username="\${username:-}"
+      if [[ -z "\$username" || "\$username" == "UNDEF" ]]; then
+        username="\${common_name:-}"
+      fi
+      [[ -n "\$username" ]] || continue
+      active_users["\$username"]=1
+
+      local esc_username db_client_id session_key esc_session prev_row prev_rx prev_tx delta_rx delta_tx delta_total
+      esc_username="\$(escape_sql_literal "\$username")"
+      db_client_id="\$(sqlite3 -noheader "\$DB" "SELECT client_id FROM clients WHERE username='\$esc_username' LIMIT 1;" 2>/dev/null || true)"
+      [[ -n "\$db_client_id" ]] || continue
+      session_key="\${db_client_id}|\${real_addr}|\${virtual_addr}|\${peer_id}"
+      esc_session="\$(escape_sql_literal "\$session_key")"
+      prev_row="\$(sqlite3 -csv -noheader "\$DB" "SELECT last_rx,last_tx FROM session_counters WHERE session_key='\$esc_session' LIMIT 1;" 2>/dev/null || true)"
+      prev_rx=0; prev_tx=0
+      if [[ -n "\$prev_row" ]]; then
+        IFS=',' read -r prev_rx prev_tx <<< "\$prev_row"
+        [[ "\$prev_rx" =~ ^[0-9]+$ ]] || prev_rx=0
+        [[ "\$prev_tx" =~ ^[0-9]+$ ]] || prev_tx=0
+      fi
+      delta_rx=\$(( bytes_rx - prev_rx ))
+      delta_tx=\$(( bytes_tx - prev_tx ))
+      (( delta_rx < 0 )) && delta_rx=0
+      (( delta_tx < 0 )) && delta_tx=0
+      delta_total=\$(( delta_rx + delta_tx ))
+      delta_by_client["\$db_client_id"]=\$(( \${delta_by_client["\$db_client_id"]:-0} + delta_total ))
+      local esc_client_id
+      esc_client_id="\$(escape_sql_literal "\$db_client_id")"
+      sqlite3 "\$DB" "INSERT INTO session_counters(session_key,client_id,last_rx,last_tx,last_seen_at) VALUES('\$esc_session','\$esc_client_id',\$bytes_rx,\$bytes_tx,\$now_sec) ON CONFLICT(session_key) DO UPDATE SET last_rx=excluded.last_rx,last_tx=excluded.last_tx,last_seen_at=excluded.last_seen_at;" >/dev/null 2>&1 || true
+    done < "\$STATUS_FILE"
+  fi
+
+  local sql_tmp
+  sql_tmp="\$(mktemp)"
+  {
+    echo "PRAGMA busy_timeout=5000;"
+    echo "BEGIN IMMEDIATE;"
+    for client_id in "\${!delta_by_client[@]}"; do
+      local delta esc_client
+      delta="\${delta_by_client["\$client_id"]}"
+      (( delta > 0 )) || continue
+      esc_client="\$(escape_sql_literal "\$client_id")"
+      echo "INSERT INTO usage_totals(client_id,used_bytes,updated_at) VALUES('\$esc_client',0,\$now_sec) ON CONFLICT(client_id) DO NOTHING;"
+      echo "UPDATE usage_totals SET used_bytes = used_bytes + \$delta, updated_at = \$now_sec WHERE client_id='\$esc_client';"
+    done
+    echo "DELETE FROM session_counters WHERE last_seen_at < \$cutoff_sec;"
+    echo "COMMIT;"
+  } > "\$sql_tmp"
+  sqlite3 "\$DB" < "\$sql_tmp"
+  rm -f "\$sql_tmp"
+
+  for username in "\${!active_users[@]}"; do
+    local esc_username policy enabled total_limit expiry_ms used_bytes
+    esc_username="\$(escape_sql_literal "\$username")"
+    policy="\$(sqlite3 -csv -noheader "\$DB" "SELECT c.enabled,c.total_bytes_limit,c.expiry_unix_ms,COALESCE(u.used_bytes,0) FROM clients c LEFT JOIN usage_totals u ON u.client_id=c.client_id WHERE c.username='\$esc_username' LIMIT 1;" 2>/dev/null || true)"
+    [[ -n "\$policy" ]] || continue
+    IFS=',' read -r enabled total_limit expiry_ms used_bytes <<< "\$policy"
+    [[ "\$enabled" =~ ^[0-9]+$ ]] || enabled=0
+    [[ "\$total_limit" =~ ^[0-9]+$ ]] || total_limit=0
+    [[ "\$expiry_ms" =~ ^[0-9]+$ ]] || expiry_ms=0
+    [[ "\$used_bytes" =~ ^[0-9]+$ ]] || used_bytes=0
+    if (( enabled == 0 )); then
+      kill_user "\$username"
+      continue
+    fi
+    if (( expiry_ms > 0 && now_ms >= expiry_ms )); then
+      kill_user "\$username"
+      continue
+    fi
+    if (( total_limit > 0 && used_bytes >= total_limit )); then
+      kill_user "\$username"
+    fi
+  done
+
+  write_heartbeat true ""
+}
+
+if main 2>/tmp/omnirelay-openvpn-accounting.err; then
+  exit 0
+fi
+err_text="\$(tr '\n' ' ' </tmp/omnirelay-openvpn-accounting.err | sed 's/"/\\"/g' | xargs || true)"
+rm -f /tmp/omnirelay-openvpn-accounting.err
+write_heartbeat false "\${err_text:-accounting script failed}"
+exit 1
+EOF
+  chmod 0750 "$OPENVPN_ACCOUNTING_SCRIPT"
+}
+
 build_openvpn_dns_push_lines(){
   local lines="" value
   IFS=',' read -r -a dns_parts <<< "$OPENVPN_CLIENT_DNS"
@@ -289,6 +506,7 @@ build_openvpn_dns_push_lines(){
 write_openvpn_server_config(){
   progress 30 "Writing OpenVPN server configuration"
   local dns_push
+  install -d -m 0755 /var/log/openvpn
   dns_push="$(build_openvpn_dns_push_lines)"
   cat > "$OPENVPN_SERVER_CONFIG" <<EOF
 port ${PUBLIC_PORT}
@@ -317,7 +535,9 @@ down ${OPENVPN_IPTABLES_DOWN}
 cipher AES-256-GCM
 auth SHA256
 data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
-status /var/log/openvpn/omnirelay-status.log
+status-version 3
+status ${OPENVPN_STATUS_FILE}
+management 127.0.0.1 ${OPENVPN_MANAGEMENT_PORT}
 verb 3
 EOF
 }
@@ -380,9 +600,32 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 [Install]
 WantedBy=multi-user.target
 EOF
+  cat > "/etc/systemd/system/${OPENVPN_ACCOUNTING_SERVICE}.service" <<EOF
+[Unit]
+Description=OmniRelay OpenVPN accounting sync
+After=${OPENVPN_SERVICE}.service
+Wants=${OPENVPN_SERVICE}.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash ${OPENVPN_ACCOUNTING_SCRIPT}
+EOF
+  cat > "/etc/systemd/system/${OPENVPN_ACCOUNTING_TIMER}" <<EOF
+[Unit]
+Description=Run OmniRelay OpenVPN accounting sync every 30 seconds
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=${OPENVPN_ACCOUNTING_SERVICE}.service
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
   systemctl daemon-reload
   systemctl enable --now "$OPENVPN_REDSOCKS_SERVICE"
   systemctl enable --now "$OPENVPN_SERVICE"
+  systemctl enable --now "$OPENVPN_ACCOUNTING_TIMER"
+  systemctl start "$OPENVPN_ACCOUNTING_SERVICE" || true
 }
 
 gen_cert(){
@@ -489,6 +732,7 @@ PANEL_PUBLIC_HOST=${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}
 OPENVPN_PUBLIC_PORT=${PUBLIC_PORT}
 OPENVPN_CLIENTS_FILE=${OPENVPN_CLIENTS_FILE}
 OPENVPN_EXPORT_DIR=${OPENVPN_EXPORT_DIR}
+OPENVPN_ACCOUNTING_DB=${OPENVPN_ACCOUNTING_DB}
 OPENVPN_SYNC_COMMAND=${OPENVPN_SYNC_COMMAND}
 EOF
 
@@ -518,6 +762,10 @@ EOF
   chown -R omnigateway:omnigateway "$OPENVPN_EXPORT_DIR"
   chown omnigateway:omnigateway "$OPENVPN_CLIENTS_FILE" "$PANEL_AUTH_FILE" || true
   chmod 0640 "$OPENVPN_CLIENTS_FILE" "$PANEL_AUTH_FILE" || true
+  chown root:omnigateway "$OPENVPN_ACCOUNTING_DB" 2>/dev/null || true
+  chmod 0640 "$OPENVPN_ACCOUNTING_DB" 2>/dev/null || true
+  chown root:omnigateway "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
+  chmod 0640 "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
   systemctl daemon-reload
   systemctl enable --now "$OMNIPANEL_SERVICE"
 }
@@ -574,6 +822,7 @@ write_metadata(){
     --arg dns "$OPENVPN_CLIENT_DNS" \
     --arg clientsFile "$OPENVPN_CLIENTS_FILE" \
     --arg exportsDir "$OPENVPN_EXPORT_DIR" \
+    --arg accountingDb "$OPENVPN_ACCOUNTING_DB" \
     --arg intp "$OMNIPANEL_INTERNAL_PORT" \
     '{
       active_protocol:$proto,
@@ -582,7 +831,7 @@ write_metadata(){
       omnipanel_public_port:($panel|tonumber),
       omnipanel_internal_port:($intp|tonumber),
       omnipanel_username:$user,
-      openvpn:{network:$network,client_dns:$dns,clients_file:$clientsFile,exports_dir:$exportsDir},
+      openvpn:{network:$network,client_dns:$dns,clients_file:$clientsFile,exports_dir:$exportsDir,accounting_db:$accountingDb},
       created_at_utc:(now|todate)
     }' > "$METADATA_FILE"
   chmod 0600 "$METADATA_FILE"
@@ -663,22 +912,63 @@ write_client_profile(){
 sync_clients_cmd(){
   require_root
   ensure_clients_seed_file
+  init_openvpn_accounting_db
   setup_openvpn_pki
   write_openvpn_auth_scripts
+  write_openvpn_accounting_script
   write_openvpn_server_config
   local easyrsa auth_tmp keep_tmp row id email enable username password cn cert_path key_path hash
+  local total_gb_raw total_gb_bytes expiry_raw expiry_unix_ms now_sec sql_tmp enable_int
   easyrsa="${OPENVPN_EASYRSA_DIR}/easyrsa"
   auth_tmp="$(mktemp)"
   keep_tmp="$(mktemp)"
+  sql_tmp="$(mktemp)"
+  now_sec="$(date +%s)"
   : > "$auth_tmp"
   : > "$keep_tmp"
+  cat > "$sql_tmp" <<SQL
+PRAGMA busy_timeout=5000;
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE IF NOT EXISTS sync_keep(client_id TEXT PRIMARY KEY);
+DELETE FROM sync_keep;
+SQL
   while IFS= read -r row; do
     id="$(jq -r '.id // empty' <<<"$row")"
     email="$(jq -r '.email // empty' <<<"$row")"
     enable="$(jq -r '.enable // true' <<<"$row")"
     username="$(jq -r '.username // empty' <<<"$row")"
     password="$(jq -r '.password // empty' <<<"$row")"
+    total_gb_raw="$(jq -r '.totalGB // 0' <<<"$row")"
+    expiry_raw="$(jq -r '.expiryTime // 0' <<<"$row")"
     [[ -n "$id" && -n "$email" && -n "$username" && -n "$password" ]] || continue
+    total_gb_bytes="$(python3 - "$total_gb_raw" <<'PY'
+import math, sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    value = 0.0
+if not math.isfinite(value) or value <= 0:
+    print(0)
+else:
+    print(int(value * (1024 ** 3)))
+PY
+)"
+    expiry_unix_ms="$(python3 - "$expiry_raw" <<'PY'
+import math, sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    value = 0.0
+if not math.isfinite(value) or value <= 0:
+    print(0)
+else:
+    print(int(value))
+PY
+)"
+    [[ "$total_gb_bytes" =~ ^[0-9]+$ ]] || total_gb_bytes=0
+    [[ "$expiry_unix_ms" =~ ^[0-9]+$ ]] || expiry_unix_ms=0
+    enable_int=0
+    [[ "$enable" == "true" ]] && enable_int=1
     cn="ovpn-$(printf '%s' "$id" | tr -cd 'a-zA-Z0-9' | cut -c1-40)"
     [[ -n "$cn" ]] || cn="ovpn-$(random_string 12)"
     cert_path="${OPENVPN_PKI_DIR}/issued/${cn}.crt"
@@ -693,8 +983,26 @@ sync_clients_cmd(){
       printf '%s:%s:%s\n' "$username" "$hash" "$cn" >> "$auth_tmp"
     fi
     printf '%s\n' "$id" >> "$keep_tmp"
+    printf "INSERT OR IGNORE INTO sync_keep(client_id) VALUES('%s');\n" "$(printf '%s' "$id" | sed "s/'/''/g")" >> "$sql_tmp"
+    printf "INSERT INTO clients(client_id,username,enabled,total_bytes_limit,expiry_unix_ms,created_at,updated_at) VALUES('%s','%s',%s,%s,%s,%s,%s) ON CONFLICT(client_id) DO UPDATE SET username=excluded.username,enabled=excluded.enabled,total_bytes_limit=excluded.total_bytes_limit,expiry_unix_ms=excluded.expiry_unix_ms,updated_at=excluded.updated_at;\n" \
+      "$(printf '%s' "$id" | sed "s/'/''/g")" \
+      "$(printf '%s' "$username" | sed "s/'/''/g")" \
+      "$enable_int" "$total_gb_bytes" "$expiry_unix_ms" "$now_sec" "$now_sec" >> "$sql_tmp"
+    printf "INSERT OR IGNORE INTO usage_totals(client_id,used_bytes,updated_at) VALUES('%s',0,%s);\n" \
+      "$(printf '%s' "$id" | sed "s/'/''/g")" "$now_sec" >> "$sql_tmp"
+    printf "UPDATE usage_totals SET updated_at=%s WHERE client_id='%s';\n" \
+      "$now_sec" "$(printf '%s' "$id" | sed "s/'/''/g")" >> "$sql_tmp"
     write_client_profile "$id" "$username" "$password" "$cert_path" "$key_path"
   done < <(jq -c '.[]' "$OPENVPN_CLIENTS_FILE" 2>/dev/null || true)
+  cat >> "$sql_tmp" <<'SQL'
+DELETE FROM clients WHERE client_id NOT IN (SELECT client_id FROM sync_keep);
+DELETE FROM usage_totals WHERE client_id NOT IN (SELECT client_id FROM sync_keep);
+DELETE FROM session_counters WHERE client_id NOT IN (SELECT client_id FROM sync_keep);
+DROP TABLE sync_keep;
+COMMIT;
+SQL
+  sqlite3 "$OPENVPN_ACCOUNTING_DB" < "$sql_tmp"
+  rm -f "$sql_tmp"
   install -m 0600 "$auth_tmp" "$OPENVPN_AUTH_FILE"
   rm -f "$auth_tmp"
   shopt -s nullglob
@@ -710,6 +1018,8 @@ sync_clients_cmd(){
   chown -R omnigateway:omnigateway "$OPENVPN_EXPORT_DIR" "$OPENVPN_CLIENTS_FILE" || true
   chmod 0750 "$OPENVPN_EXPORT_DIR" || true
   chmod 0640 "$OPENVPN_CLIENTS_FILE" || true
+  chown root:omnigateway "$OPENVPN_ACCOUNTING_DB" 2>/dev/null || true
+  chmod 0640 "$OPENVPN_ACCOUNTING_DB" 2>/dev/null || true
   systemctl daemon-reload
   systemctl restart "$OPENVPN_REDSOCKS_SERVICE"
   if ! systemctl restart "$OPENVPN_SERVICE"; then
@@ -720,14 +1030,20 @@ sync_clients_cmd(){
     die "OpenVPN service is not active after syncing clients."
   fi
   systemctl is-active --quiet "$OPENVPN_SERVICE" || die "OpenVPN service is not active after syncing clients."
+  systemctl start "$OPENVPN_ACCOUNTING_SERVICE" >/dev/null 2>&1 || true
+  chown root:omnigateway "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
+  chmod 0640 "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
   echo "ok"
 }
 
 status_cmd(){
   local sshState openvpnState redsocksState panelState nginxState fail2 backendListener publicListener panelListener internalListener dns iport
+  local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch
   sshState="$(systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null || echo inactive)"
   openvpnState="$(systemctl is-active "$OPENVPN_SERVICE" 2>/dev/null || echo inactive)"
   redsocksState="$(systemctl is-active "$OPENVPN_REDSOCKS_SERVICE" 2>/dev/null || echo inactive)"
+  accountingTimerState="$(systemctl is-active "$OPENVPN_ACCOUNTING_TIMER" 2>/dev/null || echo inactive)"
+  accountingServiceState="$(systemctl is-active "$OPENVPN_ACCOUNTING_SERVICE" 2>/dev/null || echo inactive)"
   panelState="$(systemctl is-active "$OMNIPANEL_SERVICE" 2>/dev/null || echo inactive)"
   nginxState="$(systemctl is-active nginx 2>/dev/null || echo inactive)"
   fail2="disabled"
@@ -741,11 +1057,27 @@ status_cmd(){
     internalListener="false"
   fi
   dns="$(dns_status_json)"
-  printf '{"activeProtocol":"openvpn_tcp_relay","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s"}\n' \
+  accountingDbReady=false
+  sqlite3 "$OPENVPN_ACCOUNTING_DB" "SELECT 1;" >/dev/null 2>&1 && accountingDbReady=true || true
+  hbOk=false
+  hbEpoch=0
+  if [[ -f "$OPENVPN_ACCOUNTING_HEARTBEAT" ]]; then
+    hbOk="$(jq -r '.ok // false' "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo false)"
+    hbEpoch="$(jq -r '.runAtEpoch // 0' "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo 0)"
+  fi
+  nowEpoch="$(date +%s)"
+  accountingHealthy=false
+  if [[ "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$hbOk" == "true" && "$hbEpoch" =~ ^[0-9]+$ ]]; then
+    if (( hbEpoch > 0 && (nowEpoch - hbEpoch) <= 120 )); then
+      accountingHealthy=true
+    fi
+  fi
+
+  printf '{"activeProtocol":"openvpn_tcp_relay","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s","openVpnAccountingTimerState":"%s","openVpnAccountingServiceState":"%s","openVpnAccountingDbReady":%s,"openVpnAccountingHealthy":%s}\n' \
     "$sshState" "$openvpnState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$PUBLIC_PORT" "$PANEL_PORT" "$iport" \
     "$backendListener" "$publicListener" "$panelListener" "$internalListener" \
     "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" \
-    "$redsocksState"
+    "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy"
 }
 
 health_cmd(){
@@ -763,6 +1095,7 @@ health_cmd(){
   [[ "$(jq -r '.dnsPathHealthy' <<<"$status")" == "true" ]] || healthy=false
   redsocksState="$(jq -r '.redsocksState // "inactive"' <<<"$status")"
   [[ "$redsocksState" == "active" ]] || healthy=false
+  [[ "$(jq -r '.openVpnAccountingHealthy // false' <<<"$status")" == "true" ]] || healthy=false
 
   dnsLastError=""
   [[ "$(jq -r '.dnsConfigPresent' <<<"$status")" == "true" ]] || dnsLastError="dnsConfigMissing"
@@ -786,19 +1119,33 @@ install_cmd(){
   progress 3 "Validating platform"
   ensure_meta
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
+  if [[ -x "${IPSEC_RULES_CLEAR_SCRIPT:-}" ]]; then
+    "${IPSEC_RULES_CLEAR_SCRIPT}" >/dev/null 2>&1 || true
+  fi
+  systemctl disable --now "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" 2>/dev/null || true
   systemctl disable --now x-ui 2>/dev/null || true
   systemctl disable --now omnirelay-singbox 2>/dev/null || true
-  systemctl disable --now omnirelay-ipsec-rules xl2tpd ipsec strongswan-starter 2>/dev/null || true
-  rm -f /etc/systemd/system/x-ui.service /etc/systemd/system/omnirelay-singbox.service /etc/systemd/system/omnirelay-ipsec-rules.service /etc/systemd/system/omnirelay-redsocks.service /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-ipsec
-  rm -f /etc/sysctl.d/99-omnirelay-ipsec.conf
+  systemctl disable --now omnirelay-ipsec-accounting.timer omnirelay-ipsec-accounting.service omnirelay-ipsec-rules xl2tpd ipsec strongswan-starter 2>/dev/null || true
+  rm -f \
+    /etc/systemd/system/x-ui.service \
+    /etc/systemd/system/omnirelay-singbox.service \
+    /etc/systemd/system/omnirelay-ipsec-rules.service \
+    /etc/systemd/system/omnirelay-redsocks.service \
+    /etc/systemd/system/omnirelay-ipsec-accounting.service \
+    /etc/systemd/system/omnirelay-ipsec-accounting.timer \
+    /etc/sudoers.d/omnigateway-singbox \
+    /etc/sudoers.d/omnigateway-ipsec
+  rm -f /etc/sysctl.d/99-omnirelay-ipsec.conf "$OPENVPN_STATUS_FILE" /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
   systemctl daemon-reload || true
 
   install_packages
   ensure_nodejs_runtime
   parse_openvpn_network
   ensure_clients_seed_file
+  init_openvpn_accounting_db
   setup_openvpn_pki
   write_openvpn_auth_scripts
+  write_openvpn_accounting_script
   write_redsocks_config
   enable_ip_forward
   write_openvpn_server_config
@@ -821,25 +1168,41 @@ install_cmd(){
 start_cmd(){
   require_root
   progress 96 "Starting gateway services"
-  systemctl enable --now "$OPENVPN_REDSOCKS_SERVICE" "$OPENVPN_SERVICE" "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl enable --now "$OPENVPN_REDSOCKS_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_ACCOUNTING_TIMER" "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl start "$OPENVPN_ACCOUNTING_SERVICE" >/dev/null 2>&1 || true
   progress 100 "Gateway start completed"
 }
 
 stop_cmd(){
   require_root
   progress 96 "Stopping gateway services"
-  systemctl stop "$OMNIPANEL_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl stop "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OMNIPANEL_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
   progress 100 "Gateway stop completed"
 }
 
 uninstall_cmd(){
   require_root
   progress 96 "Uninstalling gateway"
-  systemctl disable --now "$OMNIPANEL_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
-  rm -f "/etc/systemd/system/${OMNIPANEL_SERVICE}.service" "/etc/systemd/system/${OPENVPN_SERVICE}.service" "/etc/systemd/system/${OPENVPN_REDSOCKS_SERVICE}.service"
+  systemctl disable --now "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OMNIPANEL_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl disable --now x-ui omnirelay-singbox omnirelay-ipsec-rules xl2tpd ipsec strongswan-starter omnirelay-ipsec-accounting.timer omnirelay-ipsec-accounting.service >/dev/null 2>&1 || true
+  if [[ -x "${IPSEC_RULES_CLEAR_SCRIPT:-}" ]]; then
+    "${IPSEC_RULES_CLEAR_SCRIPT}" >/dev/null 2>&1 || true
+  fi
+  rm -f \
+    "/etc/systemd/system/${OMNIPANEL_SERVICE}.service" \
+    "/etc/systemd/system/${OPENVPN_SERVICE}.service" \
+    "/etc/systemd/system/${OPENVPN_REDSOCKS_SERVICE}.service" \
+    "/etc/systemd/system/${OPENVPN_ACCOUNTING_SERVICE}.service" \
+    "/etc/systemd/system/${OPENVPN_ACCOUNTING_TIMER}" \
+    /etc/systemd/system/x-ui.service \
+    /etc/systemd/system/omnirelay-singbox.service \
+    /etc/systemd/system/omnirelay-ipsec-rules.service \
+    /etc/systemd/system/omnirelay-ipsec-accounting.service \
+    /etc/systemd/system/omnirelay-ipsec-accounting.timer \
+    /etc/systemd/system/omnirelay-redsocks.service
   rm -f /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf
-  rm -f /etc/sudoers.d/omnigateway-openvpn /usr/local/sbin/omnirelay-gatewayctl
-  rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf
+  rm -f /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /etc/sudoers.d/omnigateway-singbox /usr/local/sbin/omnirelay-gatewayctl
+  rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf "$OPENVPN_STATUS_FILE" /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
   rm -rf "$METADATA_DIR" "$OMNIPANEL_APP_DIR"
   systemctl daemon-reload
   progress 100 "Gateway uninstall completed"
@@ -892,13 +1255,14 @@ main(){
     uninstall) uninstall_cmd ;;
     start) start_cmd ;;
     stop) stop_cmd ;;
+    get-protocol) get_protocol_cmd ;;
     status) STATUS_JSON=1; status_cmd ;;
     health) HEALTH_JSON=1; health_cmd ;;
     dns-apply) dns_apply ;;
     dns-status) STATUS_JSON=1; dns_status ;;
     dns-repair) dns_repair ;;
     sync-clients) sync_clients_cmd ;;
-    *) die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair|sync-clients" ;;
+    *) die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients" ;;
   esac
 }
 

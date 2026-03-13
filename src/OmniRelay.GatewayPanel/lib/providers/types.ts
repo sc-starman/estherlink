@@ -5,7 +5,16 @@ export interface GatewayClientRecord {
   email: string;
   enable: boolean;
   flow?: string;
+  totalGB?: number;
+  expiryTime?: number;
+  usedBytes?: number | null;
   [key: string]: unknown;
+}
+
+export interface GatewayProtocolCapabilities {
+  supportsTrafficLimit: boolean;
+  supportsDurationLimit: boolean;
+  supportsUsageAccounting: boolean;
 }
 
 export interface GatewayInboundSnapshot {
@@ -18,6 +27,7 @@ export interface GatewayInboundSnapshot {
   };
   clients: GatewayClientRecord[];
   streamSettings?: Record<string, unknown>;
+  capabilities?: GatewayProtocolCapabilities;
 }
 
 export interface ClientConfigPayload {
@@ -25,10 +35,15 @@ export interface ClientConfigPayload {
   qrCodeDataUrl: string;
 }
 
+export interface GatewayClientCreateOptions {
+  totalGB?: number;
+  expiryTime?: number;
+}
+
 export interface GatewayProtocolProvider {
   readonly protocolId: string;
   getInbound(session: OmniSession): Promise<GatewayInboundSnapshot>;
-  addClient(session: OmniSession, email: string): Promise<GatewayClientRecord>;
+  addClient(session: OmniSession, email: string, options?: GatewayClientCreateOptions): Promise<GatewayClientRecord>;
   updateClient(session: OmniSession, client: GatewayClientRecord): Promise<void>;
   deleteClient(session: OmniSession, clientId: string): Promise<void>;
   buildClientConfig(session: OmniSession, request: Request, clientId: string): Promise<ClientConfigPayload>;

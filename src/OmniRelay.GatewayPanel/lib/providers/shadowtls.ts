@@ -5,7 +5,20 @@ import { promisify } from "node:util";
 import { randomBytes, randomUUID } from "node:crypto";
 import QRCode from "qrcode";
 import { type OmniSession } from "@/lib/session";
-import { type ClientConfigPayload, type GatewayClientRecord, type GatewayInboundSnapshot, type GatewayProtocolProvider, resolveGatewayHost } from "@/lib/providers/types";
+import {
+  type ClientConfigPayload,
+  type GatewayClientCreateOptions,
+  type GatewayClientRecord,
+  type GatewayInboundSnapshot,
+  type GatewayProtocolProvider,
+  resolveGatewayHost
+} from "@/lib/providers/types";
+
+const UNSUPPORTED_ACCOUNTING_CAPABILITIES = {
+  supportsTrafficLimit: false,
+  supportsDurationLimit: false,
+  supportsUsageAccounting: false
+} as const;
 
 const exec = promisify(execCallback);
 const DEFAULT_RELOAD_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
@@ -131,12 +144,16 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
       clients: clients.map((item) => ({
         id: item.id,
         email: item.email,
-        enable: item.enable
-      }))
+        enable: item.enable,
+        totalGB: 0,
+        expiryTime: 0,
+        usedBytes: null
+      })),
+      capabilities: UNSUPPORTED_ACCOUNTING_CAPABILITIES
     };
   }
 
-  public async addClient(_session: OmniSession, email: string): Promise<GatewayClientRecord> {
+  public async addClient(_session: OmniSession, email: string, _options?: GatewayClientCreateOptions): Promise<GatewayClientRecord> {
     const clients = await readClients();
     const normalizedEmail = normalizeEmail(email);
     if (!normalizedEmail) {
@@ -157,7 +174,10 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
     return {
       id: client.id,
       email: client.email,
-      enable: client.enable
+      enable: client.enable,
+      totalGB: 0,
+      expiryTime: 0,
+      usedBytes: null
     };
   }
 

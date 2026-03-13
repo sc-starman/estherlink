@@ -4,6 +4,7 @@ This is a focused runtime checklist to validate:
 - protocol switching (`vless_reality_3xui` -> `vless_plain_3xui` -> `shadowsocks_3xui` -> `shadowtls_v3_shadowsocks_singbox` -> `ipsec_l2tp_hwdsl2` -> `vless_reality_3xui`)
 - gateway status/health JSON contract
 - OmniPanel login + client CRUD for all protocol variants
+- universal protocol discovery (`gatewayctl get-protocol`) before/after each switch
 
 ## 1) Preconditions
 - VPS reachable over SSH.
@@ -23,7 +24,30 @@ scp scripts/setup_omnirelay_vps_3xui_vless_plain.sh root@<VPS_IP>:/tmp/
 scp scripts/setup_omnirelay_vps_3xui_shadowsocks.sh root@<VPS_IP>:/tmp/
 scp scripts/setup_omnirelay_vps_singbox_shadowtls.sh root@<VPS_IP>:/tmp/
 scp scripts/setup_omnirelay_vps_ipsec_l2tp.sh root@<VPS_IP>:/tmp/
+scp scripts/gateway_protocol_switch_hardening_smoke.sh root@<VPS_IP>:/tmp/
 ```
+
+## 1.1) Automated Shortcut (Strict Switch Guard Smoke)
+
+If you want a single command to verify:
+- `gatewayctl get-protocol`
+- strict uninstall-before-install on protocol change
+- post-install service-state sanity per protocol
+
+run this on VPS:
+
+```bash
+chmod +x /tmp/gateway_protocol_switch_hardening_smoke.sh
+sudo /tmp/gateway_protocol_switch_hardening_smoke.sh \
+  vless_reality_3xui \
+  shadowtls_v3_shadowsocks_singbox \
+  vless_plain_3xui
+```
+
+Notes:
+- Default `SCRIPT_DIR` is `/tmp`; override with `SCRIPT_DIR=/path`.
+- You can pass any sequence of supported protocol ids.
+- If uninstall fails during a switch, the script exits immediately.
 
 ## 2) Common test variables (on VPS)
 
@@ -45,6 +69,14 @@ Sanity check bootstrap SOCKS:
 ```bash
 ss -lnt '( sport = :16080 )'
 curl -fsS --socks5-hostname 127.0.0.1:16080 https://deb.debian.org/ >/dev/null && echo "SOCKS OK"
+```
+
+Check current installed protocol (if any):
+
+```bash
+if [ -x /usr/local/sbin/omnirelay-gatewayctl ]; then
+  sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol || true
+fi
 ```
 
 ## 3) Install VLESS protocol and validate
@@ -70,6 +102,7 @@ sudo /tmp/setup_omnirelay_vps_3xui_vless_reality.sh install \
 Check status/health contract:
 
 ```bash
+sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
 sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
 sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
 ```
@@ -131,6 +164,7 @@ sudo /tmp/setup_omnirelay_vps_singbox_shadowtls.sh install \
 Check status/health:
 
 ```bash
+sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
 sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
 sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
 ```
@@ -163,6 +197,7 @@ sudo /tmp/setup_omnirelay_vps_3xui_vless_plain.sh install \
 Check status/health:
 
 ```bash
+sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
 sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
 sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
 ```
@@ -195,6 +230,7 @@ sudo /tmp/setup_omnirelay_vps_3xui_shadowsocks.sh install \
 Check status/health:
 
 ```bash
+sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
 sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
 sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
 ```
@@ -227,6 +263,7 @@ sudo /tmp/setup_omnirelay_vps_ipsec_l2tp.sh install \
 Check status/health:
 
 ```bash
+sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
 sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
 sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
 ```
@@ -244,6 +281,7 @@ Run OmniPanel CRUD smoke again (same block as section 4), e.g. with `smoke-ipsec
 Run the VLESS install command again (section 3), then:
 
 ```bash
+sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
 sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
 sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
 ```

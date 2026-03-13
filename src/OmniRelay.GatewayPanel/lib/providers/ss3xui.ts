@@ -2,7 +2,16 @@ import QRCode from "qrcode";
 import { randomBytes, randomUUID } from "node:crypto";
 import { type OmniSession } from "@/lib/session";
 import { getInboundId, xuiJson } from "@/lib/xui";
-import { type ClientConfigPayload, type GatewayClientRecord, type GatewayInboundSnapshot, type GatewayProtocolProvider, resolveGatewayHost, safeParseJson } from "@/lib/providers/types";
+import { applyXuiClientAccounting, fetchXuiClientUsage, XUI_ACCOUNTING_CAPABILITIES } from "@/lib/providers/xui-accounting";
+import {
+  type ClientConfigPayload,
+  type GatewayClientCreateOptions,
+  type GatewayClientRecord,
+  type GatewayInboundSnapshot,
+  type GatewayProtocolProvider,
+  resolveGatewayHost,
+  safeParseJson
+} from "@/lib/providers/types";
 
 const DEFAULT_SS_METHOD = "2022-blake3-aes-128-gcm";
 
@@ -26,7 +35,17 @@ function toSsUriUserInfo(method: string, password: string): string {
     .replace(/=+$/g, "");
 }
 
-function generateClientPayload(email: string): GatewayClientRecord {
+function normalizeClientOptions(options?: GatewayClientCreateOptions): Required<GatewayClientCreateOptions> {
+  const totalGB = Number(options?.totalGB ?? 0);
+  const expiryTime = Number(options?.expiryTime ?? 0);
+  return {
+    totalGB: Number.isFinite(totalGB) && totalGB >= 0 ? totalGB : 0,
+    expiryTime: Number.isFinite(expiryTime) && expiryTime >= 0 ? expiryTime : 0
+  };
+}
+
+function generateClientPayload(email: string, options?: GatewayClientCreateOptions): GatewayClientRecord {
+  const normalized = normalizeClientOptions(options);
   return {
     id: randomUUID(),
     email,
@@ -34,8 +53,8 @@ function generateClientPayload(email: string): GatewayClientRecord {
     method: "",
     password: randomBase64(16),
     limitIp: 0,
-    totalGB: 0,
-    expiryTime: 0,
+    totalGB: normalized.totalGB,
+    expiryTime: normalized.expiryTime,
     tgId: "",
     subId: randomSubId(),
     comment: "",
@@ -51,6 +70,7 @@ export class Shadowsocks3xuiProvider implements GatewayProtocolProvider {
     const response = await xuiJson<Record<string, unknown>>(session, `/panel/api/inbounds/get/${encodeURIComponent(inboundId)}`);
     const inbound = response.obj ?? {};
     const settings = safeParseJson<{ clients?: GatewayClientRecord[] }>(inbound.settings, { clients: [] });
+    const usage = await fetchXuiClientUsage(session, inboundId, inbound);
 
     return {
       inbound: {
@@ -60,18 +80,19 @@ export class Shadowsocks3xuiProvider implements GatewayProtocolProvider {
         remark: String(inbound.remark ?? "OmniRelay Managed Shadowsocks"),
         enable: Boolean(inbound.enable ?? true)
       },
-      clients: settings.clients ?? []
+      clients: applyXuiClientAccounting(settings.clients ?? [], usage.byId, usage.byEmail),
+      capabilities: XUI_ACCOUNTING_CAPABILITIES
     };
   }
 
-  public async addClient(session: OmniSession, email: string): Promise<GatewayClientRecord> {
+  public async addClient(session: OmniSession, email: string, options?: GatewayClientCreateOptions): Promise<GatewayClientRecord> {
     const inboundId = getInboundId();
     const normalizedEmail = (email ?? "").trim();
     if (!normalizedEmail) {
       throw new Error("Email is required.");
     }
 
-    const client = generateClientPayload(normalizedEmail);
+    const client = generateClientPayload(normalizedEmail, options);
     const form = new URLSearchParams();
     form.set("id", inboundId);
     form.set("settings", JSON.stringify({ clients: [client] }));
@@ -87,7 +108,9 @@ export class Shadowsocks3xuiProvider implements GatewayProtocolProvider {
     return {
       id: String(client.id),
       email: String(client.email),
-      enable: Boolean(client.enable)
+      enable: Boolean(client.enable),
+      totalGB: Number(client.totalGB ?? 0),
+      expiryTime: Number(client.expiryTime ?? 0)
     };
   }
 

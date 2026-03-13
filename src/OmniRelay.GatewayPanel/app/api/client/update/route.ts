@@ -7,6 +7,40 @@ interface UpdateClientRequest {
   client?: Record<string, unknown>;
 }
 
+function normalizeOptionalTotalGB(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null || value === "") {
+    return 0;
+  }
+
+  const totalGB = Number(value);
+  if (!Number.isFinite(totalGB) || totalGB < 0) {
+    throw new Error("totalGB must be a non-negative number.");
+  }
+
+  return totalGB;
+}
+
+function normalizeOptionalExpiryTime(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null || value === "") {
+    return 0;
+  }
+
+  const expiryTime = Number(value);
+  if (!Number.isFinite(expiryTime) || expiryTime < 0) {
+    throw new Error("expiryTime must be zero or a non-negative unix-ms timestamp.");
+  }
+
+  return Math.trunc(expiryTime);
+}
+
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session.isAuthenticated) {
@@ -22,7 +56,19 @@ export async function POST(request: Request) {
 
   try {
     const provider = getGatewayProvider();
-    await provider.updateClient(session, client as GatewayClientRecord);
+    const sanitized = { ...(client as GatewayClientRecord) };
+
+    const totalGB = normalizeOptionalTotalGB((client as Record<string, unknown>).totalGB);
+    if (totalGB !== undefined) {
+      sanitized.totalGB = totalGB;
+    }
+
+    const expiryTime = normalizeOptionalExpiryTime((client as Record<string, unknown>).expiryTime);
+    if (expiryTime !== undefined) {
+      sanitized.expiryTime = expiryTime;
+    }
+
+    await provider.updateClient(session, sanitized);
 
     await session.save();
     return NextResponse.json({ ok: true });

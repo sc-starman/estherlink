@@ -64,6 +64,7 @@ Commands:
   uninstall    Remove x-ui gateway components
   start        Start gateway services
   stop         Stop gateway services
+  get-protocol Print current active protocol id
   status       Show gateway service status
   health       Run gateway operational checks
   dns-apply    Apply OmniRelay DNS-through-tunnel profile
@@ -1694,6 +1695,10 @@ sync_clients_impl() {
   echo "ok"
 }
 
+get_protocol_impl() {
+  echo "vless_reality_3xui"
+}
+
 disable_haproxy() {
   if systemctl list-unit-files | grep -q '^haproxy\.service'; then
     systemctl disable --now haproxy || true
@@ -1957,10 +1962,13 @@ uninstall_impl() {
   progress 8 "Stopping OmniPanel and x-ui"
   systemctl disable --now "$OMNIPANEL_SERVICE_NAME" || true
   systemctl disable --now x-ui || true
+  systemctl disable --now omnirelay-singbox omnirelay-openvpn omnirelay-openvpn-accounting omnirelay-openvpn-accounting.timer omnirelay-redsocks omnirelay-ipsec-rules omnirelay-ipsec-accounting omnirelay-ipsec-accounting.timer 2>/dev/null || true
+  systemctl disable --now ipsec xl2tpd strongswan-starter 2>/dev/null || true
 
   progress 20 "Removing OmniPanel runtime"
   rm -rf "$OMNIPANEL_APP_DIR"
   rm -f "/etc/systemd/system/${OMNIPANEL_SERVICE_NAME}.service"
+  rm -f /etc/systemd/system/omnirelay-singbox.service /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-openvpn-accounting.service /etc/systemd/system/omnirelay-openvpn-accounting.timer /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service /etc/systemd/system/omnirelay-ipsec-accounting.service /etc/systemd/system/omnirelay-ipsec-accounting.timer
   rm -f "$OMNIPANEL_ENV_FILE"
   rm -f "$METADATA_FILE"
   rm -rf "$METADATA_DIR"
@@ -1974,6 +1982,10 @@ uninstall_impl() {
   progress 50 "Removing x-ui files"
   rm -rf /usr/local/x-ui /etc/x-ui /var/log/x-ui
   rm -f /usr/bin/x-ui /etc/systemd/system/x-ui.service
+  rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec
+  rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf
+  rm -f /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
+  rm -f /var/log/openvpn/omnirelay-status.log
   rm -f /usr/local/sbin/omnirelay-gatewayctl
 
   progress 74 "Cleaning managed sshd drop-in"
@@ -2035,11 +2047,13 @@ install_impl() {
   require_existing_sshd
 
   progress 3 "Validating platform"
-  systemctl disable --now omnirelay-singbox omnirelay-openvpn omnirelay-redsocks omnirelay-ipsec-rules 2>/dev/null || true
+  systemctl disable --now omnirelay-singbox omnirelay-openvpn omnirelay-openvpn-accounting omnirelay-openvpn-accounting.timer omnirelay-redsocks omnirelay-ipsec-rules omnirelay-ipsec-accounting omnirelay-ipsec-accounting.timer 2>/dev/null || true
   systemctl disable --now ipsec xl2tpd strongswan-starter 2>/dev/null || true
-  rm -f /etc/systemd/system/omnirelay-singbox.service /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service
+  rm -f /etc/systemd/system/omnirelay-singbox.service /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-openvpn-accounting.service /etc/systemd/system/omnirelay-openvpn-accounting.timer /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service /etc/systemd/system/omnirelay-ipsec-accounting.service /etc/systemd/system/omnirelay-ipsec-accounting.timer
   rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec
   rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf
+  rm -f /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
+  rm -f /var/log/openvpn/omnirelay-status.log
   systemctl daemon-reload
   setup_tunnel_user
   configure_sshd
@@ -2221,6 +2235,9 @@ main() {
     stop)
       stop_impl
       ;;
+    get-protocol)
+      get_protocol_impl
+      ;;
     status)
       status_impl
       ;;
@@ -2240,7 +2257,7 @@ main() {
       sync_clients_impl
       ;;
     *)
-      die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair|sync-clients"
+      die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients"
       ;;
   esac
 }

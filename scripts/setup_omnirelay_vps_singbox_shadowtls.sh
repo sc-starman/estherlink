@@ -50,7 +50,7 @@ require_root(){ (( EUID == 0 )) || die "This command requires root."; }
 validate_port(){ [[ "$1" =~ ^[0-9]+$ ]] || die "$2 must be integer"; (( $1>=1 && $1<=65535 )) || die "$2 out of range"; }
 
 usage(){ cat <<EOF
-Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair|sync-clients> [options]
+Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients> [options]
 --public-port <port>
 --panel-port <port>
 --backend-port <port>
@@ -442,12 +442,72 @@ sync_clients_cmd(){
 
   echo "ok"
 }
-install_cmd(){ require_root; progress 3 "Validating platform"; systemctl disable --now x-ui omnirelay-openvpn omnirelay-redsocks omnirelay-ipsec-rules 2>/dev/null || true; systemctl disable --now ipsec xl2tpd strongswan-starter 2>/dev/null || true; rm -f /etc/systemd/system/x-ui.service /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf; ensure_meta; install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl; install_packages; ensure_nodejs_runtime; install_singbox; write_singbox_config; setup_services; deploy_panel; wait_omnipanel_ready; configure_nginx; configure_host_firewall; write_metadata; dns_apply; progress 100 "Gateway install completed"; ip="${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"; log "OmniPanel URL: https://${ip}:${PANEL_PORT}/ | Username: ${PANEL_USER} | Password: ${PANEL_PASSWORD}"; }
-start_cmd(){ require_root; progress 96 "Starting gateway services"; systemctl enable --now "$SINGBOX_SERVICE" "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true; progress 100 "Gateway start completed"; }
-stop_cmd(){ require_root; progress 96 "Stopping gateway services"; systemctl stop "$OMNIPANEL_SERVICE" "$SINGBOX_SERVICE" nginx >/dev/null 2>&1 || true; progress 100 "Gateway stop completed"; }
-uninstall_cmd(){ require_root; progress 96 "Uninstalling gateway"; systemctl disable --now "$OMNIPANEL_SERVICE" "$SINGBOX_SERVICE" nginx >/dev/null 2>&1 || true; rm -f "/etc/systemd/system/${OMNIPANEL_SERVICE}.service" "/etc/systemd/system/${SINGBOX_SERVICE}.service" /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf /etc/sudoers.d/omnigateway-singbox /usr/local/sbin/omnirelay-gatewayctl; rm -rf "$METADATA_DIR" "$OMNIPANEL_APP_DIR"; systemctl daemon-reload; progress 100 "Gateway uninstall completed"; }
+
+get_protocol_cmd(){ echo "shadowtls_v3_shadowsocks_singbox"; }
+
+install_cmd(){
+  require_root
+  progress 3 "Validating platform"
+  systemctl disable --now x-ui omnirelay-openvpn omnirelay-openvpn-accounting omnirelay-openvpn-accounting.timer omnirelay-redsocks omnirelay-ipsec-rules omnirelay-ipsec-accounting omnirelay-ipsec-accounting.timer 2>/dev/null || true
+  systemctl disable --now ipsec xl2tpd strongswan-starter 2>/dev/null || true
+  rm -f /etc/systemd/system/x-ui.service /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-openvpn-accounting.service /etc/systemd/system/omnirelay-openvpn-accounting.timer /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service /etc/systemd/system/omnirelay-ipsec-accounting.service /etc/systemd/system/omnirelay-ipsec-accounting.timer
+  rm -f /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec
+  rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf
+  rm -f /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
+  rm -f /var/log/openvpn/omnirelay-status.log
+  systemctl daemon-reload
+
+  ensure_meta
+  install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
+  install_packages
+  ensure_nodejs_runtime
+  install_singbox
+  write_singbox_config
+  setup_services
+  deploy_panel
+  wait_omnipanel_ready
+  configure_nginx
+  configure_host_firewall
+  write_metadata
+  dns_apply
+  progress 100 "Gateway install completed"
+  ip="${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+  log "OmniPanel URL: https://${ip}:${PANEL_PORT}/ | Username: ${PANEL_USER} | Password: ${PANEL_PASSWORD}"
+}
+
+start_cmd(){
+  require_root
+  progress 96 "Starting gateway services"
+  systemctl enable --now "$SINGBOX_SERVICE" "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true
+  progress 100 "Gateway start completed"
+}
+
+stop_cmd(){
+  require_root
+  progress 96 "Stopping gateway services"
+  systemctl stop "$OMNIPANEL_SERVICE" "$SINGBOX_SERVICE" nginx >/dev/null 2>&1 || true
+  progress 100 "Gateway stop completed"
+}
+
+uninstall_cmd(){
+  require_root
+  progress 96 "Uninstalling gateway"
+  systemctl disable --now "$OMNIPANEL_SERVICE" "$SINGBOX_SERVICE" nginx 2>/dev/null || true
+  systemctl disable --now omnirelay-openvpn omnirelay-openvpn-accounting omnirelay-openvpn-accounting.timer omnirelay-redsocks omnirelay-ipsec-rules omnirelay-ipsec-accounting omnirelay-ipsec-accounting.timer 2>/dev/null || true
+  systemctl disable --now ipsec xl2tpd strongswan-starter 2>/dev/null || true
+  rm -f "/etc/systemd/system/${OMNIPANEL_SERVICE}.service" "/etc/systemd/system/${SINGBOX_SERVICE}.service" /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-openvpn-accounting.service /etc/systemd/system/omnirelay-openvpn-accounting.timer /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service /etc/systemd/system/omnirelay-ipsec-accounting.service /etc/systemd/system/omnirelay-ipsec-accounting.timer
+  rm -f /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf
+  rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /usr/local/sbin/omnirelay-gatewayctl
+  rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf
+  rm -f /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
+  rm -f /var/log/openvpn/omnirelay-status.log
+  rm -f "$SINGBOX_BIN"
+  rm -rf "$METADATA_DIR" "$OMNIPANEL_APP_DIR"
+  systemctl daemon-reload
+  progress 100 "Gateway uninstall completed"
+}
 
 parse_args(){ if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then COMMAND="$1"; shift; fi; while [[ $# -gt 0 ]]; do case "$1" in --public-port) PUBLIC_PORT="${2:-}"; shift 2;; --panel-port) PANEL_PORT="${2:-}"; shift 2;; --backend-port) BACKEND_PORT="${2:-}"; shift 2;; --ssh-port) SSH_PORT="${2:-}"; shift 2;; --bootstrap-socks-port) BOOTSTRAP_SOCKS_PORT="${2:-}"; shift 2;; --proxy-check-url) PROXY_CHECK_URL="${2:-}"; shift 2;; --camouflage-server) CAMOUFLAGE_SERVER="${2:-}"; shift 2;; --dns-mode) DNS_MODE="${2:-}"; shift 2;; --doh-endpoints) DOH_ENDPOINTS="${2:-}"; shift 2;; --dns-udp-only) DNS_UDP_ONLY="${2:-}"; shift 2;; --vps-ip) VPS_IP="${2:-}"; shift 2;; --tunnel-user) TUNNEL_USER="${2:-}"; shift 2;; --tunnel-auth) TUNNEL_AUTH="${2:-}"; shift 2;; --panel-user) PANEL_USER="${2:-}"; shift 2;; --panel-password) PANEL_PASSWORD="${2:-}"; shift 2;; --panel-base-path) PANEL_BASE_PATH="${2:-}"; shift 2;; --gateway-sni) GATEWAY_SNI="${2:-}"; shift 2;; --gateway-target) GATEWAY_TARGET="${2:-}"; shift 2;; --json) STATUS_JSON=1; HEALTH_JSON=1; shift;; -h|--help) usage; exit 0;; *) die "Unknown option: $1";; esac; done; }
 
-main(){ parse_args "$@"; validate_port "$PUBLIC_PORT" "--public-port"; validate_port "$PANEL_PORT" "--panel-port"; validate_port "$BACKEND_PORT" "--backend-port"; validate_port "$SSH_PORT" "--ssh-port"; validate_port "$BOOTSTRAP_SOCKS_PORT" "--bootstrap-socks-port"; case "$COMMAND" in install) install_cmd;; uninstall) uninstall_cmd;; start) start_cmd;; stop) stop_cmd;; status) STATUS_JSON=1; status_cmd;; health) HEALTH_JSON=1; status_cmd >/dev/null 2>&1 || true; health_cmd;; dns-apply) dns_apply;; dns-status) STATUS_JSON=1; dns_status;; dns-repair) dns_repair;; sync-clients) sync_clients_cmd;; *) die "Unknown command: ${COMMAND}";; esac; }
+main(){ parse_args "$@"; validate_port "$PUBLIC_PORT" "--public-port"; validate_port "$PANEL_PORT" "--panel-port"; validate_port "$BACKEND_PORT" "--backend-port"; validate_port "$SSH_PORT" "--ssh-port"; validate_port "$BOOTSTRAP_SOCKS_PORT" "--bootstrap-socks-port"; case "$COMMAND" in install) install_cmd;; uninstall) uninstall_cmd;; start) start_cmd;; stop) stop_cmd;; get-protocol) get_protocol_cmd;; status) STATUS_JSON=1; status_cmd;; health) HEALTH_JSON=1; status_cmd >/dev/null 2>&1 || true; health_cmd;; dns-apply) dns_apply;; dns-status) STATUS_JSON=1; dns_status;; dns-repair) dns_repair;; sync-clients) sync_clients_cmd;; *) die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients";; esac; }
 main "$@"

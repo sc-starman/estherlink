@@ -127,6 +127,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrap.Message}");
             }
 
+            await EnsureCleanProtocolSwitchAsync(request, sudoPassword, progress, cancellationToken);
+
             progress?.Report(new DeploymentProgressSnapshot
             {
                 Phase = DeploymentPhases.GatewayInstall,
@@ -369,6 +371,227 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         var json = ExtractLastJsonLine(result.Output) ?? "{}";
         var dto = JsonSerializer.Deserialize<GatewayHealthDto>(json, JsonOptions) ?? new GatewayHealthDto();
         return dto.ToModel(json);
+    }
+
+    private async Task EnsureCleanProtocolSwitchAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        progress?.Report(new DeploymentProgressSnapshot
+        {
+            Phase = DeploymentPhases.GatewayInstall,
+            Percent = 2,
+            Message = "Checking existing gateway protocol"
+        });
+
+        var selectedProtocol = GatewayProtocols.Normalize(request.SelectedGatewayProtocol);
+        var probe = await DetectCurrentGatewayProtocolAsync(request, sudoPassword, progress, cancellationToken);
+        if (!probe.GatewayCtlPresent)
+        {
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 3,
+                Message = "No existing gateway controller found; proceeding with install"
+            });
+            return;
+        }
+
+        if (probe.ProtocolDetermined &&
+            string.Equals(probe.CurrentProtocol, selectedProtocol, StringComparison.OrdinalIgnoreCase))
+        {
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 3,
+                Message = $"Current gateway protocol already '{selectedProtocol}'; uninstall pre-step skipped"
+            });
+            return;
+        }
+
+        var reason = probe.ProtocolDetermined
+            ? $"Current protocol '{probe.CurrentProtocol}' differs from selected '{selectedProtocol}'."
+            : "Current protocol could not be determined from installed gateway controller.";
+
+        progress?.Report(new DeploymentProgressSnapshot
+        {
+            Phase = DeploymentPhases.GatewayInstall,
+            Percent = 3,
+            Message = $"{reason} Running strict uninstall before install"
+        });
+
+        var args = BuildCommonArgs(request);
+        var uninstallCommand =
+            "set -euo pipefail; " +
+            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo 'Gateway control script not found during pre-install switch cleanup.'; exit 31; }}; " +
+            $"{ShellQuote(GatewayCtlPath)} uninstall {args}";
+
+        var uninstallResult = await ExecuteCommandAsync(
+            request.Config,
+            uninstallCommand,
+            sudoPassword,
+            line =>
+            {
+                var clean = SanitizeTerminalLine(line);
+                if (TryParseProgressLine(clean, out var pct, out var message))
+                {
+                    progress?.Report(new DeploymentProgressSnapshot
+                    {
+                        Phase = DeploymentPhases.GatewayInstall,
+                        Percent = Math.Clamp(pct, 0, 100),
+                        Message = $"[switch-uninstall] {message}"
+                    });
+                }
+                else if (!string.IsNullOrWhiteSpace(clean))
+                {
+                    progress?.Report(new DeploymentProgressSnapshot
+                    {
+                        Phase = DeploymentPhases.GatewayInstall,
+                        Percent = 0,
+                        Message = $"[vps] {clean}"
+                    });
+                }
+            },
+            cancellationToken);
+
+        if (!uninstallResult.Success)
+        {
+            throw new InvalidOperationException($"Gateway protocol switch uninstall failed: {uninstallResult.ErrorMessage}");
+        }
+
+        progress?.Report(new DeploymentProgressSnapshot
+        {
+            Phase = DeploymentPhases.GatewayInstall,
+            Percent = 4,
+            Message = "Strict uninstall completed; continuing with install"
+        });
+    }
+
+    private async Task<(bool GatewayCtlPresent, bool ProtocolDetermined, string? CurrentProtocol)> DetectCurrentGatewayProtocolAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var command =
+            "set -euo pipefail; " +
+            $"if [ ! -x {ShellQuote(GatewayCtlPath)} ]; then echo '__OMNIRELAY_NO_GATEWAYCTL__'; exit 0; fi; " +
+            $"if proto=$({ShellQuote(GatewayCtlPath)} get-protocol 2>/dev/null | tr -d '\\r\\n' | xargs); then " +
+            "  if [ -n \"$proto\" ]; then echo \"__OMNIRELAY_PROTO__:${proto}\"; exit 0; fi; " +
+            "fi; " +
+            $"status_json=$({ShellQuote(GatewayCtlPath)} status --json 2>/dev/null || true); " +
+            "if [ -n \"$status_json\" ]; then echo \"__OMNIRELAY_STATUS__:${status_json}\"; exit 0; fi; " +
+            "echo '__OMNIRELAY_UNKNOWN__';";
+
+        var result = await ExecuteCommandAsync(
+            request.Config,
+            command,
+            sudoPassword,
+            line =>
+            {
+                var clean = SanitizeTerminalLine(line);
+                if (string.IsNullOrWhiteSpace(clean) || clean.StartsWith("__OMNIRELAY_", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                progress?.Report(new DeploymentProgressSnapshot
+                {
+                    Phase = DeploymentPhases.GatewayInstall,
+                    Percent = 0,
+                    Message = $"[vps] {clean}"
+                });
+            },
+            cancellationToken);
+
+        if (!result.Success)
+        {
+            return (false, false, null);
+        }
+
+        var lines = result.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (lines.Any(static line => string.Equals(line, "__OMNIRELAY_NO_GATEWAYCTL__", StringComparison.Ordinal)))
+        {
+            return (false, false, null);
+        }
+
+        var protoLine = lines.FirstOrDefault(static line => line.StartsWith("__OMNIRELAY_PROTO__:", StringComparison.Ordinal));
+        if (!string.IsNullOrWhiteSpace(protoLine))
+        {
+            var rawProto = protoLine["__OMNIRELAY_PROTO__:".Length..].Trim();
+            if (TryNormalizeKnownProtocol(rawProto, out var normalized))
+            {
+                return (true, true, normalized);
+            }
+        }
+
+        var statusLine = lines.FirstOrDefault(static line => line.StartsWith("__OMNIRELAY_STATUS__:", StringComparison.Ordinal));
+        if (!string.IsNullOrWhiteSpace(statusLine))
+        {
+            var rawStatusJson = statusLine["__OMNIRELAY_STATUS__:".Length..].Trim();
+            if (TryExtractKnownProtocolFromStatusJson(rawStatusJson, out var normalized))
+            {
+                return (true, true, normalized);
+            }
+        }
+
+        var trailingJson = ExtractLastJsonLine(result.Output);
+        if (!string.IsNullOrWhiteSpace(trailingJson) &&
+            TryExtractKnownProtocolFromStatusJson(trailingJson, out var trailingNormalized))
+        {
+            return (true, true, trailingNormalized);
+        }
+
+        return (true, false, null);
+    }
+
+    private static bool TryExtractKnownProtocolFromStatusJson(string? json, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("activeProtocol", out var activeProtocolElement))
+            {
+                return false;
+            }
+
+            return TryNormalizeKnownProtocol(activeProtocolElement.GetString(), out normalized);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryNormalizeKnownProtocol(string? protocol, out string normalized)
+    {
+        normalized = string.Empty;
+        var raw = (protocol ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        foreach (var known in GatewayProtocols.All)
+        {
+            if (string.Equals(raw, known.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = known.Value;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task UploadInstallerScriptAsync(

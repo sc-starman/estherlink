@@ -43,10 +43,22 @@
 3. Confirm tunnel user has shell + sudo permissions.
 4. Validate bundled script exists on VPS:
    - `/usr/local/sbin/omnirelay-gatewayctl`
-5. Validate gateway status/health directly:
+5. Validate active protocol directly:
+   - `sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol`
+6. Validate gateway status/health directly:
    - `sudo /usr/local/sbin/omnirelay-gatewayctl status --json`
    - `sudo /usr/local/sbin/omnirelay-gatewayctl health --json`
-6. If gateway install fails before service creation, rerun `Gateway Bootstrap Check` then retry install.
+7. If gateway install fails before service creation, rerun `Gateway Bootstrap Check` then retry install.
+
+### Gateway Protocol Switch Behavior
+1. Install path is strict on protocol changes:
+   - if selected protocol differs from current protocol, UI runs `gatewayctl uninstall` first, then runs new install.
+2. If strict uninstall fails, install is aborted by design (to prevent mixed stacks).
+3. For same-protocol reinstall, strict uninstall is skipped.
+4. Manual checks:
+   - before switch: `sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol`
+   - after switch: `sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol`
+5. If protocol cannot be determined but gatewayctl exists, deployment attempts one uninstall and aborts on failure.
 
 ### DNS Through Tunnel (Hybrid UDP + DoH)
 1. Validate DNS profile and path:

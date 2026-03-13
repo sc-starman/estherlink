@@ -48,6 +48,14 @@ IPSEC_REDSOCKS_LOCAL_PORT=12345
 IPSEC_RULES_SERVICE="omnirelay-ipsec-rules"
 IPSEC_RULES_APPLY_SCRIPT="${IPSEC_DIR}/apply-rules.sh"
 IPSEC_RULES_CLEAR_SCRIPT="${IPSEC_DIR}/clear-rules.sh"
+IPSEC_ACCOUNTING_DB="${IPSEC_DIR}/accounting.db"
+IPSEC_ACCOUNTING_SCRIPT="${IPSEC_DIR}/accounting-loop.sh"
+IPSEC_ACCOUNTING_HEARTBEAT="${IPSEC_DIR}/accounting-heartbeat.json"
+IPSEC_ACCOUNTING_SERVICE="omnirelay-ipsec-accounting"
+IPSEC_ACCOUNTING_TIMER="omnirelay-ipsec-accounting.timer"
+IPSEC_PPP_HOOK_UP="/etc/ppp/ip-up.d/99-omnirelay-accounting"
+IPSEC_PPP_HOOK_DOWN="/etc/ppp/ip-down.d/99-omnirelay-accounting"
+IPSEC_CHAP_SECRETS="/etc/ppp/chap-secrets"
 
 OMNIPANEL_INTERNAL_PORT=0
 IPSEC_SHARED_PSK=""
@@ -64,7 +72,7 @@ choose_port(){ for _ in $(seq 1 200); do p=$((RANDOM%30000+22000)); [[ "$(check_
 
 usage(){
   cat <<EOF
-Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair|sync-clients> [options]
+Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients> [options]
 --public-port <port>
 --panel-port <port>
 --backend-port <port>
@@ -85,9 +93,69 @@ Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|status|health|dns-app
 EOF
 }
 
+get_protocol_cmd(){
+  echo "ipsec_l2tp_hwdsl2"
+}
+
 configure_proxy(){
   local proxy_url="socks5h://127.0.0.1:${BOOTSTRAP_SOCKS_PORT}"
   export ALL_PROXY="$proxy_url" HTTPS_PROXY="$proxy_url" HTTP_PROXY="$proxy_url" NO_PROXY="127.0.0.1,localhost"
+}
+
+ipsec_global_managed_paths(){
+  cat <<'EOF'
+/etc/ipsec.conf
+/etc/ipsec.secrets
+/etc/xl2tpd/xl2tpd.conf
+/etc/ppp/options.xl2tpd
+/etc/ppp/chap-secrets
+EOF
+}
+
+backup_ipsec_global_files(){
+  local backup_dir path key backup_file absent_marker parent
+  backup_dir="${IPSEC_DIR}/global-backups"
+  install -d -m 0700 "$backup_dir"
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    key="${path#/}"
+    key="${key//\//__}"
+    backup_file="${backup_dir}/${key}"
+    absent_marker="${backup_file}.absent"
+    if [[ -e "$backup_file" || -f "$absent_marker" ]]; then
+      continue
+    fi
+    if [[ -e "$path" ]]; then
+      parent="$(dirname "$backup_file")"
+      install -d -m 0700 "$parent"
+      cp -a "$path" "$backup_file"
+    else
+      : > "$absent_marker"
+      chmod 0600 "$absent_marker" || true
+    fi
+  done < <(ipsec_global_managed_paths)
+}
+
+restore_ipsec_global_files(){
+  local backup_dir path key backup_file absent_marker parent
+  backup_dir="${IPSEC_DIR}/global-backups"
+  [[ -d "$backup_dir" ]] || return 0
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    key="${path#/}"
+    key="${key//\//__}"
+    backup_file="${backup_dir}/${key}"
+    absent_marker="${backup_file}.absent"
+    if [[ -e "$backup_file" ]]; then
+      parent="$(dirname "$path")"
+      install -d -m 0755 "$parent"
+      rm -rf "$path"
+      cp -a "$backup_file" "$path"
+    elif [[ -f "$absent_marker" ]]; then
+      rm -rf "$path"
+    fi
+  done < <(ipsec_global_managed_paths)
+  rm -rf "$backup_dir"
 }
 clear_proxy(){ unset ALL_PROXY HTTPS_PROXY HTTP_PROXY NO_PROXY || true; }
 configure_apt_proxy(){
@@ -128,7 +196,7 @@ install_packages(){
   progress 14 "Syncing VPS clock over SOCKS bootstrap (if needed)"
   sync_time_via_bootstrap_socks || log "Clock sync over SOCKS skipped/failed; continuing."
   apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -y
-  DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq tar gzip openssl python3 iptables redsocks nginx nodejs ppp xl2tpd strongswan
+  DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq tar gzip openssl python3 iptables redsocks nginx nodejs ppp xl2tpd strongswan sqlite3
   clear_proxy
 }
 
@@ -145,7 +213,7 @@ ensure_nodejs_runtime(){
 
 ensure_clients_seed_file(){
   install -d -m 0755 "$(dirname "$IPSEC_CLIENTS_FILE")" "$IPSEC_DIR"
-  [[ -f "$IPSEC_CLIENTS_FILE" ]] || jq -n --arg id "$(random_string 16)" --arg p "$(random_string 24)" '[{id:$id,email:"omni-client@local",enable:true,username:"l2tp_client",password:$p}]' > "$IPSEC_CLIENTS_FILE"
+  [[ -f "$IPSEC_CLIENTS_FILE" ]] || jq -n --arg id "$(random_string 16)" --arg p "$(random_string 24)" '[{id:$id,email:"omni-client@local",enable:true,username:"l2tp_client",password:$p,totalGB:0,expiryTime:0}]' > "$IPSEC_CLIENTS_FILE"
 }
 ensure_shared_psk(){
   [[ -f "$IPSEC_PSK_FILE" ]] && IPSEC_SHARED_PSK="$(tr -d '\r\n' < "$IPSEC_PSK_FILE")"
@@ -155,9 +223,43 @@ ensure_shared_psk(){
 }
 set_gateway_file_access(){
   if id -u omnigateway >/dev/null 2>&1; then
-    chown root:omnigateway "$IPSEC_PSK_FILE" "$IPSEC_CLIENTS_FILE" 2>/dev/null || true
-    chmod 0640 "$IPSEC_PSK_FILE" "$IPSEC_CLIENTS_FILE" 2>/dev/null || true
+    chown root:omnigateway "$IPSEC_PSK_FILE" "$IPSEC_CLIENTS_FILE" "$IPSEC_ACCOUNTING_DB" "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
+    chmod 0640 "$IPSEC_PSK_FILE" "$IPSEC_CLIENTS_FILE" "$IPSEC_ACCOUNTING_DB" "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
   fi
+}
+
+escape_sql_literal(){ printf '%s' "$1" | sed "s/'/''/g"; }
+
+init_ipsec_accounting_db(){
+  install -d -m 0755 "$IPSEC_DIR"
+  sqlite3 "$IPSEC_ACCOUNTING_DB" <<'SQL'
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+CREATE TABLE IF NOT EXISTS clients (
+  client_id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  total_bytes_limit INTEGER NOT NULL DEFAULT 0,
+  expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_totals (
+  client_id TEXT PRIMARY KEY,
+  used_bytes INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_counters (
+  session_key TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  ifname TEXT,
+  pppd_pid INTEGER NOT NULL DEFAULT 0,
+  last_rx INTEGER NOT NULL DEFAULT 0,
+  last_tx INTEGER NOT NULL DEFAULT 0,
+  last_seen_at INTEGER NOT NULL
+);
+SQL
+  chmod 0640 "$IPSEC_ACCOUNTING_DB" 2>/dev/null || true
 }
 
 install_hwdsl2_stack(){
@@ -218,6 +320,219 @@ EOF
   chmod 0755 "$IPSEC_RULES_CLEAR_SCRIPT"
 }
 
+refresh_chap_secrets_from_policy(){
+  local chap_tmp row id username password enable esc_id policy enabled_policy total_limit expiry_ms used_bytes now_ms
+  chap_tmp="$(mktemp)"
+  printf '# OmniRelay managed IPSec/L2TP users\n' > "$chap_tmp"
+  now_ms=$(( $(date +%s) * 1000 ))
+  while IFS= read -r row; do
+    id="$(jq -r '.id // empty' <<<"$row")"
+    enable="$(jq -r '.enable // true' <<<"$row")"
+    username="$(jq -r '.username // empty' <<<"$row")"
+    password="$(jq -r '.password // empty' <<<"$row")"
+    [[ -n "$id" && -n "$username" && -n "$password" && "$enable" == "true" ]] || continue
+    esc_id="$(escape_sql_literal "$id")"
+    policy="$(sqlite3 -csv -noheader "$IPSEC_ACCOUNTING_DB" "SELECT c.enabled,c.total_bytes_limit,c.expiry_unix_ms,COALESCE(u.used_bytes,0) FROM clients c LEFT JOIN usage_totals u ON u.client_id=c.client_id WHERE c.client_id='${esc_id}' LIMIT 1;" 2>/dev/null || true)"
+    [[ -n "$policy" ]] || continue
+    IFS=',' read -r enabled_policy total_limit expiry_ms used_bytes <<<"$policy"
+    [[ "$enabled_policy" =~ ^[0-9]+$ ]] || enabled_policy=0
+    [[ "$total_limit" =~ ^[0-9]+$ ]] || total_limit=0
+    [[ "$expiry_ms" =~ ^[0-9]+$ ]] || expiry_ms=0
+    [[ "$used_bytes" =~ ^[0-9]+$ ]] || used_bytes=0
+    (( enabled_policy == 1 )) || continue
+    if (( expiry_ms > 0 && now_ms >= expiry_ms )); then
+      continue
+    fi
+    if (( total_limit > 0 && used_bytes >= total_limit )); then
+      continue
+    fi
+    printf '"%s" l2tpd "%s" *\n' "$username" "$password" >> "$chap_tmp"
+  done < <(jq -c '.[]' "$IPSEC_CLIENTS_FILE" 2>/dev/null || true)
+  install -m 0600 "$chap_tmp" "$IPSEC_CHAP_SECRETS"
+  rm -f "$chap_tmp"
+}
+
+write_ipsec_ppp_accounting_hooks(){
+  install -d -m 0755 /etc/ppp/ip-up.d /etc/ppp/ip-down.d
+  cat > "$IPSEC_PPP_HOOK_UP" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DB="${IPSEC_ACCOUNTING_DB}"
+IFNAME="\${1:-\${IFNAME:-}}"
+USERNAME="\${PEERNAME:-}"
+[[ -n "\$IFNAME" && "\$IFNAME" == ppp* && -n "\$USERNAME" && -f "\$DB" ]] || exit 0
+escape_sql_literal(){ printf '%s' "\$1" | sed "s/'/''/g"; }
+esc_user="\$(escape_sql_literal "\$USERNAME")"
+client_id="\$(sqlite3 -noheader "\$DB" "SELECT client_id FROM clients WHERE username='\$esc_user' LIMIT 1;" 2>/dev/null || true)"
+[[ -n "\$client_id" ]] || exit 0
+session_key="\${client_id}|\${IFNAME}"
+pppd_pid="\${PPPD_PID:-0}"
+if [[ ! "\$pppd_pid" =~ ^[0-9]+$ || "\$pppd_pid" -le 1 ]]; then
+  pppd_pid="\$(ps -eo pid,args | awk -v ifn="\$IFNAME" '/[p]ppd/ && index(\$0,ifn){print \$1; exit}')"
+fi
+[[ "\$pppd_pid" =~ ^[0-9]+$ ]] || pppd_pid=0
+rx=0; tx=0
+[[ -r "/sys/class/net/\$IFNAME/statistics/rx_bytes" ]] && rx="\$(cat "/sys/class/net/\$IFNAME/statistics/rx_bytes" 2>/dev/null || echo 0)"
+[[ -r "/sys/class/net/\$IFNAME/statistics/tx_bytes" ]] && tx="\$(cat "/sys/class/net/\$IFNAME/statistics/tx_bytes" 2>/dev/null || echo 0)"
+[[ "\$rx" =~ ^[0-9]+$ ]] || rx=0
+[[ "\$tx" =~ ^[0-9]+$ ]] || tx=0
+now="\$(date +%s)"
+esc_client_id="\$(escape_sql_literal "\$client_id")"
+esc_session="\$(escape_sql_literal "\$session_key")"
+esc_ifname="\$(escape_sql_literal "\$IFNAME")"
+sqlite3 "\$DB" "INSERT OR IGNORE INTO usage_totals(client_id,used_bytes,updated_at) VALUES('\$esc_client_id',0,\$now);" >/dev/null 2>&1 || true
+sqlite3 "\$DB" "INSERT INTO session_counters(session_key,client_id,ifname,pppd_pid,last_rx,last_tx,last_seen_at) VALUES('\$esc_session','\$esc_client_id','\$esc_ifname',\$pppd_pid,\$rx,\$tx,\$now) ON CONFLICT(session_key) DO UPDATE SET ifname=excluded.ifname,pppd_pid=excluded.pppd_pid,last_rx=excluded.last_rx,last_tx=excluded.last_tx,last_seen_at=excluded.last_seen_at;" >/dev/null 2>&1 || true
+exit 0
+EOF
+  chmod 0755 "$IPSEC_PPP_HOOK_UP"
+
+  cat > "$IPSEC_PPP_HOOK_DOWN" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DB="${IPSEC_ACCOUNTING_DB}"
+IFNAME="\${1:-\${IFNAME:-}}"
+[[ -n "\$IFNAME" && "\$IFNAME" == ppp* && -f "\$DB" ]] || exit 0
+escape_sql_literal(){ printf '%s' "\$1" | sed "s/'/''/g"; }
+esc_ifname="\$(escape_sql_literal "\$IFNAME")"
+sqlite3 "\$DB" "DELETE FROM session_counters WHERE ifname='\$esc_ifname';" >/dev/null 2>&1 || true
+exit 0
+EOF
+  chmod 0755 "$IPSEC_PPP_HOOK_DOWN"
+}
+
+write_ipsec_accounting_script(){
+  cat > "$IPSEC_ACCOUNTING_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DB="${IPSEC_ACCOUNTING_DB}"
+CLIENTS_FILE="${IPSEC_CLIENTS_FILE}"
+CHAP_FILE="${IPSEC_CHAP_SECRETS}"
+HEARTBEAT_FILE="${IPSEC_ACCOUNTING_HEARTBEAT}"
+STALE_AFTER_SEC=600
+
+escape_sql_literal(){ printf '%s' "\$1" | sed "s/'/''/g"; }
+
+write_heartbeat(){
+  local ok_flag="\$1" error_msg="\$2" now_epoch
+  now_epoch="\$(date +%s)"
+  jq -n --argjson ok "\$ok_flag" --arg err "\$error_msg" --argjson now "\$now_epoch" '{ok:\$ok,error:\$err,runAtEpoch:\$now,runAtUtc:(\$now|todate)}' > "\${HEARTBEAT_FILE}.tmp"
+  mv -f "\${HEARTBEAT_FILE}.tmp" "\$HEARTBEAT_FILE"
+  chmod 0640 "\$HEARTBEAT_FILE" || true
+}
+
+refresh_chap(){
+  local chap_tmp row id username password enable esc_id policy enabled_policy total_limit expiry_ms used_bytes now_ms
+  chap_tmp="\$(mktemp)"
+  printf '# OmniRelay managed IPSec/L2TP users\n' > "\$chap_tmp"
+  now_ms=\$(( \$(date +%s) * 1000 ))
+  while IFS= read -r row; do
+    id="\$(jq -r '.id // empty' <<<"\$row")"
+    enable="\$(jq -r '.enable // true' <<<"\$row")"
+    username="\$(jq -r '.username // empty' <<<"\$row")"
+    password="\$(jq -r '.password // empty' <<<"\$row")"
+    [[ -n "\$id" && -n "\$username" && -n "\$password" && "\$enable" == "true" ]] || continue
+    esc_id="\$(escape_sql_literal "\$id")"
+    policy="\$(sqlite3 -csv -noheader "\$DB" "SELECT c.enabled,c.total_bytes_limit,c.expiry_unix_ms,COALESCE(u.used_bytes,0) FROM clients c LEFT JOIN usage_totals u ON u.client_id=c.client_id WHERE c.client_id='\${esc_id}' LIMIT 1;" 2>/dev/null || true)"
+    [[ -n "\$policy" ]] || continue
+    IFS=',' read -r enabled_policy total_limit expiry_ms used_bytes <<<"\$policy"
+    [[ "\$enabled_policy" =~ ^[0-9]+$ ]] || enabled_policy=0
+    [[ "\$total_limit" =~ ^[0-9]+$ ]] || total_limit=0
+    [[ "\$expiry_ms" =~ ^[0-9]+$ ]] || expiry_ms=0
+    [[ "\$used_bytes" =~ ^[0-9]+$ ]] || used_bytes=0
+    (( enabled_policy == 1 )) || continue
+    if (( expiry_ms > 0 && now_ms >= expiry_ms )); then
+      continue
+    fi
+    if (( total_limit > 0 && used_bytes >= total_limit )); then
+      continue
+    fi
+    printf '"%s" l2tpd "%s" *\n' "\$username" "\$password" >> "\$chap_tmp"
+  done < <(jq -c '.[]' "\$CLIENTS_FILE" 2>/dev/null || true)
+  install -m 0600 "\$chap_tmp" "\$CHAP_FILE"
+  rm -f "\$chap_tmp"
+}
+
+main(){
+  declare -A delta_by_client=()
+  local now_sec now_ms cutoff
+  now_sec="\$(date +%s)"
+  now_ms=\$(( now_sec * 1000 ))
+  cutoff=\$(( now_sec - STALE_AFTER_SEC ))
+
+  while IFS=',' read -r session_key client_id ifname pppd_pid last_rx last_tx; do
+    [[ -n "\$session_key" && -n "\$client_id" && -n "\$ifname" ]] || continue
+    [[ "\$last_rx" =~ ^[0-9]+$ ]] || last_rx=0
+    [[ "\$last_tx" =~ ^[0-9]+$ ]] || last_tx=0
+    [[ "\$pppd_pid" =~ ^[0-9]+$ ]] || pppd_pid=0
+    if [[ ! -r "/sys/class/net/\$ifname/statistics/rx_bytes" || ! -r "/sys/class/net/\$ifname/statistics/tx_bytes" ]]; then
+      continue
+    fi
+    curr_rx="\$(cat "/sys/class/net/\$ifname/statistics/rx_bytes" 2>/dev/null || echo 0)"
+    curr_tx="\$(cat "/sys/class/net/\$ifname/statistics/tx_bytes" 2>/dev/null || echo 0)"
+    [[ "\$curr_rx" =~ ^[0-9]+$ ]] || curr_rx=0
+    [[ "\$curr_tx" =~ ^[0-9]+$ ]] || curr_tx=0
+    delta_rx=\$(( curr_rx - last_rx )); (( delta_rx < 0 )) && delta_rx=0
+    delta_tx=\$(( curr_tx - last_tx )); (( delta_tx < 0 )) && delta_tx=0
+    delta_total=\$(( delta_rx + delta_tx ))
+    delta_by_client["\$client_id"]=\$(( \${delta_by_client["\$client_id"]:-0} + delta_total ))
+    esc_session="\$(escape_sql_literal "\$session_key")"
+    sqlite3 "\$DB" "UPDATE session_counters SET last_rx=\$curr_rx,last_tx=\$curr_tx,last_seen_at=\$now_sec WHERE session_key='\$esc_session';" >/dev/null 2>&1 || true
+  done < <(sqlite3 -csv -noheader "\$DB" "SELECT session_key,client_id,ifname,pppd_pid,last_rx,last_tx FROM session_counters;" 2>/dev/null || true)
+
+  sql_tmp="\$(mktemp)"
+  {
+    echo "PRAGMA busy_timeout=5000;"
+    echo "BEGIN IMMEDIATE;"
+    for client_id in "\${!delta_by_client[@]}"; do
+      delta="\${delta_by_client["\$client_id"]}"
+      (( delta > 0 )) || continue
+      esc_client="\$(escape_sql_literal "\$client_id")"
+      echo "INSERT INTO usage_totals(client_id,used_bytes,updated_at) VALUES('\$esc_client',0,\$now_sec) ON CONFLICT(client_id) DO NOTHING;"
+      echo "UPDATE usage_totals SET used_bytes = used_bytes + \$delta, updated_at = \$now_sec WHERE client_id='\$esc_client';"
+    done
+    echo "DELETE FROM session_counters WHERE last_seen_at < \$cutoff;"
+    echo "COMMIT;"
+  } > "\$sql_tmp"
+  sqlite3 "\$DB" < "\$sql_tmp"
+  rm -f "\$sql_tmp"
+
+  while IFS=',' read -r session_key client_id ifname pppd_pid enabled_policy total_limit expiry_ms used_bytes; do
+    [[ "\$enabled_policy" =~ ^[0-9]+$ ]] || enabled_policy=0
+    [[ "\$total_limit" =~ ^[0-9]+$ ]] || total_limit=0
+    [[ "\$expiry_ms" =~ ^[0-9]+$ ]] || expiry_ms=0
+    [[ "\$used_bytes" =~ ^[0-9]+$ ]] || used_bytes=0
+    disconnect=0
+    (( enabled_policy == 1 )) || disconnect=1
+    if (( expiry_ms > 0 && now_ms >= expiry_ms )); then
+      disconnect=1
+    fi
+    if (( total_limit > 0 && used_bytes >= total_limit )); then
+      disconnect=1
+    fi
+    (( disconnect == 1 )) || continue
+    if [[ "\$pppd_pid" =~ ^[0-9]+$ ]] && (( pppd_pid > 1 )); then
+      kill -TERM "\$pppd_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "\$ifname" ]]; then
+      ip link set "\$ifname" down >/dev/null 2>&1 || true
+    fi
+  done < <(sqlite3 -csv -noheader "\$DB" "SELECT s.session_key,s.client_id,s.ifname,s.pppd_pid,c.enabled,c.total_bytes_limit,c.expiry_unix_ms,COALESCE(u.used_bytes,0) FROM session_counters s JOIN clients c ON c.client_id=s.client_id LEFT JOIN usage_totals u ON u.client_id=s.client_id;" 2>/dev/null || true)
+
+  refresh_chap
+  write_heartbeat true ""
+}
+
+if main 2>/tmp/omnirelay-ipsec-accounting.err; then
+  exit 0
+fi
+err_text="\$(tr '\n' ' ' </tmp/omnirelay-ipsec-accounting.err | sed 's/"/\\"/g' | xargs || true)"
+rm -f /tmp/omnirelay-ipsec-accounting.err
+write_heartbeat false "\${err_text:-accounting script failed}"
+exit 1
+EOF
+  chmod 0750 "$IPSEC_ACCOUNTING_SCRIPT"
+}
+
 setup_runtime_services(){
   progress 38 "Setting up IPSec/L2TP runtime services"
   local redsocks_bin; redsocks_bin="$(command -v redsocks || true)"; [[ -n "$redsocks_bin" ]] || die "redsocks binary not found."
@@ -247,11 +562,34 @@ ExecStop=${IPSEC_RULES_CLEAR_SCRIPT}
 [Install]
 WantedBy=multi-user.target
 EOF
+  cat > "/etc/systemd/system/${IPSEC_ACCOUNTING_SERVICE}.service" <<EOF
+[Unit]
+Description=OmniRelay IPSec/L2TP accounting sync
+After=network-online.target ipsec.service xl2tpd.service
+Wants=network-online.target ipsec.service xl2tpd.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash ${IPSEC_ACCOUNTING_SCRIPT}
+EOF
+  cat > "/etc/systemd/system/${IPSEC_ACCOUNTING_TIMER}" <<EOF
+[Unit]
+Description=Run OmniRelay IPSec/L2TP accounting sync every 30 seconds
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=${IPSEC_ACCOUNTING_SERVICE}.service
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
   systemctl daemon-reload
   systemctl enable --now "$IPSEC_REDSOCKS_SERVICE"
   systemctl enable --now ipsec >/dev/null 2>&1 || systemctl enable --now strongswan-starter >/dev/null 2>&1 || true
   systemctl enable --now xl2tpd >/dev/null 2>&1 || true
   systemctl enable --now "$IPSEC_RULES_SERVICE"
+  systemctl enable --now "$IPSEC_ACCOUNTING_TIMER"
+  systemctl start "$IPSEC_ACCOUNTING_SERVICE" || true
 }
 
 gen_cert(){ mkdir -p "${METADATA_DIR}/certs"; chmod 0700 "${METADATA_DIR}/certs"; local server="${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}" ; [[ -n "$server" ]] || server="localhost"; openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout "${METADATA_DIR}/certs/omnipanel.key" -out "${METADATA_DIR}/certs/omnipanel.crt" -subj "/CN=${server}" >/dev/null 2>&1; chmod 0600 "${METADATA_DIR}/certs/omnipanel.key"; }
@@ -288,6 +626,7 @@ PANEL_PUBLIC_PORT=${PANEL_PORT}
 PANEL_PUBLIC_HOST=${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}
 IPSEC_L2TP_CLIENTS_FILE=${IPSEC_CLIENTS_FILE}
 IPSEC_L2TP_PSK_FILE=${IPSEC_PSK_FILE}
+IPSEC_L2TP_ACCOUNTING_DB=${IPSEC_ACCOUNTING_DB}
 IPSEC_L2TP_SYNC_COMMAND=${IPSEC_SYNC_COMMAND}
 EOF
   cat > "/etc/systemd/system/${OMNIPANEL_SERVICE}.service" <<EOF
@@ -352,7 +691,7 @@ configure_host_firewall(){ command -v ufw >/dev/null 2>&1 || return 0; ufw statu
 
 write_metadata(){
   progress 88 "Persisting managed gateway metadata"
-  jq -n --arg proto "ipsec_l2tp_hwdsl2" --arg vps "$VPS_IP" --arg panel "$PANEL_PORT" --arg user "$PANEL_USER" --arg clientsFile "$IPSEC_CLIENTS_FILE" --arg pskFile "$IPSEC_PSK_FILE" --arg intp "$OMNIPANEL_INTERNAL_PORT" --arg clientDns "$IPSEC_CLIENT_DNS" '{active_protocol:$proto,vps_ip:$vps,public_port:1701,omnipanel_public_port:($panel|tonumber),omnipanel_internal_port:($intp|tonumber),omnipanel_username:$user,ipsec_l2tp:{ports:{ike:500,natt:4500,l2tp:1701},clients_file:$clientsFile,psk_file:$pskFile,client_dns:$clientDns},created_at_utc:(now|todate)}' > "$METADATA_FILE"
+  jq -n --arg proto "ipsec_l2tp_hwdsl2" --arg vps "$VPS_IP" --arg panel "$PANEL_PORT" --arg user "$PANEL_USER" --arg clientsFile "$IPSEC_CLIENTS_FILE" --arg pskFile "$IPSEC_PSK_FILE" --arg accountingDb "$IPSEC_ACCOUNTING_DB" --arg intp "$OMNIPANEL_INTERNAL_PORT" --arg clientDns "$IPSEC_CLIENT_DNS" '{active_protocol:$proto,vps_ip:$vps,public_port:1701,omnipanel_public_port:($panel|tonumber),omnipanel_internal_port:($intp|tonumber),omnipanel_username:$user,ipsec_l2tp:{ports:{ike:500,natt:4500,l2tp:1701},clients_file:$clientsFile,psk_file:$pskFile,accounting_db:$accountingDb,client_dns:$clientDns},created_at_utc:(now|todate)}' > "$METADATA_FILE"
   chmod 0600 "$METADATA_FILE"
 }
 
@@ -363,15 +702,77 @@ dns_repair(){ progress 94 "Repairing DNS profile"; dns_apply; }
 
 sync_clients_cmd(){
   require_root
-  ensure_clients_seed_file; ensure_shared_psk
-  local chap_tmp row enable username password
-  chap_tmp="$(mktemp)"; printf '# OmniRelay managed IPSec/L2TP users\n' > "$chap_tmp"
+  ensure_clients_seed_file
+  ensure_shared_psk
+  init_ipsec_accounting_db
+  write_ipsec_ppp_accounting_hooks
+  write_ipsec_accounting_script
+  local row id email enable username password total_gb_raw total_gb_bytes expiry_raw expiry_unix_ms now_sec sql_tmp enable_int
+  now_sec="$(date +%s)"
+  sql_tmp="$(mktemp)"
+  cat > "$sql_tmp" <<SQL
+PRAGMA busy_timeout=5000;
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE IF NOT EXISTS sync_keep(client_id TEXT PRIMARY KEY);
+DELETE FROM sync_keep;
+SQL
   while IFS= read -r row; do
-    enable="$(jq -r '.enable // true' <<<"$row")"; username="$(jq -r '.username // empty' <<<"$row")"; password="$(jq -r '.password // empty' <<<"$row")"
-    [[ "$enable" == "true" && -n "$username" && -n "$password" ]] || continue
-    printf '"%s" l2tpd "%s" *\n' "$username" "$password" >> "$chap_tmp"
+    id="$(jq -r '.id // empty' <<<"$row")"
+    email="$(jq -r '.email // empty' <<<"$row")"
+    enable="$(jq -r '.enable // true' <<<"$row")"
+    username="$(jq -r '.username // empty' <<<"$row")"
+    password="$(jq -r '.password // empty' <<<"$row")"
+    total_gb_raw="$(jq -r '.totalGB // 0' <<<"$row")"
+    expiry_raw="$(jq -r '.expiryTime // 0' <<<"$row")"
+    [[ -n "$id" && -n "$email" && -n "$username" && -n "$password" ]] || continue
+    total_gb_bytes="$(python3 - "$total_gb_raw" <<'PY'
+import math, sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    value = 0.0
+if not math.isfinite(value) or value <= 0:
+    print(0)
+else:
+    print(int(value * (1024 ** 3)))
+PY
+)"
+    expiry_unix_ms="$(python3 - "$expiry_raw" <<'PY'
+import math, sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    value = 0.0
+if not math.isfinite(value) or value <= 0:
+    print(0)
+else:
+    print(int(value))
+PY
+)"
+    [[ "$total_gb_bytes" =~ ^[0-9]+$ ]] || total_gb_bytes=0
+    [[ "$expiry_unix_ms" =~ ^[0-9]+$ ]] || expiry_unix_ms=0
+    enable_int=0
+    [[ "$enable" == "true" ]] && enable_int=1
+    printf "INSERT OR IGNORE INTO sync_keep(client_id) VALUES('%s');\n" "$(printf '%s' "$id" | sed "s/'/''/g")" >> "$sql_tmp"
+    printf "INSERT INTO clients(client_id,username,enabled,total_bytes_limit,expiry_unix_ms,created_at,updated_at) VALUES('%s','%s',%s,%s,%s,%s,%s) ON CONFLICT(client_id) DO UPDATE SET username=excluded.username,enabled=excluded.enabled,total_bytes_limit=excluded.total_bytes_limit,expiry_unix_ms=excluded.expiry_unix_ms,updated_at=excluded.updated_at;\n" \
+      "$(printf '%s' "$id" | sed "s/'/''/g")" \
+      "$(printf '%s' "$username" | sed "s/'/''/g")" \
+      "$enable_int" "$total_gb_bytes" "$expiry_unix_ms" "$now_sec" "$now_sec" >> "$sql_tmp"
+    printf "INSERT OR IGNORE INTO usage_totals(client_id,used_bytes,updated_at) VALUES('%s',0,%s);\n" \
+      "$(printf '%s' "$id" | sed "s/'/''/g")" "$now_sec" >> "$sql_tmp"
+    printf "UPDATE usage_totals SET updated_at=%s WHERE client_id='%s';\n" \
+      "$now_sec" "$(printf '%s' "$id" | sed "s/'/''/g")" >> "$sql_tmp"
   done < <(jq -c '.[]' "$IPSEC_CLIENTS_FILE" 2>/dev/null || true)
-  install -m 0600 "$chap_tmp" /etc/ppp/chap-secrets; rm -f "$chap_tmp"
+  cat >> "$sql_tmp" <<'SQL'
+DELETE FROM clients WHERE client_id NOT IN (SELECT client_id FROM sync_keep);
+DELETE FROM usage_totals WHERE client_id NOT IN (SELECT client_id FROM sync_keep);
+DELETE FROM session_counters WHERE client_id NOT IN (SELECT client_id FROM sync_keep);
+DROP TABLE sync_keep;
+COMMIT;
+SQL
+  sqlite3 "$IPSEC_ACCOUNTING_DB" < "$sql_tmp"
+  rm -f "$sql_tmp"
+  refresh_chap_secrets_from_policy
   cat > /etc/ipsec.secrets <<EOF
 %any  %any  : PSK "${IPSEC_SHARED_PSK}"
 EOF
@@ -382,6 +783,9 @@ EOF
   systemctl restart ipsec >/dev/null 2>&1 || systemctl restart strongswan-starter >/dev/null 2>&1 || true
   systemctl restart xl2tpd
   systemctl restart "$IPSEC_RULES_SERVICE"
+  systemctl start "$IPSEC_ACCOUNTING_SERVICE" >/dev/null 2>&1 || true
+  chown root:omnigateway "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
+  chmod 0640 "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
   local ipsec_state xl2tpd_state
   ipsec_state="$(systemctl is-active ipsec 2>/dev/null || systemctl is-active strongswan-starter 2>/dev/null || echo inactive)"
   xl2tpd_state="$(systemctl is-active xl2tpd 2>/dev/null || echo inactive)"
@@ -392,10 +796,13 @@ EOF
 
 status_cmd(){
   local sshState ipsecState xl2tpdState redsocksState panelState nginxState fail2 backendListener publicListener panelListener internalListener dns iport ike natt l2tp
+  local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch
   sshState="$(systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null || echo inactive)"
   ipsecState="$(systemctl is-active ipsec 2>/dev/null || systemctl is-active strongswan-starter 2>/dev/null || echo inactive)"
   xl2tpdState="$(systemctl is-active xl2tpd 2>/dev/null || echo inactive)"
   redsocksState="$(systemctl is-active "$IPSEC_REDSOCKS_SERVICE" 2>/dev/null || echo inactive)"
+  accountingTimerState="$(systemctl is-active "$IPSEC_ACCOUNTING_TIMER" 2>/dev/null || echo inactive)"
+  accountingServiceState="$(systemctl is-active "$IPSEC_ACCOUNTING_SERVICE" 2>/dev/null || echo inactive)"
   panelState="$(systemctl is-active "$OMNIPANEL_SERVICE" 2>/dev/null || echo inactive)"
   nginxState="$(systemctl is-active nginx 2>/dev/null || echo inactive)"
   fail2="disabled"
@@ -406,7 +813,22 @@ status_cmd(){
   panelListener="$(check_listener "$PANEL_PORT")"
   if [[ "$iport" =~ ^[0-9]+$ ]] && (( iport > 0 )); then internalListener="$(check_listener "$iport")"; else internalListener="false"; fi
   dns="$(dns_status_json)"
-  printf '{"activeProtocol":"ipsec_l2tp_hwdsl2","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"inactive","ipsecState":"%s","xl2tpdState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s"}\n' "$sshState" "$ipsecState" "$xl2tpdState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$IPSEC_L2TP_PORT" "$PANEL_PORT" "$iport" "$backendListener" "$publicListener" "$panelListener" "$internalListener" "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" "$redsocksState"
+  accountingDbReady=false
+  sqlite3 "$IPSEC_ACCOUNTING_DB" "SELECT 1;" >/dev/null 2>&1 && accountingDbReady=true || true
+  hbOk=false
+  hbEpoch=0
+  if [[ -f "$IPSEC_ACCOUNTING_HEARTBEAT" ]]; then
+    hbOk="$(jq -r '.ok // false' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo false)"
+    hbEpoch="$(jq -r '.runAtEpoch // 0' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo 0)"
+  fi
+  nowEpoch="$(date +%s)"
+  accountingHealthy=false
+  if [[ "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$hbOk" == "true" && "$hbEpoch" =~ ^[0-9]+$ ]]; then
+    if (( hbEpoch > 0 && (nowEpoch - hbEpoch) <= 120 )); then
+      accountingHealthy=true
+    fi
+  fi
+  printf '{"activeProtocol":"ipsec_l2tp_hwdsl2","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"inactive","ipsecState":"%s","xl2tpdState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s","ipsecAccountingTimerState":"%s","ipsecAccountingServiceState":"%s","ipsecAccountingDbReady":%s,"ipsecAccountingHealthy":%s}\n' "$sshState" "$ipsecState" "$xl2tpdState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$IPSEC_L2TP_PORT" "$PANEL_PORT" "$iport" "$backendListener" "$publicListener" "$panelListener" "$internalListener" "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy"
 }
 
 health_cmd(){
@@ -423,6 +845,7 @@ health_cmd(){
   [[ "$(jq -r '.omniPanelInternalListener' <<<"$status")" == "true" ]] || healthy=false
   [[ "$(jq -r '.dnsPathHealthy' <<<"$status")" == "true" ]] || healthy=false
   redsocksState="$(jq -r '.redsocksState // "inactive"' <<<"$status")"; [[ "$redsocksState" == "active" ]] || healthy=false
+  [[ "$(jq -r '.ipsecAccountingHealthy // false' <<<"$status")" == "true" ]] || healthy=false
   dnsLastError=""
   [[ "$(jq -r '.dnsConfigPresent' <<<"$status")" == "true" ]] || dnsLastError="dnsConfigMissing"
   [[ "$(jq -r '.dnsRuleActive' <<<"$status")" == "true" ]] || dnsLastError="dnsRuleInactive"
@@ -434,21 +857,39 @@ install_cmd(){
   progress 3 "Validating platform"
   install -d -m 0755 "$METADATA_DIR"
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
+  if [[ -x "$IPSEC_RULES_CLEAR_SCRIPT" ]]; then
+    "$IPSEC_RULES_CLEAR_SCRIPT" >/dev/null 2>&1 || true
+  fi
   systemctl disable --now x-ui 2>/dev/null || true
   systemctl disable --now omnirelay-singbox 2>/dev/null || true
-  systemctl disable --now omnirelay-openvpn 2>/dev/null || true
-  systemctl disable --now "$IPSEC_REDSOCKS_SERVICE" "$IPSEC_RULES_SERVICE" 2>/dev/null || true
-  rm -f /etc/systemd/system/x-ui.service /etc/systemd/system/omnirelay-singbox.service /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/${IPSEC_REDSOCKS_SERVICE}.service /etc/systemd/system/${IPSEC_RULES_SERVICE}.service
+  systemctl disable --now omnirelay-openvpn omnirelay-openvpn-accounting.service omnirelay-openvpn-accounting.timer 2>/dev/null || true
+  systemctl disable --now "$IPSEC_ACCOUNTING_TIMER" "$IPSEC_ACCOUNTING_SERVICE" "$IPSEC_REDSOCKS_SERVICE" "$IPSEC_RULES_SERVICE" 2>/dev/null || true
+  rm -f \
+    /etc/systemd/system/x-ui.service \
+    /etc/systemd/system/omnirelay-singbox.service \
+    /etc/systemd/system/omnirelay-openvpn.service \
+    /etc/systemd/system/omnirelay-openvpn-accounting.service \
+    /etc/systemd/system/omnirelay-openvpn-accounting.timer \
+    /etc/systemd/system/${IPSEC_REDSOCKS_SERVICE}.service \
+    /etc/systemd/system/${IPSEC_RULES_SERVICE}.service \
+    /etc/systemd/system/${IPSEC_ACCOUNTING_SERVICE}.service \
+    /etc/systemd/system/${IPSEC_ACCOUNTING_TIMER}
   rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec
+  rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf /var/log/openvpn/omnirelay-status.log
+  rm -f "$IPSEC_PPP_HOOK_UP" "$IPSEC_PPP_HOOK_DOWN"
   systemctl daemon-reload || true
   install_packages
   ensure_nodejs_runtime
   ensure_clients_seed_file
   ensure_shared_psk
+  init_ipsec_accounting_db
+  backup_ipsec_global_files
   install_hwdsl2_stack
   write_redsocks_config
   enable_ip_forward
   write_traffic_scripts
+  write_ipsec_ppp_accounting_hooks
+  write_ipsec_accounting_script
   setup_runtime_services
   deploy_panel
   sync_clients_cmd
@@ -462,9 +903,56 @@ install_cmd(){
   endpoint="${endpoint%% *}"; [[ -n "$endpoint" ]] || endpoint="<VPS_IP_OR_HOSTNAME>"
   log "OmniPanel URL: https://${endpoint}:${PANEL_PORT}/ | Username: ${PANEL_USER} | Password: ${PANEL_PASSWORD}"
 }
-start_cmd(){ require_root; progress 96 "Starting gateway services"; systemctl enable --now "$IPSEC_REDSOCKS_SERVICE" >/dev/null 2>&1 || true; systemctl enable --now ipsec >/dev/null 2>&1 || systemctl enable --now strongswan-starter >/dev/null 2>&1 || true; systemctl enable --now xl2tpd >/dev/null 2>&1 || true; systemctl enable --now "$IPSEC_RULES_SERVICE" >/dev/null 2>&1 || true; systemctl enable --now "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true; progress 100 "Gateway start completed"; }
-stop_cmd(){ require_root; progress 96 "Stopping gateway services"; systemctl stop "$OMNIPANEL_SERVICE" "$IPSEC_RULES_SERVICE" xl2tpd "$IPSEC_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true; systemctl stop ipsec >/dev/null 2>&1 || systemctl stop strongswan-starter >/dev/null 2>&1 || true; progress 100 "Gateway stop completed"; }
-uninstall_cmd(){ require_root; progress 96 "Uninstalling gateway"; systemctl disable --now "$OMNIPANEL_SERVICE" "$IPSEC_RULES_SERVICE" xl2tpd "$IPSEC_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true; systemctl disable --now ipsec >/dev/null 2>&1 || systemctl disable --now strongswan-starter >/dev/null 2>&1 || true; rm -f /etc/systemd/system/${OMNIPANEL_SERVICE}.service /etc/systemd/system/${IPSEC_REDSOCKS_SERVICE}.service /etc/systemd/system/${IPSEC_RULES_SERVICE}.service /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf /etc/sudoers.d/omnigateway-ipsec /usr/local/sbin/omnirelay-gatewayctl /etc/sysctl.d/99-omnirelay-ipsec.conf; rm -rf "$METADATA_DIR" "$OMNIPANEL_APP_DIR"; systemctl daemon-reload; progress 100 "Gateway uninstall completed"; }
+
+start_cmd(){
+  require_root
+  progress 96 "Starting gateway services"
+  systemctl enable --now "$IPSEC_REDSOCKS_SERVICE" >/dev/null 2>&1 || true
+  systemctl enable --now ipsec >/dev/null 2>&1 || systemctl enable --now strongswan-starter >/dev/null 2>&1 || true
+  systemctl enable --now xl2tpd >/dev/null 2>&1 || true
+  systemctl enable --now "$IPSEC_RULES_SERVICE" >/dev/null 2>&1 || true
+  systemctl enable --now "$IPSEC_ACCOUNTING_TIMER" >/dev/null 2>&1 || true
+  systemctl start "$IPSEC_ACCOUNTING_SERVICE" >/dev/null 2>&1 || true
+  systemctl enable --now "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true
+  progress 100 "Gateway start completed"
+}
+
+stop_cmd(){
+  require_root
+  progress 96 "Stopping gateway services"
+  systemctl stop "$IPSEC_ACCOUNTING_TIMER" "$IPSEC_ACCOUNTING_SERVICE" "$OMNIPANEL_SERVICE" "$IPSEC_RULES_SERVICE" xl2tpd "$IPSEC_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl stop ipsec >/dev/null 2>&1 || systemctl stop strongswan-starter >/dev/null 2>&1 || true
+  progress 100 "Gateway stop completed"
+}
+
+uninstall_cmd(){
+  require_root
+  progress 96 "Uninstalling gateway"
+  systemctl disable --now "$IPSEC_ACCOUNTING_TIMER" "$IPSEC_ACCOUNTING_SERVICE" "$OMNIPANEL_SERVICE" "$IPSEC_RULES_SERVICE" xl2tpd "$IPSEC_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl disable --now ipsec >/dev/null 2>&1 || systemctl disable --now strongswan-starter >/dev/null 2>&1 || true
+  systemctl disable --now x-ui omnirelay-singbox omnirelay-openvpn omnirelay-openvpn-accounting.timer omnirelay-openvpn-accounting.service >/dev/null 2>&1 || true
+  if [[ -x "$IPSEC_RULES_CLEAR_SCRIPT" ]]; then
+    "$IPSEC_RULES_CLEAR_SCRIPT" >/dev/null 2>&1 || true
+  fi
+  rm -f \
+    /etc/systemd/system/${OMNIPANEL_SERVICE}.service \
+    /etc/systemd/system/${IPSEC_REDSOCKS_SERVICE}.service \
+    /etc/systemd/system/${IPSEC_RULES_SERVICE}.service \
+    /etc/systemd/system/${IPSEC_ACCOUNTING_SERVICE}.service \
+    /etc/systemd/system/${IPSEC_ACCOUNTING_TIMER} \
+    /etc/systemd/system/x-ui.service \
+    /etc/systemd/system/omnirelay-singbox.service \
+    /etc/systemd/system/omnirelay-openvpn.service \
+    /etc/systemd/system/omnirelay-openvpn-accounting.service \
+    /etc/systemd/system/omnirelay-openvpn-accounting.timer \
+    /etc/systemd/system/omnirelay-redsocks.service
+  rm -f /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf /etc/sudoers.d/omnigateway-ipsec /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-singbox /usr/local/sbin/omnirelay-gatewayctl /etc/sysctl.d/99-omnirelay-ipsec.conf /etc/sysctl.d/99-omnirelay-openvpn.conf /var/log/openvpn/omnirelay-status.log
+  rm -f "$IPSEC_PPP_HOOK_UP" "$IPSEC_PPP_HOOK_DOWN"
+  restore_ipsec_global_files
+  rm -rf "$METADATA_DIR" "$OMNIPANEL_APP_DIR"
+  systemctl daemon-reload
+  progress 100 "Gateway uninstall completed"
+}
 
 parse_args(){
   if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then COMMAND="$1"; shift; fi
@@ -509,13 +997,14 @@ main(){
     uninstall) uninstall_cmd ;;
     start) start_cmd ;;
     stop) stop_cmd ;;
+    get-protocol) get_protocol_cmd ;;
     status) status_cmd ;;
     health) health_cmd ;;
     dns-apply) dns_apply ;;
     dns-status) dns_status ;;
     dns-repair) dns_repair ;;
     sync-clients) sync_clients_cmd ;;
-    *) die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair|sync-clients" ;;
+    *) die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients" ;;
   esac
 }
 

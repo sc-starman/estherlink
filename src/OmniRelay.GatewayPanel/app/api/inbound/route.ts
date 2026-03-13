@@ -16,7 +16,12 @@ export async function GET() {
     return NextResponse.json({
       inbound: snapshot.inbound,
       clients: snapshot.clients,
-      streamSettings: snapshot.streamSettings ?? {}
+      streamSettings: snapshot.streamSettings ?? {},
+      capabilities: snapshot.capabilities ?? {
+        supportsTrafficLimit: false,
+        supportsDurationLimit: false,
+        supportsUsageAccounting: false
+      }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to query inbound.";

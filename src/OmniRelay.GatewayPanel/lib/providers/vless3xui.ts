@@ -2,16 +2,35 @@ import QRCode from "qrcode";
 import { randomUUID } from "node:crypto";
 import { type OmniSession } from "@/lib/session";
 import { getInboundId, xuiJson } from "@/lib/xui";
-import { type ClientConfigPayload, type GatewayClientRecord, type GatewayInboundSnapshot, type GatewayProtocolProvider, resolveGatewayHost, safeParseJson } from "@/lib/providers/types";
+import { applyXuiClientAccounting, fetchXuiClientUsage, XUI_ACCOUNTING_CAPABILITIES } from "@/lib/providers/xui-accounting";
+import {
+  type ClientConfigPayload,
+  type GatewayClientCreateOptions,
+  type GatewayClientRecord,
+  type GatewayInboundSnapshot,
+  type GatewayProtocolProvider,
+  resolveGatewayHost,
+  safeParseJson
+} from "@/lib/providers/types";
 
-function generateClientPayload(email: string): GatewayClientRecord {
+function normalizeClientOptions(options?: GatewayClientCreateOptions): Required<GatewayClientCreateOptions> {
+  const totalGB = Number(options?.totalGB ?? 0);
+  const expiryTime = Number(options?.expiryTime ?? 0);
+  return {
+    totalGB: Number.isFinite(totalGB) && totalGB >= 0 ? totalGB : 0,
+    expiryTime: Number.isFinite(expiryTime) && expiryTime >= 0 ? expiryTime : 0
+  };
+}
+
+function generateClientPayload(email: string, options?: GatewayClientCreateOptions): GatewayClientRecord {
+  const normalized = normalizeClientOptions(options);
   return {
     id: randomUUID(),
     flow: "xtls-rprx-vision",
     email,
     limitIp: 0,
-    totalGB: 0,
-    expiryTime: 0,
+    totalGB: normalized.totalGB,
+    expiryTime: normalized.expiryTime,
     enable: true,
     tgId: "",
     subId: randomUUID().replace(/-/g, "").slice(0, 16),
@@ -29,6 +48,7 @@ export class VlessReality3xuiProvider implements GatewayProtocolProvider {
     const inbound = response.obj ?? {};
     const settings = safeParseJson<{ clients?: GatewayClientRecord[] }>(inbound.settings, { clients: [] });
     const streamSettings = safeParseJson<Record<string, unknown>>(inbound.streamSettings, {});
+    const usage = await fetchXuiClientUsage(session, inboundId, inbound);
 
     return {
       inbound: {
@@ -38,14 +58,15 @@ export class VlessReality3xuiProvider implements GatewayProtocolProvider {
         remark: String(inbound.remark ?? "OmniRelay Managed VLESS"),
         enable: Boolean(inbound.enable ?? true)
       },
-      clients: settings.clients ?? [],
-      streamSettings
+      clients: applyXuiClientAccounting(settings.clients ?? [], usage.byId, usage.byEmail),
+      streamSettings,
+      capabilities: XUI_ACCOUNTING_CAPABILITIES
     };
   }
 
-  public async addClient(session: OmniSession, email: string): Promise<GatewayClientRecord> {
+  public async addClient(session: OmniSession, email: string, options?: GatewayClientCreateOptions): Promise<GatewayClientRecord> {
     const inboundId = getInboundId();
-    const client = generateClientPayload(email);
+    const client = generateClientPayload(email, options);
     const form = new URLSearchParams();
     form.set("id", inboundId);
     form.set("settings", JSON.stringify({ clients: [client] }));

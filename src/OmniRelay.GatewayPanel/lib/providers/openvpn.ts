@@ -5,14 +5,92 @@ import { promisify } from "node:util";
 import { randomBytes, randomUUID } from "node:crypto";
 import QRCode from "qrcode";
 import { type OmniSession } from "@/lib/session";
-import { type ClientConfigPayload, type GatewayClientRecord, type GatewayInboundSnapshot, type GatewayProtocolProvider } from "@/lib/providers/types";
+import {
+  type ClientConfigPayload,
+  type GatewayClientCreateOptions,
+  type GatewayClientRecord,
+  type GatewayInboundSnapshot,
+  type GatewayProtocolProvider
+} from "@/lib/providers/types";
+
+const OPENVPN_ACCOUNTING_CAPABILITIES = {
+  supportsTrafficLimit: true,
+  supportsDurationLimit: true,
+  supportsUsageAccounting: true
+} as const;
 
 const exec = promisify(execCallback);
 const DEFAULT_SYNC_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
+const DEFAULT_ACCOUNTING_DB = "/etc/omnirelay/gateway/openvpn/accounting.db";
 
 interface OpenVpnClientRecord extends GatewayClientRecord {
   username: string;
   password: string;
+  totalGB: number;
+  expiryTime: number;
+}
+
+interface OpenVpnAccountingSource {
+  getCapabilities(): typeof OPENVPN_ACCOUNTING_CAPABILITIES;
+  getUsageByClientId(clientIds: string[]): Promise<Map<string, number>>;
+}
+
+class LocalSqliteOpenVpnAccountingSource implements OpenVpnAccountingSource {
+  public getCapabilities(): typeof OPENVPN_ACCOUNTING_CAPABILITIES {
+    return OPENVPN_ACCOUNTING_CAPABILITIES;
+  }
+
+  public async getUsageByClientId(clientIds: string[]): Promise<Map<string, number>> {
+    if (clientIds.length === 0) {
+      return new Map();
+    }
+
+    const dbPath = getAccountingDbPath();
+    try {
+      await fs.access(dbPath);
+    } catch {
+      return new Map();
+    }
+
+    const quotedIds = clientIds
+      .map((id) => `'${escapeSqlLiteral(id)}'`)
+      .join(",");
+
+    if (!quotedIds) {
+      return new Map();
+    }
+
+    try {
+      const { stdout } = await exec(
+        `sqlite3 -csv -noheader "${dbPath}" "SELECT client_id, used_bytes FROM usage_totals WHERE client_id IN (${quotedIds});"`
+      );
+      const usageMap = new Map<string, number>();
+      for (const line of stdout.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+
+        const commaIndex = trimmed.indexOf(",");
+        if (commaIndex <= 0) {
+          continue;
+        }
+
+        const clientId = trimmed.slice(0, commaIndex);
+        const usedRaw = trimmed.slice(commaIndex + 1);
+        const usedBytes = Number.parseInt(usedRaw, 10);
+        if (!Number.isFinite(usedBytes) || usedBytes < 0) {
+          continue;
+        }
+
+        usageMap.set(clientId, usedBytes);
+      }
+
+      return usageMap;
+    } catch {
+      return new Map();
+    }
+  }
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -30,6 +108,14 @@ function getExportsDir(): string {
 
 function getPublicPort(): number {
   return parsePort(process.env.OPENVPN_PUBLIC_PORT, 443);
+}
+
+function getAccountingDbPath(): string {
+  return process.env.OPENVPN_ACCOUNTING_DB?.trim() || DEFAULT_ACCOUNTING_DB;
+}
+
+function escapeSqlLiteral(value: string): string {
+  return value.replace(/'/g, "''");
 }
 
 function normalizeSudoCommand(command: string): string {
@@ -50,6 +136,24 @@ function randomAlphaNum(length: number): string {
     .toString("base64")
     .replace(/[^a-zA-Z0-9]/g, "")
     .slice(0, length);
+}
+
+function normalizeTotalGB(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 0;
+  }
+
+  return numeric;
+}
+
+function normalizeExpiryTime(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 0;
+  }
+
+  return Math.trunc(numeric);
 }
 
 function toSafeUsername(seed: string): string {
@@ -91,7 +195,9 @@ async function readClients(): Promise<OpenVpnClientRecord[]> {
         email: String((item as Record<string, unknown>).email ?? ""),
         enable: Boolean((item as Record<string, unknown>).enable ?? true),
         username: String((item as Record<string, unknown>).username ?? ""),
-        password: String((item as Record<string, unknown>).password ?? "")
+        password: String((item as Record<string, unknown>).password ?? ""),
+        totalGB: normalizeTotalGB((item as Record<string, unknown>).totalGB),
+        expiryTime: normalizeExpiryTime((item as Record<string, unknown>).expiryTime)
       }))
       .filter((item) => item.id && item.email && item.username && item.password);
   } catch {
@@ -137,9 +243,16 @@ async function syncOpenVpn(): Promise<void> {
 
 export class OpenVpnProvider implements GatewayProtocolProvider {
   public readonly protocolId = "openvpn_tcp_relay";
+  private readonly accountingSource: OpenVpnAccountingSource;
+
+  public constructor(accountingSource: OpenVpnAccountingSource = new LocalSqliteOpenVpnAccountingSource()) {
+    this.accountingSource = accountingSource;
+  }
 
   public async getInbound(_session: OmniSession): Promise<GatewayInboundSnapshot> {
     const clients = await readClients();
+    const usageByClientId = await this.accountingSource.getUsageByClientId(clients.map((item) => item.id));
+    const capabilities = this.accountingSource.getCapabilities();
     return {
       inbound: {
         id: 1,
@@ -151,12 +264,16 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       clients: clients.map((item) => ({
         id: item.id,
         email: item.email,
-        enable: item.enable
-      }))
+        enable: item.enable,
+        totalGB: item.totalGB,
+        expiryTime: item.expiryTime,
+        usedBytes: usageByClientId.get(item.id) ?? null
+      })),
+      capabilities
     };
   }
 
-  public async addClient(_session: OmniSession, email: string): Promise<GatewayClientRecord> {
+  public async addClient(_session: OmniSession, email: string, options?: GatewayClientCreateOptions): Promise<GatewayClientRecord> {
     const normalizedEmail = String(email ?? "").trim();
     if (!normalizedEmail) {
       throw new Error("Client email is required.");
@@ -169,7 +286,9 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       email: normalizedEmail,
       enable: true,
       username: makeUsername(normalizedEmail, usernames),
-      password: randomAlphaNum(24)
+      password: randomAlphaNum(24),
+      totalGB: normalizeTotalGB(options?.totalGB),
+      expiryTime: normalizeExpiryTime(options?.expiryTime)
     };
 
     clients.push(client);
@@ -178,7 +297,10 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
     return {
       id: client.id,
       email: client.email,
-      enable: client.enable
+      enable: client.enable,
+      totalGB: client.totalGB,
+      expiryTime: client.expiryTime,
+      usedBytes: null
     };
   }
 
@@ -197,7 +319,9 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
     clients[index] = {
       ...clients[index],
       email: String(client.email ?? clients[index].email).trim() || clients[index].email,
-      enable: Boolean(client.enable)
+      enable: Boolean(client.enable),
+      totalGB: normalizeTotalGB(client.totalGB ?? clients[index].totalGB),
+      expiryTime: normalizeExpiryTime(client.expiryTime ?? clients[index].expiryTime)
     };
 
     await writeClients(clients);
