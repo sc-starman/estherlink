@@ -14,6 +14,14 @@ public sealed class GatewayUiStateModel
     public string SelectedGatewayProtocol { get; set; } = GatewayProtocols.VlessReality3xui;
     public string GatewayPublicPortText { get; set; } = "443";
     public string GatewayPanelPortText { get; set; } = "2054";
+    public string GatewayPanelConfiguredUser { get; set; } = string.Empty;
+    public string EncryptedGatewayPanelConfiguredPassword { get; set; } = string.Empty;
+    public string GatewayPanelDomain { get; set; } = string.Empty;
+    public bool GatewayPanelDomainOnly { get; set; } = false;
+    public bool GatewayPanelUseSsl { get; set; } = false;
+    public string GatewayPanelSslMode { get; set; } = "letsencrypt";
+    public string GatewayPanelUploadedCertPath { get; set; } = string.Empty;
+    public string GatewayPanelUploadedKeyPath { get; set; } = string.Empty;
     public string GatewayBackendPortText { get; set; } = "15000";
     public string GatewaySni { get; set; } = string.Empty;
     public string GatewayTarget { get; set; } = string.Empty;

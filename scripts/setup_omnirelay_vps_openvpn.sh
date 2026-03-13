@@ -21,6 +21,12 @@ OPENVPN_CLIENT_DNS="1.1.1.1,8.8.8.8"
 PANEL_USER=""
 PANEL_PASSWORD=""
 PANEL_BASE_PATH=""
+PANEL_DOMAIN=""
+PANEL_DOMAIN_ONLY="false"
+PANEL_SSL_ENABLED="false"
+PANEL_SSL_MODE="letsencrypt"
+PANEL_CERT_FILE=""
+PANEL_KEY_FILE=""
 TUNNEL_USER=""
 TUNNEL_AUTH="host_key"
 
@@ -30,6 +36,7 @@ DNS_PROFILE_FILE="${METADATA_DIR}/dns_profile.json"
 OMNIPANEL_ENV_FILE="${METADATA_DIR}/omnipanel.env"
 OMNIPANEL_SERVICE="omnirelay-omnipanel"
 OMNIPANEL_APP_DIR="/opt/omnirelay/omni-gateway"
+OMNIPANEL_COMMON_SCRIPT="/tmp/omnirelay-omnipanel-common.sh"
 PANEL_AUTH_FILE="${OMNIPANEL_APP_DIR}/panel-auth.json"
 APT_PROXY_FILE="/etc/apt/apt.conf.d/99-omnirelay-socks"
 OPENVPN_SYNC_COMMAND="/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients"
@@ -74,6 +81,28 @@ check_listener(){ ss -lnt "( sport = :$1 )" 2>/dev/null | awk 'NR>1{print}' | gr
 choose_port(){ for _ in $(seq 1 200); do p=$((RANDOM%30000+22000)); [[ "$(check_listener "$p")" == "false" ]] && echo "$p" && return 0; done; die "cannot allocate random port"; }
 ensure_meta(){ install -d -m 0755 "$METADATA_DIR"; }
 
+normalize_bool(){
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$value" in
+    true|1|yes|y) printf 'true' ;;
+    false|0|no|n) printf 'false' ;;
+    *) die "Boolean value expected but received '${1}'." ;;
+  esac
+}
+
+load_omnipanel_common(){
+  local candidate
+  for candidate in "$OMNIPANEL_COMMON_SCRIPT" "/usr/local/lib/omnirelay/omnipanel-common.sh" "$(dirname "$0")/setup_omnirelay_omnipanel_common.sh"; do
+    if [[ -f "$candidate" ]]; then
+      # shellcheck disable=SC1090
+      source "$candidate"
+      return 0
+    fi
+  done
+  die "Shared OmniPanel helper script not found. Expected ${OMNIPANEL_COMMON_SCRIPT}."
+}
+
 usage(){
   cat <<EOF
 Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients> [options]
@@ -94,6 +123,12 @@ Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|get-protocol|status|h
 --panel-user <name>
 --panel-password <password>
 --panel-base-path <path>
+--panel-domain <host>
+--panel-domain-only <true|false>
+--panel-ssl <true|false>
+--panel-ssl-mode <letsencrypt|uploaded>
+--panel-cert-file <path>
+--panel-key-file <path>
 --json
 EOF
 }
@@ -772,34 +807,22 @@ EOF
 
 configure_nginx(){
   local panel_internal_port
-  progress 76 "Configuring nginx HTTPS reverse-proxy for OmniPanel"
+  progress 76 "Configuring nginx reverse-proxy for OmniPanel"
   panel_internal_port="$(resolve_omnipanel_internal_port || true)"
   [[ -n "$panel_internal_port" ]] || die "Cannot determine OmniPanel internal port for nginx config."
-  gen_cert
-  cat > /etc/nginx/sites-available/omnirelay-omnipanel.conf <<EOF
-server {
-    listen ${PANEL_PORT} ssl;
-    server_name _;
-    ssl_certificate ${METADATA_DIR}/certs/omnipanel.crt;
-    ssl_certificate_key ${METADATA_DIR}/certs/omnipanel.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    location / {
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_pass http://127.0.0.1:${panel_internal_port};
-    }
-}
-EOF
-  ln -sfn /etc/nginx/sites-available/omnirelay-omnipanel.conf /etc/nginx/sites-enabled/omnirelay-omnipanel.conf
-  rm -f /etc/nginx/sites-enabled/default || true
-  nginx -t
-  systemctl enable --now nginx
-  systemctl restart nginx
-  verify_nginx_panel_proxy
+  load_omnipanel_common
+  omnipanel_configure_nginx_proxy \
+    "$PANEL_PORT" \
+    "$panel_internal_port" \
+    "$METADATA_DIR" \
+    "$PANEL_DOMAIN" \
+    "$PANEL_DOMAIN_ONLY" \
+    "$PANEL_SSL_ENABLED" \
+    "$PANEL_SSL_MODE" \
+    "$PANEL_CERT_FILE" \
+    "$PANEL_KEY_FILE" \
+    "$(hostname -I 2>/dev/null | awk '{print $1}')" \
+    "$VPS_IP"
 }
 
 configure_host_firewall(){
@@ -808,6 +831,9 @@ configure_host_firewall(){
   ufw allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
   ufw allow "${PUBLIC_PORT}/tcp" >/dev/null 2>&1 || true
   ufw allow "${SSH_PORT}/tcp" >/dev/null 2>&1 || true
+  if [[ "$PANEL_SSL_ENABLED" == "true" && "$PANEL_SSL_MODE" == "letsencrypt" ]]; then
+    ufw allow "80/tcp" >/dev/null 2>&1 || true
+  fi
 }
 
 write_metadata(){
@@ -1119,6 +1145,10 @@ install_cmd(){
   progress 3 "Validating platform"
   ensure_meta
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
+  install -d -m 0755 /usr/local/lib/omnirelay
+  if [[ -f "$OMNIPANEL_COMMON_SCRIPT" ]]; then
+    install -m 0755 "$OMNIPANEL_COMMON_SCRIPT" /usr/local/lib/omnirelay/omnipanel-common.sh
+  fi
   if [[ -x "${IPSEC_RULES_CLEAR_SCRIPT:-}" ]]; then
     "${IPSEC_RULES_CLEAR_SCRIPT}" >/dev/null 2>&1 || true
   fi
@@ -1160,9 +1190,11 @@ install_cmd(){
 
   progress 100 "Gateway install completed"
   local endpoint
-  endpoint="${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+  endpoint="${PANEL_DOMAIN:-${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}}"
   [[ -n "$endpoint" ]] || endpoint="<VPS_IP_OR_HOSTNAME>"
-  log "OmniPanel URL: https://${endpoint}:${PANEL_PORT}/ | Username: ${PANEL_USER} | Password: ${PANEL_PASSWORD}"
+  local scheme="http"
+  [[ "$PANEL_SSL_ENABLED" == "true" ]] && scheme="https"
+  log "OmniPanel URL: ${scheme}://${endpoint}:${PANEL_PORT}/ | Username: ${PANEL_USER} | Password: ${PANEL_PASSWORD}"
 }
 
 start_cmd(){
@@ -1201,7 +1233,7 @@ uninstall_cmd(){
     /etc/systemd/system/omnirelay-ipsec-accounting.timer \
     /etc/systemd/system/omnirelay-redsocks.service
   rm -f /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf
-  rm -f /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /etc/sudoers.d/omnigateway-singbox /usr/local/sbin/omnirelay-gatewayctl
+  rm -f /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /etc/sudoers.d/omnigateway-singbox /usr/local/sbin/omnirelay-gatewayctl /usr/local/lib/omnirelay/omnipanel-common.sh
   rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf "$OPENVPN_STATUS_FILE" /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
   rm -rf "$METADATA_DIR" "$OMNIPANEL_APP_DIR"
   systemctl daemon-reload
@@ -1232,6 +1264,12 @@ parse_args(){
       --panel-user) PANEL_USER="${2:-}"; shift 2 ;;
       --panel-password) PANEL_PASSWORD="${2:-}"; shift 2 ;;
       --panel-base-path) PANEL_BASE_PATH="${2:-}"; shift 2 ;;
+      --panel-domain) PANEL_DOMAIN="${2:-}"; shift 2 ;;
+      --panel-domain-only) PANEL_DOMAIN_ONLY="${2:-}"; shift 2 ;;
+      --panel-ssl) PANEL_SSL_ENABLED="${2:-}"; shift 2 ;;
+      --panel-ssl-mode) PANEL_SSL_MODE="${2:-}"; shift 2 ;;
+      --panel-cert-file) PANEL_CERT_FILE="${2:-}"; shift 2 ;;
+      --panel-key-file) PANEL_KEY_FILE="${2:-}"; shift 2 ;;
       --json) STATUS_JSON=1; HEALTH_JSON=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown option: $1" ;;
@@ -1249,6 +1287,26 @@ main(){
   [[ "$DNS_MODE" == "hybrid" || "$DNS_MODE" == "doh" || "$DNS_MODE" == "udp" ]] || die "--dns-mode must be hybrid|doh|udp"
   [[ "$DNS_UDP_ONLY" == "true" || "$DNS_UDP_ONLY" == "false" ]] || die "--dns-udp-only must be true or false"
   [[ "$PUBLIC_PORT" != "$PANEL_PORT" ]] || die "--public-port and --panel-port must differ"
+  PANEL_DOMAIN="$(printf '%s' "$PANEL_DOMAIN" | tr -d '\r\n' | xargs)"
+  PANEL_DOMAIN_ONLY="$(normalize_bool "$PANEL_DOMAIN_ONLY")"
+  PANEL_SSL_ENABLED="$(normalize_bool "$PANEL_SSL_ENABLED")"
+  PANEL_SSL_MODE="$(printf '%s' "$PANEL_SSL_MODE" | tr '[:upper:]' '[:lower:]' | xargs)"
+  [[ "$PANEL_SSL_MODE" == "uploaded" ]] || PANEL_SSL_MODE="letsencrypt"
+
+  if [[ "$COMMAND" == "install" ]]; then
+    if [[ "$PANEL_DOMAIN_ONLY" == "true" && -z "$PANEL_DOMAIN" ]]; then
+      die "--panel-domain is required when --panel-domain-only=true."
+    fi
+    if [[ "$PANEL_SSL_ENABLED" == "true" && -z "$PANEL_DOMAIN" ]]; then
+      die "--panel-domain is required when --panel-ssl=true."
+    fi
+    if [[ "$PANEL_SSL_ENABLED" == "true" && "$PANEL_SSL_MODE" == "uploaded" ]]; then
+      [[ -n "$PANEL_CERT_FILE" ]] || die "--panel-cert-file is required for --panel-ssl-mode uploaded."
+      [[ -n "$PANEL_KEY_FILE" ]] || die "--panel-key-file is required for --panel-ssl-mode uploaded."
+      [[ -f "$PANEL_CERT_FILE" ]] || die "--panel-cert-file not found: ${PANEL_CERT_FILE}"
+      [[ -f "$PANEL_KEY_FILE" ]] || die "--panel-key-file not found: ${PANEL_KEY_FILE}"
+    fi
+  fi
 
   case "$COMMAND" in
     install) install_cmd ;;

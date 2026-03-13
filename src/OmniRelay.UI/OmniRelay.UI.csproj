@@ -35,6 +35,10 @@
              Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_ipsec_l2tp.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_vps_ipsec_l2tp.sh" />
+    <Content Include="..\..\scripts\setup_omnirelay_omnipanel_common.sh"
+             Condition="Exists('..\\..\\scripts\\setup_omnirelay_omnipanel_common.sh')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayScripts\\setup_omnirelay_omnipanel_common.sh" />
     <Content Include="..\OmniRelay.Installer\Product.wxs"
              Condition="Exists('..\\OmniRelay.Installer\\Product.wxs')"
              CopyToOutputDirectory="PreserveNewest"

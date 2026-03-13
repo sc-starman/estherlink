@@ -7,6 +7,7 @@ using OmniRelay.UI.Views.Dialogs;
 using Microsoft.Win32;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Windows;
@@ -23,6 +24,8 @@ public partial class GatewayManagementViewModel : ObservableObject
     private readonly ISudoSessionSecretCache _sudoCache;
 
     private readonly StringBuilder _operationLogBuilder = new();
+    private GatewayOperationDialog? _gatewayOperationDialog;
+    private CancellationTokenSource? _gatewayOperationCts;
 
     public GatewayManagementViewModel(
         GatewayOrchestratorService orchestrator,
@@ -146,6 +149,36 @@ public partial class GatewayManagementViewModel : ObservableObject
     public string ProtocolPresetSwitchText =>
         IsVlessProtocolSelected ? "Switch REALITY Pair" : "Switch Camouflage";
 
+    public bool IsGatewayPanelSslEnabled => State.GatewayPanelUseSsl;
+
+    public bool IsGatewayPanelSslUploadMode =>
+        IsGatewayPanelSslEnabled &&
+        string.Equals(NormalizePanelSslMode(State.GatewayPanelSslMode), "uploaded", StringComparison.OrdinalIgnoreCase);
+
+    public bool IsGatewayPanelSslLetsEncryptMode =>
+        IsGatewayPanelSslEnabled &&
+        string.Equals(NormalizePanelSslMode(State.GatewayPanelSslMode), "letsencrypt", StringComparison.OrdinalIgnoreCase);
+
+    public int GatewayPanelSslModeIndex
+    {
+        get => string.Equals(NormalizePanelSslMode(State.GatewayPanelSslMode), "uploaded", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        set
+        {
+            State.GatewayPanelSslMode = value == 1 ? "uploaded" : "letsencrypt";
+            OnPropertyChanged(nameof(IsGatewayPanelSslUploadMode));
+            OnPropertyChanged(nameof(IsGatewayPanelSslLetsEncryptMode));
+        }
+    }
+
+    public string GatewayPanelConfiguredPasswordState =>
+        string.IsNullOrWhiteSpace(State.GatewayPanelConfiguredPassword) ? "Not set" : "Configured";
+
+    public string GatewayPanelUploadedCertState =>
+        string.IsNullOrWhiteSpace(State.GatewayPanelUploadedCertPath) ? "Not set" : "Configured";
+
+    public string GatewayPanelUploadedKeyState =>
+        string.IsNullOrWhiteSpace(State.GatewayPanelUploadedKeyPath) ? "Not set" : "Configured";
+
     [ObservableProperty]
     private string feedback = string.Empty;
 
@@ -171,16 +204,33 @@ public partial class GatewayManagementViewModel : ObservableObject
     private string operationLog = string.Empty;
 
     [ObservableProperty]
-    private bool hasCachedSudoPassword;
+    private string gatewayOperationTitle = string.Empty;
 
     [ObservableProperty]
-    private bool isPanelPasswordVisible;
+    private bool isGatewayOperationRunning;
+
+    [ObservableProperty]
+    private bool isGatewayOperationInstallResultVisible;
+
+    [ObservableProperty]
+    private string gatewayOperationPanelUrl = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayOperationPanelUsername = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayOperationPanelPassword = string.Empty;
+
+    [ObservableProperty]
+    private bool isGatewayOperationPanelPasswordVisible;
+
+    [ObservableProperty]
+    private bool hasCachedSudoPassword;
 
     [ObservableProperty]
     private bool isFeedbackVisible;
 
     private CancellationTokenSource? _feedbackDismissCts;
-    private CancellationTokenSource? _gatewayProgressHideCts;
 
     [ObservableProperty]
     private bool isGatewayProgressVisible;
@@ -197,13 +247,17 @@ public partial class GatewayManagementViewModel : ObservableObject
     public string GatewayProgressPercentText =>
         IsGatewayProgressIndeterminate ? string.Empty : $"{Math.Round(GatewayProgressPercent):0}%";
 
-    public string PanelPasswordDisplay =>
-        IsPanelPasswordVisible
-            ? (State.GatewayInitialPanelPassword ?? string.Empty)
-            : MaskSecret(State.GatewayInitialPanelPassword);
+    public string GatewayOperationPanelPasswordDisplay =>
+        IsGatewayOperationPanelPasswordVisible
+            ? (GatewayOperationPanelPassword ?? string.Empty)
+            : MaskSecret(GatewayOperationPanelPassword);
 
-    public string PanelPasswordToggleText => IsPanelPasswordVisible ? "Hide" : "Show";
-    public string PanelPasswordToggleIconGlyph => IsPanelPasswordVisible ? "\uE8F4" : "\uE890";
+    public string GatewayOperationPanelPasswordToggleText => IsGatewayOperationPanelPasswordVisible ? "Hide" : "Show";
+    public string GatewayOperationPanelPasswordToggleIconGlyph => IsGatewayOperationPanelPasswordVisible ? "\uE8F4" : "\uE890";
+
+    public bool CanCancelGatewayOperation => IsGatewayOperationRunning;
+    public bool CanCloseGatewayOperationDialog => !IsGatewayOperationRunning && !IsGatewayOperationInstallResultVisible;
+    public bool CanAcknowledgeGatewayInstallSecrets => !IsGatewayOperationRunning && IsGatewayOperationInstallResultVisible;
 
     private bool CanRun() => !IsBusy;
 
@@ -230,18 +284,45 @@ public partial class GatewayManagementViewModel : ObservableObject
         CheckGatewayDnsCommand.NotifyCanExecuteChanged();
         RepairGatewayDnsCommand.NotifyCanExecuteChanged();
         ClearCachedSudoPasswordCommand.NotifyCanExecuteChanged();
+        SetGatewayPanelPasswordCommand.NotifyCanExecuteChanged();
+        ClearGatewayPanelPasswordCommand.NotifyCanExecuteChanged();
+        BrowseGatewayPanelCertCommand.NotifyCanExecuteChanged();
+        ClearGatewayPanelCertPathCommand.NotifyCanExecuteChanged();
+        BrowseGatewayPanelKeyCommand.NotifyCanExecuteChanged();
+        ClearGatewayPanelKeyPathCommand.NotifyCanExecuteChanged();
+        CancelGatewayOperationCommand.NotifyCanExecuteChanged();
+        CloseGatewayOperationDialogCommand.NotifyCanExecuteChanged();
+        AcknowledgeGatewayInstallSecretsCommand.NotifyCanExecuteChanged();
     }
 
-    partial void OnIsPanelPasswordVisibleChanged(bool value)
+    partial void OnIsGatewayOperationPanelPasswordVisibleChanged(bool value)
     {
-        OnPropertyChanged(nameof(PanelPasswordDisplay));
-        OnPropertyChanged(nameof(PanelPasswordToggleText));
-        OnPropertyChanged(nameof(PanelPasswordToggleIconGlyph));
+        OnPropertyChanged(nameof(GatewayOperationPanelPasswordDisplay));
+        OnPropertyChanged(nameof(GatewayOperationPanelPasswordToggleText));
+        OnPropertyChanged(nameof(GatewayOperationPanelPasswordToggleIconGlyph));
     }
 
     partial void OnGatewayProgressPercentChanged(double value)
     {
         OnPropertyChanged(nameof(GatewayProgressPercentText));
+    }
+
+    partial void OnIsGatewayOperationRunningChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanCancelGatewayOperation));
+        OnPropertyChanged(nameof(CanCloseGatewayOperationDialog));
+        OnPropertyChanged(nameof(CanAcknowledgeGatewayInstallSecrets));
+        CancelGatewayOperationCommand.NotifyCanExecuteChanged();
+        CloseGatewayOperationDialogCommand.NotifyCanExecuteChanged();
+        AcknowledgeGatewayInstallSecretsCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsGatewayOperationInstallResultVisibleChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanCloseGatewayOperationDialog));
+        OnPropertyChanged(nameof(CanAcknowledgeGatewayInstallSecrets));
+        CloseGatewayOperationDialogCommand.NotifyCanExecuteChanged();
+        AcknowledgeGatewayInstallSecretsCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnIsGatewayProgressIndeterminateChanged(bool value)
@@ -433,318 +514,176 @@ public partial class GatewayManagementViewModel : ObservableObject
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
+    private void SetGatewayPanelPassword()
+    {
+        var dialog = new SecretInputDialog(
+            "OmniPanel Password",
+            "Enter optional OmniPanel password. Leave empty to auto-generate at install.",
+            State.GatewayPanelConfiguredPassword)
+        {
+            Owner = Application.Current?.MainWindow
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            State.GatewayPanelConfiguredPassword = dialog.SecretValue;
+            OnPropertyChanged(nameof(GatewayPanelConfiguredPasswordState));
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private void ClearGatewayPanelPassword()
+    {
+        State.GatewayPanelConfiguredPassword = string.Empty;
+        OnPropertyChanged(nameof(GatewayPanelConfiguredPasswordState));
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private void BrowseGatewayPanelCert()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Select TLS certificate file",
+            Filter = "Certificate files|*.crt;*.pem;*.cer|All files|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            State.GatewayPanelUploadedCertPath = dialog.FileName;
+            OnPropertyChanged(nameof(GatewayPanelUploadedCertState));
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private void ClearGatewayPanelCertPath()
+    {
+        State.GatewayPanelUploadedCertPath = string.Empty;
+        OnPropertyChanged(nameof(GatewayPanelUploadedCertState));
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private void BrowseGatewayPanelKey()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Select TLS private key file",
+            Filter = "Private key files|*.key;*.pem|All files|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            State.GatewayPanelUploadedKeyPath = dialog.FileName;
+            OnPropertyChanged(nameof(GatewayPanelUploadedKeyState));
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private void ClearGatewayPanelKeyPath()
+    {
+        State.GatewayPanelUploadedKeyPath = string.Empty;
+        OnPropertyChanged(nameof(GatewayPanelUploadedKeyState));
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task GatewayBootstrapCheckAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
+        await RunGatewayOperationInDialogAsync(
+            "Gateway Bootstrap Check",
+            (request, sudo, progress, token) => _gatewayDeployment.CheckGatewayBootstrapAsync(request, sudo, progress, token),
+            async (request, sudo, progress, op, token) =>
             {
-                Feedback = "Gateway bootstrap check canceled. Sudo password is required.";
-                AppendLog(Feedback);
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Running gateway bootstrap check...");
-            var success = false;
-            var finalMessage = "Gateway bootstrap check did not complete.";
-            try
-            {
-                var op = await _gatewayDeployment.CheckGatewayBootstrapAsync(request, sudo, progress);
                 GatewayBootstrapState = op.Success ? "Passed" : "Failed";
-                Feedback = op.Message;
-                AppendLog(op.Message);
-                success = op.Success;
-                finalMessage = op.Message;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+                await Task.CompletedTask;
+            });
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task InstallGatewayAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
+        await RunGatewayOperationInDialogAsync(
+            "Gateway Install",
+            (request, sudo, progress, token) => _gatewayDeployment.InstallGatewayAsync(request, sudo, progress, token),
+            async (request, sudo, progress, op, token) =>
             {
-                Feedback = "Gateway install canceled. Sudo password is required.";
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Installing gateway...");
-            var success = false;
-            var finalMessage = "Gateway install did not complete.";
-            try
-            {
-                var op = await _gatewayDeployment.InstallGatewayAsync(request, sudo, progress);
-                Feedback = op.Message;
-                AppendLog(op.Message);
-                if (op.Success)
-                {
-                    if (!string.IsNullOrWhiteSpace(op.PanelUrl))
-                    {
-                        State.GatewayPanelUrl = op.PanelUrl;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(op.PanelUsername))
-                    {
-                        State.GatewayPanelUsername = op.PanelUsername;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(op.InitialPanelPassword))
-                    {
-                        State.GatewayInitialPanelPassword = op.InitialPanelPassword;
-                    }
-                }
-
                 await RefreshGatewayStatusAsync(sudo);
                 await RefreshGatewayHealthAsync(request, sudo, progress);
-                success = op.Success;
-                finalMessage = op.Message;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+                PrepareInstallSecretsForOneTimeDisplay(op);
+            });
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task StartGatewayAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
-            {
-                Feedback = "Gateway start canceled. Sudo password is required.";
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Starting gateway services...");
-            var success = false;
-            var finalMessage = "Gateway start did not complete.";
-            try
-            {
-                var op = await _gatewayDeployment.StartGatewayAsync(request, sudo, progress);
-                Feedback = op.Message;
-                AppendLog(op.Message);
-                await RefreshGatewayStatusAsync(sudo);
-                success = op.Success;
-                finalMessage = op.Message;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+        await RunGatewayOperationInDialogAsync(
+            "Gateway Start",
+            (request, sudo, progress, token) => _gatewayDeployment.StartGatewayAsync(request, sudo, progress, token),
+            async (request, sudo, progress, op, token) => await RefreshGatewayStatusAsync(sudo));
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task StopGatewayAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
-            {
-                Feedback = "Gateway stop canceled. Sudo password is required.";
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Stopping gateway services...");
-            var success = false;
-            var finalMessage = "Gateway stop did not complete.";
-            try
-            {
-                var op = await _gatewayDeployment.StopGatewayAsync(request, sudo, progress);
-                Feedback = op.Message;
-                AppendLog(op.Message);
-                await RefreshGatewayStatusAsync(sudo);
-                success = op.Success;
-                finalMessage = op.Message;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+        await RunGatewayOperationInDialogAsync(
+            "Gateway Stop",
+            (request, sudo, progress, token) => _gatewayDeployment.StopGatewayAsync(request, sudo, progress, token),
+            async (request, sudo, progress, op, token) => await RefreshGatewayStatusAsync(sudo));
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task UninstallGatewayAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
+        await RunGatewayOperationInDialogAsync(
+            "Gateway Uninstall",
+            (request, sudo, progress, token) => _gatewayDeployment.UninstallGatewayAsync(request, sudo, progress, token),
+            async (request, sudo, progress, op, token) =>
             {
-                Feedback = "Gateway uninstall canceled. Sudo password is required.";
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Uninstalling gateway...");
-            var success = false;
-            var finalMessage = "Gateway uninstall did not complete.";
-            try
-            {
-                var op = await _gatewayDeployment.UninstallGatewayAsync(request, sudo, progress);
-                Feedback = op.Message;
-                AppendLog(op.Message);
                 await RefreshGatewayStatusAsync(sudo);
                 GatewayHealthReport = null;
                 GatewayHealthSummary = "Not checked";
-                success = op.Success;
-                finalMessage = op.Message;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+            });
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task HealthCheckGatewayAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
+        await RunGatewayOperationInDialogAsync(
+            "Gateway Health Check",
+            async (request, sudo, progress, token) =>
             {
-                Feedback = "Gateway health check canceled. Sudo password is required.";
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Checking gateway health...");
-            var success = false;
-            var finalMessage = "Gateway health check did not complete.";
-            try
-            {
-                success = await RefreshGatewayHealthAsync(request, sudo, progress);
-                finalMessage = GatewayHealthSummary;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+                var ok = await RefreshGatewayHealthAsync(request, sudo, progress);
+                return new GatewayOperationResult(ok, GatewayHealthSummary);
+            });
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task ApplyGatewayDnsAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
-            {
-                Feedback = "DNS apply canceled. Sudo password is required.";
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Applying gateway DNS profile...");
-            var success = false;
-            var finalMessage = "DNS apply did not complete.";
-            try
-            {
-                var op = await _gatewayDeployment.ApplyGatewayDnsAsync(request, sudo, progress);
-                Feedback = op.Message;
-                AppendLog(op.Message);
-                await RefreshGatewayHealthAsync(request, sudo, progress);
-                success = op.Success;
-                finalMessage = op.Message;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+        await RunGatewayOperationInDialogAsync(
+            "Apply DNS Profile",
+            (request, sudo, progress, token) => _gatewayDeployment.ApplyGatewayDnsAsync(request, sudo, progress, token),
+            async (request, sudo, progress, op, token) => await RefreshGatewayHealthAsync(request, sudo, progress));
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task CheckGatewayDnsAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
-            {
-                Feedback = "DNS check canceled. Sudo password is required.";
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Checking gateway DNS path...");
-            var success = false;
-            var finalMessage = "DNS check did not complete.";
-            try
-            {
-                var op = await _gatewayDeployment.CheckGatewayDnsAsync(request, sudo, progress);
-                Feedback = op.Message;
-                AppendLog(op.Message);
-                await RefreshGatewayHealthAsync(request, sudo, progress);
-                success = op.Success;
-                finalMessage = op.Message;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+        await RunGatewayOperationInDialogAsync(
+            "Check DNS Path",
+            (request, sudo, progress, token) => _gatewayDeployment.CheckGatewayDnsAsync(request, sudo, progress, token),
+            async (request, sudo, progress, op, token) => await RefreshGatewayHealthAsync(request, sudo, progress));
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task RepairGatewayDnsAsync()
     {
-        await RunBusyAsync(async () =>
-        {
-            var sudo = EnsureSudoPassword();
-            if (sudo is null)
-            {
-                Feedback = "DNS repair canceled. Sudo password is required.";
-                return;
-            }
-
-            var request = BuildGatewayRequest();
-            var progress = CreateGatewayProgressReporter();
-            BeginGatewayProgress("Repairing gateway DNS path...");
-            var success = false;
-            var finalMessage = "DNS repair did not complete.";
-            try
-            {
-                var op = await _gatewayDeployment.RepairGatewayDnsAsync(request, sudo, progress);
-                Feedback = op.Message;
-                AppendLog(op.Message);
-                await RefreshGatewayHealthAsync(request, sudo, progress);
-                success = op.Success;
-                finalMessage = op.Message;
-            }
-            finally
-            {
-                EndGatewayProgress(success, finalMessage);
-            }
-        });
+        await RunGatewayOperationInDialogAsync(
+            "Repair DNS Path",
+            (request, sudo, progress, token) => _gatewayDeployment.RepairGatewayDnsAsync(request, sudo, progress, token),
+            async (request, sudo, progress, op, token) => await RefreshGatewayHealthAsync(request, sudo, progress));
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
@@ -756,16 +695,48 @@ public partial class GatewayManagementViewModel : ObservableObject
         AppendLog(Feedback);
     }
 
-    [RelayCommand]
-    private void TogglePanelPasswordVisibility()
+    [RelayCommand(CanExecute = nameof(CanCancelGatewayOperation))]
+    private void CancelGatewayOperation()
     {
-        IsPanelPasswordVisible = !IsPanelPasswordVisible;
+        if (!IsGatewayOperationRunning)
+        {
+            return;
+        }
+
+        _gatewayOperationCts?.Cancel();
+        AppendLog("Cancellation requested by user.");
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCloseGatewayOperationDialog))]
+    private void CloseGatewayOperationDialog()
+    {
+        IsGatewayProgressVisible = false;
+        _operationLogBuilder.Clear();
+        OperationLog = string.Empty;
+        ClearGatewayOperationInstallSecrets();
+        _gatewayOperationDialog?.Close();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanAcknowledgeGatewayInstallSecrets))]
+    private void AcknowledgeGatewayInstallSecrets()
+    {
+        ClearGatewayOperationInstallSecrets();
+        IsGatewayProgressVisible = false;
+        _operationLogBuilder.Clear();
+        OperationLog = string.Empty;
+        _gatewayOperationDialog?.Close();
     }
 
     [RelayCommand]
-    private void CopyPanelUsername()
+    private void ToggleGatewayOperationPanelPasswordVisibility()
     {
-        var username = State.GatewayPanelUsername?.Trim() ?? string.Empty;
+        IsGatewayOperationPanelPasswordVisible = !IsGatewayOperationPanelPasswordVisible;
+    }
+
+    [RelayCommand]
+    private void CopyGatewayOperationPanelUsername()
+    {
+        var username = GatewayOperationPanelUsername?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(username))
         {
             Feedback = "Panel username is empty.";
@@ -777,9 +748,9 @@ public partial class GatewayManagementViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void CopyPanelPassword()
+    private void CopyGatewayOperationPanelPassword()
     {
-        var password = State.GatewayInitialPanelPassword ?? string.Empty;
+        var password = GatewayOperationPanelPassword ?? string.Empty;
         if (string.IsNullOrWhiteSpace(password))
         {
             Feedback = "Panel password is empty.";
@@ -791,9 +762,9 @@ public partial class GatewayManagementViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void OpenPanelUrl()
+    private void OpenGatewayOperationPanelUrl()
     {
-        var panelUrl = State.GatewayPanelUrl?.Trim() ?? string.Empty;
+        var panelUrl = GatewayOperationPanelUrl?.Trim() ?? string.Empty;
         if (!Uri.TryCreate(panelUrl, UriKind.Absolute, out _))
         {
             Feedback = "Panel URL is not valid.";
@@ -811,6 +782,185 @@ public partial class GatewayManagementViewModel : ObservableObject
     private void DismissFeedback()
     {
         Feedback = string.Empty;
+    }
+
+    private async Task RunGatewayOperationInDialogAsync(
+        string title,
+        Func<GatewayDeploymentRequest, string, IProgress<DeploymentProgressSnapshot>, CancellationToken, Task<GatewayOperationResult>> executeAsync,
+        Func<GatewayDeploymentRequest, string, IProgress<DeploymentProgressSnapshot>, GatewayOperationResult, CancellationToken, Task>? afterOperationAsync = null)
+    {
+        await RunBusyAsync(async () =>
+        {
+            var sudo = EnsureSudoPassword();
+            if (sudo is null)
+            {
+                Feedback = $"{title} canceled. Sudo password is required.";
+                AppendLog(Feedback);
+                return;
+            }
+
+            GatewayDeploymentRequest request;
+            try
+            {
+                request = BuildGatewayRequest();
+            }
+            catch (Exception ex)
+            {
+                Feedback = ex.Message;
+                AppendLog(Feedback);
+                return;
+            }
+
+            ResetGatewayOperationDialogState(title);
+            _gatewayOperationDialog = new GatewayOperationDialog
+            {
+                Owner = Application.Current?.MainWindow,
+                DataContext = this
+            };
+
+            _gatewayOperationDialog.ContentRendered += (_, _) =>
+            {
+                _ = ExecuteGatewayOperationAsync(title, request, sudo, executeAsync, afterOperationAsync);
+            };
+
+            _gatewayOperationDialog.ShowDialog();
+            _gatewayOperationDialog = null;
+            await Task.CompletedTask;
+        });
+    }
+
+    private async Task ExecuteGatewayOperationAsync(
+        string title,
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        Func<GatewayDeploymentRequest, string, IProgress<DeploymentProgressSnapshot>, CancellationToken, Task<GatewayOperationResult>> executeAsync,
+        Func<GatewayDeploymentRequest, string, IProgress<DeploymentProgressSnapshot>, GatewayOperationResult, CancellationToken, Task>? afterOperationAsync)
+    {
+        if (IsGatewayOperationRunning)
+        {
+            return;
+        }
+
+        var progress = CreateGatewayProgressReporter();
+        BeginGatewayProgress(title);
+        IsGatewayOperationRunning = true;
+        _gatewayOperationCts?.Cancel();
+        _gatewayOperationCts?.Dispose();
+        _gatewayOperationCts = new CancellationTokenSource();
+        var token = _gatewayOperationCts.Token;
+
+        var success = false;
+        var finalMessage = $"{title} did not complete.";
+
+        try
+        {
+            var operation = await executeAsync(request, sudoPassword, progress, token);
+            var safeMessage = BuildSafeGatewayOperationMessage(operation);
+            Feedback = safeMessage;
+            AppendLog(safeMessage);
+            success = operation.Success;
+            finalMessage = safeMessage;
+
+            if (afterOperationAsync is not null)
+            {
+                await afterOperationAsync(request, sudoPassword, progress, operation, token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            finalMessage = $"{title} canceled.";
+            Feedback = finalMessage;
+            AppendLog(finalMessage);
+            success = false;
+        }
+        catch (Exception ex)
+        {
+            finalMessage = $"{title} failed: {ex.Message}";
+            Feedback = finalMessage;
+            AppendLog(finalMessage);
+            success = false;
+        }
+        finally
+        {
+            IsGatewayOperationRunning = false;
+            _gatewayOperationCts?.Dispose();
+            _gatewayOperationCts = null;
+            EndGatewayProgress(success, finalMessage);
+        }
+    }
+
+    private static string BuildSafeGatewayOperationMessage(GatewayOperationResult operation)
+    {
+        if (!operation.Success)
+        {
+            return operation.Message;
+        }
+
+        var hasPanelSecrets =
+            !string.IsNullOrWhiteSpace(operation.PanelUrl) &&
+            !string.IsNullOrWhiteSpace(operation.PanelUsername) &&
+            !string.IsNullOrWhiteSpace(operation.InitialPanelPassword);
+
+        if (hasPanelSecrets)
+        {
+            return "Gateway install completed. Panel credentials are shown one-time in this operation dialog.";
+        }
+
+        return operation.Message;
+    }
+
+    private void ResetGatewayOperationDialogState(string title)
+    {
+        GatewayOperationTitle = title;
+        GatewayProgressMessage = string.Empty;
+        GatewayProgressPercent = 0;
+        IsGatewayProgressIndeterminate = true;
+        IsGatewayProgressVisible = false;
+        GatewayOperationPanelUrl = string.Empty;
+        GatewayOperationPanelUsername = string.Empty;
+        GatewayOperationPanelPassword = string.Empty;
+        IsGatewayOperationPanelPasswordVisible = false;
+        IsGatewayOperationInstallResultVisible = false;
+        _operationLogBuilder.Clear();
+        OperationLog = string.Empty;
+    }
+
+    private void PrepareInstallSecretsForOneTimeDisplay(GatewayOperationResult result)
+    {
+        if (!result.Success)
+        {
+            return;
+        }
+
+        GatewayOperationPanelUrl = result.PanelUrl?.Trim() ?? string.Empty;
+        GatewayOperationPanelUsername = result.PanelUsername?.Trim() ?? string.Empty;
+        GatewayOperationPanelPassword = result.InitialPanelPassword ?? string.Empty;
+        IsGatewayOperationPanelPasswordVisible = true;
+
+        var hasSecrets =
+            !string.IsNullOrWhiteSpace(GatewayOperationPanelUrl) &&
+            !string.IsNullOrWhiteSpace(GatewayOperationPanelUsername) &&
+            !string.IsNullOrWhiteSpace(GatewayOperationPanelPassword);
+
+        IsGatewayOperationInstallResultVisible = hasSecrets;
+        if (hasSecrets)
+        {
+            AppendLog("WARNING: Panel credentials are shown one-time only. Save them before closing this dialog.");
+        }
+
+        // Enforce one-time visibility: never persist/show from page state.
+        State.GatewayPanelUrl = string.Empty;
+        State.GatewayPanelUsername = string.Empty;
+        State.GatewayInitialPanelPassword = string.Empty;
+    }
+
+    private void ClearGatewayOperationInstallSecrets()
+    {
+        GatewayOperationPanelUrl = string.Empty;
+        GatewayOperationPanelUsername = string.Empty;
+        GatewayOperationPanelPassword = string.Empty;
+        IsGatewayOperationPanelPasswordVisible = false;
+        IsGatewayOperationInstallResultVisible = false;
     }
 
     private async Task RefreshGatewayStatusAsync(string sudoPassword)
@@ -933,12 +1083,50 @@ public partial class GatewayManagementViewModel : ObservableObject
             throw new InvalidOperationException("Gateway DoH endpoints are required.");
         }
 
+        var panelDomain = (_state.GatewayPanelDomain ?? string.Empty).Trim();
+        var panelDomainOnly = _state.GatewayPanelDomainOnly;
+        var panelSslEnabled = _state.GatewayPanelUseSsl;
+        var panelSslMode = panelSslEnabled ? NormalizePanelSslMode(_state.GatewayPanelSslMode) : "none";
+        var panelCertPath = (_state.GatewayPanelUploadedCertPath ?? string.Empty).Trim();
+        var panelKeyPath = (_state.GatewayPanelUploadedKeyPath ?? string.Empty).Trim();
+
+        if ((panelDomainOnly || panelSslEnabled) && string.IsNullOrWhiteSpace(panelDomain))
+        {
+            throw new InvalidOperationException("OmniPanel domain is required when Domain Only or SSL is enabled.");
+        }
+
+        if (panelSslEnabled && panelSslMode == "uploaded")
+        {
+            if (string.IsNullOrWhiteSpace(panelCertPath) || string.IsNullOrWhiteSpace(panelKeyPath))
+            {
+                throw new InvalidOperationException("Uploaded SSL mode requires both certificate and private key files.");
+            }
+
+            if (!File.Exists(panelCertPath))
+            {
+                throw new InvalidOperationException("Selected OmniPanel certificate file was not found.");
+            }
+
+            if (!File.Exists(panelKeyPath))
+            {
+                throw new InvalidOperationException("Selected OmniPanel private key file was not found.");
+            }
+        }
+
         return new GatewayDeploymentRequest
         {
             Config = config,
             SelectedGatewayProtocol = selectedProtocol,
             GatewayPublicPort = publicPort,
             GatewayPanelPort = panelPort,
+            GatewayPanelUser = (_state.GatewayPanelConfiguredUser ?? string.Empty).Trim(),
+            GatewayPanelPassword = _state.GatewayPanelConfiguredPassword ?? string.Empty,
+            GatewayPanelDomain = panelDomain,
+            GatewayPanelDomainOnly = panelDomainOnly,
+            GatewayPanelSslEnabled = panelSslEnabled,
+            GatewayPanelSslMode = panelSslMode,
+            GatewayPanelCertLocalPath = panelCertPath,
+            GatewayPanelKeyLocalPath = panelKeyPath,
             GatewaySni = _state.GatewaySni.Trim(),
             GatewayTarget = _state.GatewayTarget.Trim(),
             ShadowTlsCamouflageServer = _state.ShadowTlsCamouflageServer.Trim(),
@@ -1089,6 +1277,14 @@ public partial class GatewayManagementViewModel : ObservableObject
             OnPropertyChanged(nameof(ProtocolPresetSwitchText));
         }
 
+        if (e.PropertyName is nameof(GatewayStateStore.GatewayPanelUseSsl) or nameof(GatewayStateStore.GatewayPanelSslMode))
+        {
+            OnPropertyChanged(nameof(IsGatewayPanelSslEnabled));
+            OnPropertyChanged(nameof(IsGatewayPanelSslUploadMode));
+            OnPropertyChanged(nameof(IsGatewayPanelSslLetsEncryptMode));
+            OnPropertyChanged(nameof(GatewayPanelSslModeIndex));
+        }
+
         if (e.PropertyName is nameof(GatewayStateStore.TunnelKeyPassphrase) or nameof(GatewayStateStore.TunnelPassword) or nameof(GatewayStateStore.TunnelKeyPath))
         {
             OnPropertyChanged(nameof(KeyPassphraseState));
@@ -1096,9 +1292,19 @@ public partial class GatewayManagementViewModel : ObservableObject
             OnPropertyChanged(nameof(HostKeyFileState));
         }
 
-        if (e.PropertyName == nameof(GatewayStateStore.GatewayInitialPanelPassword))
+        if (e.PropertyName == nameof(GatewayStateStore.GatewayPanelConfiguredPassword))
         {
-            OnPropertyChanged(nameof(PanelPasswordDisplay));
+            OnPropertyChanged(nameof(GatewayPanelConfiguredPasswordState));
+        }
+
+        if (e.PropertyName == nameof(GatewayStateStore.GatewayPanelUploadedCertPath))
+        {
+            OnPropertyChanged(nameof(GatewayPanelUploadedCertState));
+        }
+
+        if (e.PropertyName == nameof(GatewayStateStore.GatewayPanelUploadedKeyPath))
+        {
+            OnPropertyChanged(nameof(GatewayPanelUploadedKeyState));
         }
     }
 
@@ -1152,12 +1358,14 @@ public partial class GatewayManagementViewModel : ObservableObject
         return new string('*', value.Length);
     }
 
+    private static string NormalizePanelSslMode(string? value)
+    {
+        var mode = (value ?? string.Empty).Trim().ToLowerInvariant();
+        return mode is "uploaded" ? "uploaded" : "letsencrypt";
+    }
+
     private void BeginGatewayProgress(string operationName)
     {
-        _gatewayProgressHideCts?.Cancel();
-        _gatewayProgressHideCts?.Dispose();
-        _gatewayProgressHideCts = null;
-
         GatewayProgressPercent = 0;
         IsGatewayProgressIndeterminate = true;
         GatewayProgressMessage = operationName;
@@ -1188,35 +1396,6 @@ public partial class GatewayManagementViewModel : ObservableObject
             : finalMessage.Trim();
         IsGatewayProgressIndeterminate = false;
         GatewayProgressPercent = success ? 100 : GatewayProgressPercent;
-
-        _gatewayProgressHideCts?.Cancel();
-        _gatewayProgressHideCts?.Dispose();
-        _gatewayProgressHideCts = new CancellationTokenSource();
-        _ = HideGatewayProgressAsync(_gatewayProgressHideCts.Token);
-    }
-
-    private async Task HideGatewayProgressAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            await Task.Delay(TimeSpan.FromSeconds(1.2), cancellationToken);
-            if (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-
-            await Application.Current.Dispatcher.InvokeAsync(() =>
-            {
-                IsGatewayProgressVisible = false;
-                IsGatewayProgressIndeterminate = true;
-                GatewayProgressPercent = 0;
-                GatewayProgressMessage = string.Empty;
-            });
-        }
-        catch (TaskCanceledException)
-        {
-            // Ignore cancellation when a new operation starts before auto-hide.
-        }
     }
 
     private async Task AutoDismissFeedbackAsync(string currentFeedback, CancellationToken cancellationToken)

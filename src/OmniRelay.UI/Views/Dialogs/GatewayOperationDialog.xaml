@@ -1,0 +1,161 @@
+<Window x:Class="OmniRelay.UI.Views.Dialogs.GatewayOperationDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding GatewayOperationTitle}"
+        Width="920"
+        Height="700"
+        MinWidth="860"
+        MinHeight="620"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        Background="{DynamicResource Brush.Background}">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="{Binding GatewayOperationTitle}"
+                   FontSize="22"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource Brush.Text}"/>
+
+        <Border Grid.Row="1"
+                Margin="0,12,0,10"
+                Padding="12"
+                CornerRadius="8"
+                BorderBrush="{DynamicResource Brush.Border}"
+                BorderThickness="1"
+                Background="{DynamicResource Brush.InputBackground}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Row="0"
+                           Grid.ColumnSpan="2"
+                           Text="{Binding GatewayProgressMessage}"
+                           Style="{StaticResource ValueTextStyle}"
+                           TextWrapping="Wrap"/>
+                <ProgressBar Grid.Row="1"
+                             Grid.Column="0"
+                             Margin="0,8,10,0"
+                             Height="9"
+                             Minimum="0"
+                             Maximum="100"
+                             Value="{Binding GatewayProgressPercent}"
+                             IsIndeterminate="{Binding IsGatewayProgressIndeterminate}"
+                             Foreground="{DynamicResource Brush.Primary}"/>
+                <TextBlock Grid.Row="1"
+                           Grid.Column="1"
+                           Margin="0,4,0,0"
+                           VerticalAlignment="Center"
+                           Text="{Binding GatewayProgressPercentText}"
+                           Style="{StaticResource ValueTextStyle}"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBox Grid.Row="0"
+                     Text="{Binding OperationLog}"
+                     IsReadOnly="True"
+                     VerticalScrollBarVisibility="Auto"
+                     HorizontalScrollBarVisibility="Auto"
+                     TextWrapping="Wrap"
+                     Style="{StaticResource MultilineTextBoxStyle}"/>
+
+            <Border Grid.Row="1"
+                    Margin="0,12,0,0"
+                    Padding="12"
+                    CornerRadius="8"
+                    BorderBrush="#F59E0B"
+                    BorderThickness="1"
+                    Background="#1F2937"
+                    Visibility="{Binding IsGatewayOperationInstallResultVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                <StackPanel>
+                    <TextBlock Text="Panel Access (One-time Display)"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="#FBBF24"/>
+                    <TextBlock Margin="0,6,0,10"
+                               Text="Warning: these credentials are shown only once and cannot be recovered later from this UI. Save them now."
+                               Foreground="#FDE68A"
+                               TextWrapping="Wrap"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="Panel URL" Style="{StaticResource FormLabelStyle}" Foreground="#E5E7EB"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding GatewayOperationPanelUrl}" Style="{StaticResource ValueTextStyle}" Foreground="#FFFFFF" TextWrapping="Wrap"/>
+                        <Button Grid.Row="0" Grid.Column="2" Command="{Binding OpenGatewayOperationPanelUrlCommand}" Style="{StaticResource SecondaryButtonStyle}" Width="30" Height="30" Padding="0" Margin="8,0,0,0" ToolTip="Open panel URL">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8A7;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Button>
+
+                        <TextBlock Grid.Row="1" Text="Username" Style="{StaticResource FormLabelStyle}" Foreground="#E5E7EB"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding GatewayOperationPanelUsername}" Style="{StaticResource ValueTextStyle}" Foreground="#FFFFFF"/>
+                        <Button Grid.Row="1" Grid.Column="2" Command="{Binding CopyGatewayOperationPanelUsernameCommand}" Style="{StaticResource SecondaryButtonStyle}" Width="30" Height="30" Padding="0" Margin="8,0,0,0" ToolTip="Copy username">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8C8;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Button>
+
+                        <TextBlock Grid.Row="2" Text="Password" Style="{StaticResource FormLabelStyle}" Foreground="#E5E7EB"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding GatewayOperationPanelPasswordDisplay}" Style="{StaticResource ValueTextStyle}" Foreground="#FFFFFF"/>
+                        <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
+                            <Button Command="{Binding ToggleGatewayOperationPanelPasswordVisibilityCommand}" ToolTip="{Binding GatewayOperationPanelPasswordToggleText}" Style="{StaticResource SecondaryButtonStyle}" Width="30" Height="30" Padding="0">
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="{Binding GatewayOperationPanelPasswordToggleIconGlyph}" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Button>
+                            <Button Command="{Binding CopyGatewayOperationPanelPasswordCommand}" ToolTip="Copy password" Style="{StaticResource SecondaryButtonStyle}" Width="30" Height="30" Padding="0" Margin="8,0,0,0">
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8C8;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <StackPanel Grid.Row="3"
+                    Margin="0,14,0,0"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <Button Content="Cancel Operation"
+                    Command="{Binding CancelGatewayOperationCommand}"
+                    Style="{StaticResource SecondaryButtonStyle}"
+                    Margin="0,0,8,0"
+                    IsEnabled="{Binding CanCancelGatewayOperation}"/>
+            <Button Content="Close"
+                    Command="{Binding CloseGatewayOperationDialogCommand}"
+                    Style="{StaticResource SecondaryButtonStyle}"
+                    Margin="0,0,8,0"
+                    IsEnabled="{Binding CanCloseGatewayOperationDialog}"/>
+            <Button Content="I Stored Them Safely"
+                    Command="{Binding AcknowledgeGatewayInstallSecretsCommand}"
+                    Style="{StaticResource PrimaryButtonStyle}"
+                    IsEnabled="{Binding CanAcknowledgeGatewayInstallSecrets}"/>
+        </StackPanel>
+    </Grid>
+</Window>

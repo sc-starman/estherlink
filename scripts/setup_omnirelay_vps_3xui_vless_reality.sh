@@ -23,6 +23,12 @@ PUBKEY_FILE=""
 PANEL_USER=""
 PANEL_PASSWORD=""
 PANEL_BASE_PATH=""
+PANEL_DOMAIN=""
+PANEL_DOMAIN_ONLY="false"
+PANEL_SSL_ENABLED="false"
+PANEL_SSL_MODE="letsencrypt"
+PANEL_CERT_FILE=""
+PANEL_KEY_FILE=""
 GATEWAY_SNI=""
 GATEWAY_TARGET=""
 XUI_PANEL_PORT=0
@@ -35,6 +41,7 @@ METADATA_FILE="/etc/omnirelay/gateway/metadata.json"
 OMNIPANEL_ENV_FILE="/etc/omnirelay/gateway/omnipanel.env"
 OMNIPANEL_SERVICE_NAME="omnirelay-omnipanel"
 OMNIPANEL_APP_DIR="/opt/omnirelay/omni-gateway"
+OMNIPANEL_COMMON_SCRIPT="/tmp/omnirelay-omnipanel-common.sh"
 XUI_COOKIE_JAR=""
 STATUS_JSON=0
 HEALTH_JSON=0
@@ -92,6 +99,12 @@ Options:
   --panel-user <name>           Panel username (default: generated)
   --panel-password <value>      Panel password (default: generated)
   --panel-base-path <path>      Hidden 3x-ui panel base path (default: generated random path)
+  --panel-domain <host>         Optional panel domain (required for strict-domain/SSL modes)
+  --panel-domain-only <bool>    Allow panel only via domain host header; block direct IP host access (default: ${PANEL_DOMAIN_ONLY})
+  --panel-ssl <bool>            Enable SSL termination on panel endpoint (default: ${PANEL_SSL_ENABLED})
+  --panel-ssl-mode <mode>       letsencrypt | uploaded (default: ${PANEL_SSL_MODE})
+  --panel-cert-file <path>      Uploaded CRT/PEM path on VPS when --panel-ssl-mode uploaded
+  --panel-key-file <path>       Uploaded private key path on VPS when --panel-ssl-mode uploaded
   --json                        For status/health commands output compact JSON
   -h, --help                    Show this help
 EOF
@@ -141,6 +154,18 @@ detect_ssh_service() {
 require_existing_sshd() {
   command -v sshd >/dev/null 2>&1 || die "OpenSSH server is required but not installed. Install openssh-server first."
   detect_ssh_service || die "OpenSSH service unit not found. Ensure sshd is installed and managed by systemd."
+}
+
+load_omnipanel_common() {
+  local candidate
+  for candidate in "$OMNIPANEL_COMMON_SCRIPT" "/usr/local/lib/omnirelay/omnipanel-common.sh" "$(dirname "$0")/setup_omnirelay_omnipanel_common.sh"; do
+    if [[ -f "$candidate" ]]; then
+      # shellcheck disable=SC1090
+      source "$candidate"
+      return 0
+    fi
+  done
+  die "Shared OmniPanel helper script not found. Expected ${OMNIPANEL_COMMON_SCRIPT}."
 }
 
 random_string() {
@@ -1220,51 +1245,20 @@ EOF
 }
 
 configure_nginx_for_omnipanel() {
-  progress 92 "Configuring nginx HTTPS reverse-proxy for OmniPanel"
-  local nginx_conf cert_path key_path panel_ready=false
-  generate_panel_tls_cert
-
-  cert_path="${METADATA_DIR}/certs/omnipanel.crt"
-  key_path="${METADATA_DIR}/certs/omnipanel.key"
-  nginx_conf="/etc/nginx/sites-available/omnirelay-omnipanel.conf"
-  cat > "$nginx_conf" <<EOF
-server {
-    listen ${PANEL_PORT} ssl;
-    server_name _;
-
-    ssl_certificate ${cert_path};
-    ssl_certificate_key ${key_path};
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 1d;
-    ssl_protocols TLSv1.2 TLSv1.3;
-
-    location / {
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_pass http://127.0.0.1:${OMNIPANEL_INTERNAL_PORT};
-    }
-}
-EOF
-
-  ln -sfn "$nginx_conf" /etc/nginx/sites-enabled/omnirelay-omnipanel.conf
-  rm -f /etc/nginx/sites-enabled/default || true
-  nginx -t
-  systemctl enable --now nginx
-  systemctl restart nginx
-
-  for ((i=1; i<=15; i++)); do
-    if [[ "$(check_listener "$PANEL_PORT")" == "true" ]]; then
-      panel_ready=true
-      break
-    fi
-    sleep 1
-  done
-
-  [[ "$panel_ready" == "true" ]] || die "nginx did not open panel port ${PANEL_PORT}."
+  progress 92 "Configuring nginx reverse-proxy for OmniPanel"
+  load_omnipanel_common
+  omnipanel_configure_nginx_proxy \
+    "$PANEL_PORT" \
+    "$OMNIPANEL_INTERNAL_PORT" \
+    "$METADATA_DIR" \
+    "$PANEL_DOMAIN" \
+    "$PANEL_DOMAIN_ONLY" \
+    "$PANEL_SSL_ENABLED" \
+    "$PANEL_SSL_MODE" \
+    "$PANEL_CERT_FILE" \
+    "$PANEL_KEY_FILE" \
+    "$(detect_vps_ip || true)" \
+    "$VPS_IP"
 }
 
 configure_host_firewall() {
@@ -1282,6 +1276,9 @@ configure_host_firewall() {
   ufw allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
   ufw allow "${PUBLIC_PORT}/tcp" >/dev/null 2>&1 || true
   ufw allow "${SSH_PORT}/tcp" >/dev/null 2>&1 || true
+  if [[ "$PANEL_SSL_ENABLED" == "true" && "$PANEL_SSL_MODE" == "letsencrypt" ]]; then
+    ufw allow "80/tcp" >/dev/null 2>&1 || true
+  fi
 }
 
 write_gateway_metadata() {
@@ -1986,6 +1983,7 @@ uninstall_impl() {
   rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf
   rm -f /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
   rm -f /var/log/openvpn/omnirelay-status.log
+  rm -f /usr/local/lib/omnirelay/omnipanel-common.sh
   rm -f /usr/local/sbin/omnirelay-gatewayctl
 
   progress 74 "Cleaning managed sshd drop-in"
@@ -2009,7 +2007,14 @@ print_summary() {
     endpoint="<VPS_IP_OR_HOSTNAME>"
   fi
 
-  panel_url="https://${endpoint}:${PANEL_PORT}/"
+  if [[ -n "$PANEL_DOMAIN" ]]; then
+    endpoint="$PANEL_DOMAIN"
+  fi
+  if [[ "$PANEL_SSL_ENABLED" == "true" ]]; then
+    panel_url="https://${endpoint}:${PANEL_PORT}/"
+  else
+    panel_url="http://${endpoint}:${PANEL_PORT}/"
+  fi
   metadata_inbound_id="$(metadata_value '.inbound_id')"
   metadata_xui_panel_port="$(metadata_value '.xui_panel_port')"
 
@@ -2070,6 +2075,10 @@ install_impl() {
   write_gateway_metadata
   reset_stale_xray_template_config
   apply_dns_profile
+  install -d -m 0755 /usr/local/lib/omnirelay
+  if [[ -f "$OMNIPANEL_COMMON_SCRIPT" ]]; then
+    install -m 0755 "$OMNIPANEL_COMMON_SCRIPT" /usr/local/lib/omnirelay/omnipanel-common.sh
+  fi
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
 
   progress 100 "Gateway install completed"
@@ -2160,6 +2169,30 @@ parse_args() {
         PANEL_BASE_PATH="${2:-}"
         shift 2
         ;;
+      --panel-domain)
+        PANEL_DOMAIN="${2:-}"
+        shift 2
+        ;;
+      --panel-domain-only)
+        PANEL_DOMAIN_ONLY="${2:-}"
+        shift 2
+        ;;
+      --panel-ssl)
+        PANEL_SSL_ENABLED="${2:-}"
+        shift 2
+        ;;
+      --panel-ssl-mode)
+        PANEL_SSL_MODE="${2:-}"
+        shift 2
+        ;;
+      --panel-cert-file)
+        PANEL_CERT_FILE="${2:-}"
+        shift 2
+        ;;
+      --panel-key-file)
+        PANEL_KEY_FILE="${2:-}"
+        shift 2
+        ;;
       --json)
         STATUS_JSON=1
         HEALTH_JSON=1
@@ -2193,6 +2226,14 @@ validate_common() {
   PROXY_CHECK_URL="${PROXY_CHECK_URL%\'}"
   GATEWAY_SNI="$(printf '%s' "$GATEWAY_SNI" | tr -d '\r\n' | xargs)"
   GATEWAY_TARGET="$(printf '%s' "$GATEWAY_TARGET" | tr -d '\r\n' | xargs)"
+  PANEL_DOMAIN="$(printf '%s' "$PANEL_DOMAIN" | tr -d '\r\n' | xargs)"
+  PANEL_DOMAIN_ONLY="$(normalize_bool "$PANEL_DOMAIN_ONLY")"
+  PANEL_SSL_ENABLED="$(normalize_bool "$PANEL_SSL_ENABLED")"
+  PANEL_SSL_MODE="$(printf '%s' "$PANEL_SSL_MODE" | tr -d '\r\n' | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$PANEL_SSL_MODE" in
+    letsencrypt|uploaded) ;;
+    *) PANEL_SSL_MODE="letsencrypt" ;;
+  esac
 
   if [[ "$PUBLIC_PORT" == "$PANEL_PORT" ]]; then
     die "--public-port and --panel-port must be different."
@@ -2215,6 +2256,19 @@ validate_common() {
   if [[ "$COMMAND" == "install" ]]; then
     [[ -n "$GATEWAY_SNI" ]] || die "--gateway-sni is required for install."
     [[ -n "$GATEWAY_TARGET" ]] || die "--gateway-target is required for install."
+
+    if [[ "$PANEL_DOMAIN_ONLY" == "true" && -z "$PANEL_DOMAIN" ]]; then
+      die "--panel-domain is required when --panel-domain-only=true."
+    fi
+
+    if [[ "$PANEL_SSL_ENABLED" == "true" && -z "$PANEL_DOMAIN" ]]; then
+      die "--panel-domain is required when --panel-ssl=true."
+    fi
+
+    if [[ "$PANEL_SSL_ENABLED" == "true" && "$PANEL_SSL_MODE" == "uploaded" ]]; then
+      [[ -n "$PANEL_CERT_FILE" ]] || die "--panel-cert-file is required for --panel-ssl-mode uploaded."
+      [[ -n "$PANEL_KEY_FILE" ]] || die "--panel-key-file is required for --panel-ssl-mode uploaded."
+    fi
   fi
 }
 

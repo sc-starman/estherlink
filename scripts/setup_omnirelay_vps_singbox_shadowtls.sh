@@ -21,6 +21,12 @@ TUNNEL_AUTH="host_key"
 PANEL_USER=""
 PANEL_PASSWORD=""
 PANEL_BASE_PATH=""
+PANEL_DOMAIN=""
+PANEL_DOMAIN_ONLY="false"
+PANEL_SSL_ENABLED="false"
+PANEL_SSL_MODE="letsencrypt"
+PANEL_CERT_FILE=""
+PANEL_KEY_FILE=""
 GATEWAY_SNI=""
 GATEWAY_TARGET=""
 
@@ -31,6 +37,7 @@ OMNIPANEL_ENV_FILE="${METADATA_DIR}/omnipanel.env"
 SINGBOX_DIR="${METADATA_DIR}/singbox"
 SINGBOX_CONFIG_FILE="${SINGBOX_DIR}/config.json"
 OMNIPANEL_APP_DIR="/opt/omnirelay/omni-gateway"
+OMNIPANEL_COMMON_SCRIPT="/tmp/omnirelay-omnipanel-common.sh"
 SHADOWTLS_CLIENTS_FILE="${OMNIPANEL_APP_DIR}/shadowtls_clients.json"
 PANEL_AUTH_FILE="${OMNIPANEL_APP_DIR}/panel-auth.json"
 SINGBOX_SERVICE="omnirelay-singbox"
@@ -67,6 +74,12 @@ Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|get-protocol|status|h
 --panel-user <name>
 --panel-password <password>
 --panel-base-path <path>
+--panel-domain <host>
+--panel-domain-only <true|false>
+--panel-ssl <true|false>
+--panel-ssl-mode <letsencrypt|uploaded>
+--panel-cert-file <path>
+--panel-key-file <path>
 --json
 EOF
 }
@@ -76,6 +89,28 @@ random_base64(){ openssl rand -base64 "$1" | tr -d '\r\n'; }
 check_listener(){ ss -lnt "( sport = :$1 )" 2>/dev/null | awk 'NR>1{print}' | grep -q . && echo true || echo false; }
 choose_port(){ for i in $(seq 22000 52000); do p=$((RANDOM%30000+22000)); [[ "$(check_listener "$p")" == "false" ]] && echo "$p" && return 0; done; die "cannot allocate random port"; }
 ensure_meta(){ install -d -m 0755 "$METADATA_DIR"; }
+
+normalize_bool(){
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$value" in
+    true|1|yes|y) printf 'true' ;;
+    false|0|no|n) printf 'false' ;;
+    *) die "Boolean value expected but received '${1}'." ;;
+  esac
+}
+
+load_omnipanel_common(){
+  local candidate
+  for candidate in "$OMNIPANEL_COMMON_SCRIPT" "/usr/local/lib/omnirelay/omnipanel-common.sh" "$(dirname "$0")/setup_omnirelay_omnipanel_common.sh"; do
+    if [[ -f "$candidate" ]]; then
+      # shellcheck disable=SC1090
+      source "$candidate"
+      return 0
+    fi
+  done
+  die "Shared OmniPanel helper script not found. Expected ${OMNIPANEL_COMMON_SCRIPT}."
+}
 
 configure_proxy(){
   local proxy_url
@@ -358,34 +393,22 @@ EOF
 
 configure_nginx(){
   local panel_internal_port
-  progress 76 "Configuring nginx HTTPS reverse-proxy for OmniPanel"
+  progress 76 "Configuring nginx reverse-proxy for OmniPanel"
   panel_internal_port="$(read_omnipanel_internal_port || true)"
   [[ -n "$panel_internal_port" ]] || die "Cannot determine OmniPanel internal port for nginx config."
-  gen_cert
-  cat > /etc/nginx/sites-available/omnirelay-omnipanel.conf <<EOF
-server {
-    listen ${PANEL_PORT} ssl;
-    server_name _;
-    ssl_certificate ${METADATA_DIR}/certs/omnipanel.crt;
-    ssl_certificate_key ${METADATA_DIR}/certs/omnipanel.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    location / {
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_pass http://127.0.0.1:${panel_internal_port};
-    }
-}
-EOF
-  ln -sfn /etc/nginx/sites-available/omnirelay-omnipanel.conf /etc/nginx/sites-enabled/omnirelay-omnipanel.conf
-  rm -f /etc/nginx/sites-enabled/default || true
-  nginx -t
-  systemctl enable --now nginx
-  systemctl restart nginx
-  verify_nginx_panel_proxy
+  load_omnipanel_common
+  omnipanel_configure_nginx_proxy \
+    "$PANEL_PORT" \
+    "$panel_internal_port" \
+    "$METADATA_DIR" \
+    "$PANEL_DOMAIN" \
+    "$PANEL_DOMAIN_ONLY" \
+    "$PANEL_SSL_ENABLED" \
+    "$PANEL_SSL_MODE" \
+    "$PANEL_CERT_FILE" \
+    "$PANEL_KEY_FILE" \
+    "$(hostname -I 2>/dev/null | awk '{print $1}')" \
+    "$VPS_IP"
 }
 
 configure_host_firewall(){
@@ -400,6 +423,9 @@ configure_host_firewall(){
   ufw allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
   ufw allow "${PUBLIC_PORT}/tcp" >/dev/null 2>&1 || true
   ufw allow "${SSH_PORT}/tcp" >/dev/null 2>&1 || true
+  if [[ "$PANEL_SSL_ENABLED" == "true" && "$PANEL_SSL_MODE" == "letsencrypt" ]]; then
+    ufw allow "80/tcp" >/dev/null 2>&1 || true
+  fi
 }
 
 write_metadata(){
@@ -459,6 +485,10 @@ install_cmd(){
 
   ensure_meta
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
+  install -d -m 0755 /usr/local/lib/omnirelay
+  if [[ -f "$OMNIPANEL_COMMON_SCRIPT" ]]; then
+    install -m 0755 "$OMNIPANEL_COMMON_SCRIPT" /usr/local/lib/omnirelay/omnipanel-common.sh
+  fi
   install_packages
   ensure_nodejs_runtime
   install_singbox
@@ -471,8 +501,10 @@ install_cmd(){
   write_metadata
   dns_apply
   progress 100 "Gateway install completed"
-  ip="${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
-  log "OmniPanel URL: https://${ip}:${PANEL_PORT}/ | Username: ${PANEL_USER} | Password: ${PANEL_PASSWORD}"
+  ip="${PANEL_DOMAIN:-${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}}"
+  scheme="http"
+  [[ "$PANEL_SSL_ENABLED" == "true" ]] && scheme="https"
+  log "OmniPanel URL: ${scheme}://${ip}:${PANEL_PORT}/ | Username: ${PANEL_USER} | Password: ${PANEL_PASSWORD}"
 }
 
 start_cmd(){
@@ -497,7 +529,7 @@ uninstall_cmd(){
   systemctl disable --now ipsec xl2tpd strongswan-starter 2>/dev/null || true
   rm -f "/etc/systemd/system/${OMNIPANEL_SERVICE}.service" "/etc/systemd/system/${SINGBOX_SERVICE}.service" /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-openvpn-accounting.service /etc/systemd/system/omnirelay-openvpn-accounting.timer /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service /etc/systemd/system/omnirelay-ipsec-accounting.service /etc/systemd/system/omnirelay-ipsec-accounting.timer
   rm -f /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf
-  rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /usr/local/sbin/omnirelay-gatewayctl
+  rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /usr/local/sbin/omnirelay-gatewayctl /usr/local/lib/omnirelay/omnipanel-common.sh
   rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf
   rm -f /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
   rm -f /var/log/openvpn/omnirelay-status.log
@@ -507,7 +539,86 @@ uninstall_cmd(){
   progress 100 "Gateway uninstall completed"
 }
 
-parse_args(){ if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then COMMAND="$1"; shift; fi; while [[ $# -gt 0 ]]; do case "$1" in --public-port) PUBLIC_PORT="${2:-}"; shift 2;; --panel-port) PANEL_PORT="${2:-}"; shift 2;; --backend-port) BACKEND_PORT="${2:-}"; shift 2;; --ssh-port) SSH_PORT="${2:-}"; shift 2;; --bootstrap-socks-port) BOOTSTRAP_SOCKS_PORT="${2:-}"; shift 2;; --proxy-check-url) PROXY_CHECK_URL="${2:-}"; shift 2;; --camouflage-server) CAMOUFLAGE_SERVER="${2:-}"; shift 2;; --dns-mode) DNS_MODE="${2:-}"; shift 2;; --doh-endpoints) DOH_ENDPOINTS="${2:-}"; shift 2;; --dns-udp-only) DNS_UDP_ONLY="${2:-}"; shift 2;; --vps-ip) VPS_IP="${2:-}"; shift 2;; --tunnel-user) TUNNEL_USER="${2:-}"; shift 2;; --tunnel-auth) TUNNEL_AUTH="${2:-}"; shift 2;; --panel-user) PANEL_USER="${2:-}"; shift 2;; --panel-password) PANEL_PASSWORD="${2:-}"; shift 2;; --panel-base-path) PANEL_BASE_PATH="${2:-}"; shift 2;; --gateway-sni) GATEWAY_SNI="${2:-}"; shift 2;; --gateway-target) GATEWAY_TARGET="${2:-}"; shift 2;; --json) STATUS_JSON=1; HEALTH_JSON=1; shift;; -h|--help) usage; exit 0;; *) die "Unknown option: $1";; esac; done; }
+parse_args(){
+  if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+    COMMAND="$1"
+    shift
+  fi
 
-main(){ parse_args "$@"; validate_port "$PUBLIC_PORT" "--public-port"; validate_port "$PANEL_PORT" "--panel-port"; validate_port "$BACKEND_PORT" "--backend-port"; validate_port "$SSH_PORT" "--ssh-port"; validate_port "$BOOTSTRAP_SOCKS_PORT" "--bootstrap-socks-port"; case "$COMMAND" in install) install_cmd;; uninstall) uninstall_cmd;; start) start_cmd;; stop) stop_cmd;; get-protocol) get_protocol_cmd;; status) STATUS_JSON=1; status_cmd;; health) HEALTH_JSON=1; status_cmd >/dev/null 2>&1 || true; health_cmd;; dns-apply) dns_apply;; dns-status) STATUS_JSON=1; dns_status;; dns-repair) dns_repair;; sync-clients) sync_clients_cmd;; *) die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients";; esac; }
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --public-port) PUBLIC_PORT="${2:-}"; shift 2 ;;
+      --panel-port) PANEL_PORT="${2:-}"; shift 2 ;;
+      --backend-port) BACKEND_PORT="${2:-}"; shift 2 ;;
+      --ssh-port) SSH_PORT="${2:-}"; shift 2 ;;
+      --bootstrap-socks-port) BOOTSTRAP_SOCKS_PORT="${2:-}"; shift 2 ;;
+      --proxy-check-url) PROXY_CHECK_URL="${2:-}"; shift 2 ;;
+      --camouflage-server) CAMOUFLAGE_SERVER="${2:-}"; shift 2 ;;
+      --dns-mode) DNS_MODE="${2:-}"; shift 2 ;;
+      --doh-endpoints) DOH_ENDPOINTS="${2:-}"; shift 2 ;;
+      --dns-udp-only) DNS_UDP_ONLY="${2:-}"; shift 2 ;;
+      --vps-ip) VPS_IP="${2:-}"; shift 2 ;;
+      --tunnel-user) TUNNEL_USER="${2:-}"; shift 2 ;;
+      --tunnel-auth) TUNNEL_AUTH="${2:-}"; shift 2 ;;
+      --panel-user) PANEL_USER="${2:-}"; shift 2 ;;
+      --panel-password) PANEL_PASSWORD="${2:-}"; shift 2 ;;
+      --panel-base-path) PANEL_BASE_PATH="${2:-}"; shift 2 ;;
+      --panel-domain) PANEL_DOMAIN="${2:-}"; shift 2 ;;
+      --panel-domain-only) PANEL_DOMAIN_ONLY="${2:-}"; shift 2 ;;
+      --panel-ssl) PANEL_SSL_ENABLED="${2:-}"; shift 2 ;;
+      --panel-ssl-mode) PANEL_SSL_MODE="${2:-}"; shift 2 ;;
+      --panel-cert-file) PANEL_CERT_FILE="${2:-}"; shift 2 ;;
+      --panel-key-file) PANEL_KEY_FILE="${2:-}"; shift 2 ;;
+      --gateway-sni) GATEWAY_SNI="${2:-}"; shift 2 ;;
+      --gateway-target) GATEWAY_TARGET="${2:-}"; shift 2 ;;
+      --json) STATUS_JSON=1; HEALTH_JSON=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+}
+
+main(){
+  parse_args "$@"
+  validate_port "$PUBLIC_PORT" "--public-port"
+  validate_port "$PANEL_PORT" "--panel-port"
+  validate_port "$BACKEND_PORT" "--backend-port"
+  validate_port "$SSH_PORT" "--ssh-port"
+  validate_port "$BOOTSTRAP_SOCKS_PORT" "--bootstrap-socks-port"
+  PANEL_DOMAIN="$(printf '%s' "$PANEL_DOMAIN" | tr -d '\r\n' | xargs)"
+  PANEL_DOMAIN_ONLY="$(normalize_bool "$PANEL_DOMAIN_ONLY")"
+  PANEL_SSL_ENABLED="$(normalize_bool "$PANEL_SSL_ENABLED")"
+  PANEL_SSL_MODE="$(printf '%s' "$PANEL_SSL_MODE" | tr '[:upper:]' '[:lower:]' | xargs)"
+  [[ "$PANEL_SSL_MODE" == "uploaded" ]] || PANEL_SSL_MODE="letsencrypt"
+
+  if [[ "$COMMAND" == "install" ]]; then
+    if [[ "$PANEL_DOMAIN_ONLY" == "true" && -z "$PANEL_DOMAIN" ]]; then
+      die "--panel-domain is required when --panel-domain-only=true."
+    fi
+    if [[ "$PANEL_SSL_ENABLED" == "true" && -z "$PANEL_DOMAIN" ]]; then
+      die "--panel-domain is required when --panel-ssl=true."
+    fi
+    if [[ "$PANEL_SSL_ENABLED" == "true" && "$PANEL_SSL_MODE" == "uploaded" ]]; then
+      [[ -n "$PANEL_CERT_FILE" ]] || die "--panel-cert-file is required for --panel-ssl-mode uploaded."
+      [[ -n "$PANEL_KEY_FILE" ]] || die "--panel-key-file is required for --panel-ssl-mode uploaded."
+      [[ -f "$PANEL_CERT_FILE" ]] || die "--panel-cert-file not found: ${PANEL_CERT_FILE}"
+      [[ -f "$PANEL_KEY_FILE" ]] || die "--panel-key-file not found: ${PANEL_KEY_FILE}"
+    fi
+  fi
+
+  case "$COMMAND" in
+    install) install_cmd ;;
+    uninstall) uninstall_cmd ;;
+    start) start_cmd ;;
+    stop) stop_cmd ;;
+    get-protocol) get_protocol_cmd ;;
+    status) STATUS_JSON=1; status_cmd ;;
+    health) HEALTH_JSON=1; status_cmd >/dev/null 2>&1 || true; health_cmd ;;
+    dns-apply) dns_apply ;;
+    dns-status) STATUS_JSON=1; dns_status ;;
+    dns-repair) dns_repair ;;
+    sync-clients) sync_clients_cmd ;;
+    *) die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|get-protocol|status|health|dns-apply|dns-status|dns-repair|sync-clients" ;;
+  esac
+}
 main "$@"

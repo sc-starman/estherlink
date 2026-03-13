@@ -8,6 +8,16 @@ public sealed class GatewayDeploymentRequest
     public string SelectedGatewayProtocol { get; init; } = GatewayProtocols.VlessReality3xui;
     public int GatewayPublicPort { get; init; }
     public int GatewayPanelPort { get; init; }
+    public string GatewayPanelUser { get; init; } = string.Empty;
+    public string GatewayPanelPassword { get; init; } = string.Empty;
+    public string GatewayPanelDomain { get; init; } = string.Empty;
+    public bool GatewayPanelDomainOnly { get; init; }
+    public bool GatewayPanelSslEnabled { get; init; }
+    public string GatewayPanelSslMode { get; init; } = "none";
+    public string GatewayPanelCertLocalPath { get; init; } = string.Empty;
+    public string GatewayPanelKeyLocalPath { get; init; } = string.Empty;
+    public string GatewayPanelCertRemotePath { get; init; } = string.Empty;
+    public string GatewayPanelKeyRemotePath { get; init; } = string.Empty;
     public string GatewaySni { get; init; } = string.Empty;
     public string GatewayTarget { get; init; } = string.Empty;
     public string ShadowTlsCamouflageServer { get; init; } = string.Empty;

@@ -14,6 +14,9 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 {
     private const string GatewayCtlPath = "/usr/local/sbin/omnirelay-gatewayctl";
     private const string RemoteInstallScriptPath = "/tmp/omnirelay-gatewayctl.sh";
+    private const string RemoteOmniPanelCommonScriptPath = "/tmp/omnirelay-omnipanel-common.sh";
+    private const string RemoteUploadedPanelCertPath = "/tmp/omnirelay-omnipanel-upload.crt";
+    private const string RemoteUploadedPanelKeyPath = "/tmp/omnirelay-omnipanel-upload.key";
 
     public GatewayDeploymentService() { }
 
@@ -137,11 +140,40 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             });
 
             await UploadInstallerScriptAsync(request, progress, cancellationToken);
+            await UploadOmniPanelCommonScriptAsync(request, progress, cancellationToken);
 
-            var panelUser = $"omniadmin_{RandomAlphaNum(6)}";
-            var panelPassword = RandomAlphaNum(24);
+            var uploadedPanelCertRemotePath = string.Empty;
+            var uploadedPanelKeyRemotePath = string.Empty;
+            if (request.GatewayPanelSslEnabled &&
+                string.Equals(request.GatewayPanelSslMode, "uploaded", StringComparison.OrdinalIgnoreCase))
+            {
+                progress?.Report(new DeploymentProgressSnapshot
+                {
+                    Phase = DeploymentPhases.GatewayInstall,
+                    Percent = 9,
+                    Message = "Uploading OmniPanel TLS certificate and private key"
+                });
+
+                await UploadFileAsync(request, request.GatewayPanelCertLocalPath, RemoteUploadedPanelCertPath, progress, cancellationToken);
+                await UploadFileAsync(request, request.GatewayPanelKeyLocalPath, RemoteUploadedPanelKeyPath, progress, cancellationToken);
+                uploadedPanelCertRemotePath = RemoteUploadedPanelCertPath;
+                uploadedPanelKeyRemotePath = RemoteUploadedPanelKeyPath;
+            }
+
+            var panelUser = string.IsNullOrWhiteSpace(request.GatewayPanelUser)
+                ? $"omniadmin_{RandomAlphaNum(6)}"
+                : request.GatewayPanelUser.Trim();
+            var panelPassword = string.IsNullOrWhiteSpace(request.GatewayPanelPassword)
+                ? RandomAlphaNum(24)
+                : request.GatewayPanelPassword.Trim();
             var panelBasePath = $"omni{RandomAlphaNum(14).ToLowerInvariant()}";
-            var installArgs = BuildInstallArgs(request, panelUser, panelPassword, panelBasePath);
+            var installArgs = BuildInstallArgs(
+                request,
+                panelUser,
+                panelPassword,
+                panelBasePath,
+                uploadedPanelCertRemotePath,
+                uploadedPanelKeyRemotePath);
             var command =
                 "set -euo pipefail; " +
                 $"chmod +x {ShellQuote(RemoteInstallScriptPath)}; " +
@@ -185,7 +217,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 return new GatewayOperationResult(false, result.ErrorMessage);
             }
 
-            var panelUrl = $"https://{request.Config.TunnelHost}:{request.GatewayPanelPort}/";
+            var panelHost = string.IsNullOrWhiteSpace(request.GatewayPanelDomain)
+                ? request.Config.TunnelHost
+                : request.GatewayPanelDomain.Trim();
+            var panelScheme = request.GatewayPanelSslEnabled ? "https" : "http";
+            var panelUrl = $"{panelScheme}://{panelHost}:{request.GatewayPanelPort}/";
             return new GatewayOperationResult(
                 true,
                 $"Gateway install completed. Panel URL: {panelUrl} | Username: {panelUser} | Password: {panelPassword}",
@@ -600,12 +636,31 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         CancellationToken cancellationToken)
     {
         var localScript = ResolveInstallerScriptPath(request.SelectedGatewayProtocol);
+        await UploadFileAsync(request, localScript, RemoteInstallScriptPath, progress, cancellationToken);
+    }
+
+    private async Task UploadOmniPanelCommonScriptAsync(
+        GatewayDeploymentRequest request,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var localScript = ResolveOmniPanelCommonScriptPath();
+        await UploadFileAsync(request, localScript, RemoteOmniPanelCommonScriptPath, progress, cancellationToken);
+    }
+
+    private async Task UploadFileAsync(
+        GatewayDeploymentRequest request,
+        string localPath,
+        string remotePath,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
         ProcessStartInfo? BuildStartInfo(out string bindIp, out string? error)
         {
             if (!SshCliStartInfoFactory.TryCreateBoundScpUploadStartInfo(
                     request.Config,
-                    localScript,
-                    RemoteInstallScriptPath,
+                    localPath,
+                    remotePath,
                     out var startInfo,
                     out bindIp,
                     out error))
@@ -680,6 +735,26 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         if (string.IsNullOrWhiteSpace(path))
         {
             throw new InvalidOperationException($"Gateway installer script not found. Expected {scriptFileName} in app GatewayScripts content.");
+        }
+
+        return path;
+    }
+
+    private static string ResolveOmniPanelCommonScriptPath()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        const string scriptFileName = "setup_omnirelay_omnipanel_common.sh";
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
+            Path.Combine(baseDir, scriptFileName),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
+        };
+
+        var path = candidates.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException($"Shared OmniPanel script not found. Expected {scriptFileName} in app GatewayScripts content.");
         }
 
         return path;
@@ -900,14 +975,22 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         GatewayDeploymentRequest request,
         string panelUser,
         string panelPassword,
-        string panelBasePath)
+        string panelBasePath,
+        string panelCertRemotePath,
+        string panelKeyRemotePath)
     {
         return
             $"install {BuildCommonArgs(request)} {BuildProtocolArgs(request)} " +
             $"--tunnel-auth {ShellQuote(MapTunnelAuth(request.Config))} " +
             $"--panel-user {ShellQuote(panelUser)} " +
             $"--panel-password {ShellQuote(panelPassword)} " +
-            $"--panel-base-path {ShellQuote(panelBasePath)}";
+            $"--panel-base-path {ShellQuote(panelBasePath)} " +
+            $"--panel-domain {ShellQuote(request.GatewayPanelDomain.Trim())} " +
+            $"--panel-domain-only {(request.GatewayPanelDomainOnly ? "true" : "false")} " +
+            $"--panel-ssl {(request.GatewayPanelSslEnabled ? "true" : "false")} " +
+            $"--panel-ssl-mode {ShellQuote(NormalizePanelSslMode(request.GatewayPanelSslMode))} " +
+            $"--panel-cert-file {ShellQuote(panelCertRemotePath)} " +
+            $"--panel-key-file {ShellQuote(panelKeyRemotePath)}";
     }
 
     private static string BuildCommonArgs(GatewayDeploymentRequest request)
@@ -961,6 +1044,13 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         });
     }
 
+    private static string NormalizePanelSslMode(string? value)
+    {
+        return string.Equals(value?.Trim(), "uploaded", StringComparison.OrdinalIgnoreCase)
+            ? "uploaded"
+            : "letsencrypt";
+    }
+
     private static string MapTunnelAuth(ServiceConfig config)
     {
         var normalized = TunnelAuthMethods.Normalize(config.TunnelAuthMethod);
@@ -1007,6 +1097,32 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         if (request.GatewayPublicPort == request.GatewayPanelPort)
         {
             throw new InvalidOperationException("Gateway public and panel ports must be different.");
+        }
+
+        if ((request.GatewayPanelDomainOnly || request.GatewayPanelSslEnabled) &&
+            string.IsNullOrWhiteSpace(request.GatewayPanelDomain))
+        {
+            throw new InvalidOperationException("OmniPanel domain is required when Domain Only or SSL is enabled.");
+        }
+
+        var panelSslMode = NormalizePanelSslMode(request.GatewayPanelSslMode);
+        if (request.GatewayPanelSslEnabled && panelSslMode == "uploaded")
+        {
+            if (string.IsNullOrWhiteSpace(request.GatewayPanelCertLocalPath) ||
+                string.IsNullOrWhiteSpace(request.GatewayPanelKeyLocalPath))
+            {
+                throw new InvalidOperationException("Uploaded OmniPanel SSL mode requires both certificate and private key files.");
+            }
+
+            if (!File.Exists(request.GatewayPanelCertLocalPath))
+            {
+                throw new InvalidOperationException("Uploaded OmniPanel certificate file does not exist.");
+            }
+
+            if (!File.Exists(request.GatewayPanelKeyLocalPath))
+            {
+                throw new InvalidOperationException("Uploaded OmniPanel private key file does not exist.");
+            }
         }
 
         var selectedProtocol = GatewayProtocols.Normalize(request.SelectedGatewayProtocol);

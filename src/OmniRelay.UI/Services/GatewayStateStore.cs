@@ -52,6 +52,30 @@ public partial class GatewayStateStore : ObservableObject
     private string gatewayPanelPortText = "2054";
 
     [ObservableProperty]
+    private string gatewayPanelConfiguredUser = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayPanelConfiguredPassword = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayPanelDomain = string.Empty;
+
+    [ObservableProperty]
+    private bool gatewayPanelDomainOnly;
+
+    [ObservableProperty]
+    private bool gatewayPanelUseSsl;
+
+    [ObservableProperty]
+    private string gatewayPanelSslMode = "letsencrypt";
+
+    [ObservableProperty]
+    private string gatewayPanelUploadedCertPath = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayPanelUploadedKeyPath = string.Empty;
+
+    [ObservableProperty]
     private string gatewayBackendPortText = "15000";
 
     [ObservableProperty]

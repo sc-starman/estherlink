@@ -77,6 +77,15 @@ public sealed class GatewayOrchestratorService
             _state.SelectedGatewayProtocol = GatewayProtocols.Normalize(persisted.SelectedGatewayProtocol);
             _state.GatewayPublicPortText = NormalizeOrDefault(persisted.GatewayPublicPortText, "443");
             _state.GatewayPanelPortText = NormalizeOrDefault(persisted.GatewayPanelPortText, "2054");
+            _state.GatewayPanelConfiguredUser = NormalizeOrDefault(persisted.GatewayPanelConfiguredUser, string.Empty);
+            _state.GatewayPanelConfiguredPassword = GatewayStatePersistenceService.Unprotect(persisted.EncryptedGatewayPanelConfiguredPassword);
+            _state.GatewayPanelDomain = NormalizeOrDefault(persisted.GatewayPanelDomain, string.Empty);
+            _state.GatewayPanelDomainOnly = persisted.GatewayPanelDomainOnly;
+            _state.GatewayPanelUseSsl = persisted.GatewayPanelUseSsl;
+            _state.GatewayPanelSslMode = NormalizePanelSslModeOrDefault(persisted.GatewayPanelSslMode, "letsencrypt");
+            // Keep uploaded certificate/key local file picks session-only.
+            _state.GatewayPanelUploadedCertPath = string.Empty;
+            _state.GatewayPanelUploadedKeyPath = string.Empty;
             _state.GatewayBackendPortText = NormalizeOrDefault(persisted.GatewayBackendPortText, _state.TunnelRemotePortText);
             var defaultReality = GatewayRealityTargetCatalog.GetRandom();
             _state.GatewaySni = NormalizeOrDefault(persisted.GatewaySni, defaultReality.Sni);
@@ -87,9 +96,10 @@ public sealed class GatewayOrchestratorService
             _state.GatewayDnsMode = NormalizeDnsModeOrDefault(persisted.GatewayDnsMode, "hybrid");
             _state.GatewayDohEndpointsText = NormalizeOrDefault(persisted.GatewayDohEndpointsText, "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query");
             _state.GatewayDnsUdpOnly = persisted.GatewayDnsUdpOnly;
-            _state.GatewayPanelUrl = NormalizeOrDefault(persisted.GatewayPanelUrl, string.Empty);
-            _state.GatewayPanelUsername = NormalizeOrDefault(persisted.GatewayPanelUsername, string.Empty);
-            _state.GatewayInitialPanelPassword = NormalizeOrDefault(persisted.GatewayInitialPanelPassword, string.Empty);
+            // Install result credentials are one-time only and never reloaded from persisted UI state.
+            _state.GatewayPanelUrl = string.Empty;
+            _state.GatewayPanelUsername = string.Empty;
+            _state.GatewayInitialPanelPassword = string.Empty;
             _state.TunnelUser = NormalizeOrDefault(persisted.TunnelUser, "OmniRelay");
             _state.TunnelAuthMethod = TunnelAuthMethods.Normalize(persisted.TunnelAuthMethod);
             _state.TunnelKeyPath = persisted.TunnelKeyPath ?? string.Empty;
@@ -733,6 +743,15 @@ public sealed class GatewayOrchestratorService
             SelectedGatewayProtocol = _state.SelectedGatewayProtocol,
             GatewayPublicPortText = _state.GatewayPublicPortText,
             GatewayPanelPortText = _state.GatewayPanelPortText,
+            GatewayPanelConfiguredUser = _state.GatewayPanelConfiguredUser,
+            EncryptedGatewayPanelConfiguredPassword = GatewayStatePersistenceService.Protect(_state.GatewayPanelConfiguredPassword),
+            GatewayPanelDomain = _state.GatewayPanelDomain,
+            GatewayPanelDomainOnly = _state.GatewayPanelDomainOnly,
+            GatewayPanelUseSsl = _state.GatewayPanelUseSsl,
+            GatewayPanelSslMode = _state.GatewayPanelSslMode,
+            // Local upload picks are intentionally not persisted across sessions.
+            GatewayPanelUploadedCertPath = string.Empty,
+            GatewayPanelUploadedKeyPath = string.Empty,
             GatewayBackendPortText = _state.GatewayBackendPortText,
             GatewaySni = _state.GatewaySni,
             GatewayTarget = _state.GatewayTarget,
@@ -742,9 +761,10 @@ public sealed class GatewayOrchestratorService
             GatewayDnsMode = _state.GatewayDnsMode,
             GatewayDohEndpointsText = _state.GatewayDohEndpointsText,
             GatewayDnsUdpOnly = _state.GatewayDnsUdpOnly,
-            GatewayPanelUrl = _state.GatewayPanelUrl,
-            GatewayPanelUsername = _state.GatewayPanelUsername,
-            GatewayInitialPanelPassword = _state.GatewayInitialPanelPassword,
+            // Install result credentials are intentionally not persisted.
+            GatewayPanelUrl = string.Empty,
+            GatewayPanelUsername = string.Empty,
+            GatewayInitialPanelPassword = string.Empty,
             TunnelUser = _state.TunnelUser,
             TunnelAuthMethod = _state.TunnelAuthMethod,
             TunnelKeyPath = _state.TunnelKeyPath,
@@ -760,6 +780,12 @@ public sealed class GatewayOrchestratorService
     {
         var normalized = NormalizeOrDefault(value, fallback).Trim().ToLowerInvariant();
         return normalized is "hybrid" or "doh" or "udp" ? normalized : fallback;
+    }
+
+    private static string NormalizePanelSslModeOrDefault(string? value, string fallback)
+    {
+        var normalized = NormalizeOrDefault(value, fallback).Trim().ToLowerInvariant();
+        return normalized is "letsencrypt" or "uploaded" ? normalized : fallback;
     }
 
     private GatewayStatus EnsureStatusObject()
