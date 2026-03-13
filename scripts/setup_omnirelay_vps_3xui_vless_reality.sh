@@ -1508,6 +1508,20 @@ render_xray_template() {
       },${dns_rule_block}
     ]
   },
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true,
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  },
   "stats": {}
 }
 EOF
