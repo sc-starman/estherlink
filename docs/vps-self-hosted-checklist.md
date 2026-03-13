@@ -4,7 +4,7 @@
 1. Ubuntu 22.04+ with static public IP.
 2. Build offline bundle and upload/extract on VPS (`bundle/` directory present).
 3. Run command-mode installer:
-   - `sudo bash scripts/setup_omnirelay_vps_3xui.sh install --bundle-dir <bundle-dir> ...`
+   - `sudo bash scripts/setup_omnirelay_vps_3xui_vless_reality.sh install --bundle-dir <bundle-dir> ...`
 4. Tunnel user must have shell access and sudo permission (password mode used by UI gateway automation).
 4. Keep old script `scripts/setup_omnirelay_vps.sh` only for rollback scenarios.
 

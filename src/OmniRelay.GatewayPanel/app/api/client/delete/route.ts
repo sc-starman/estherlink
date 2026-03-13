@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { getInboundId, xuiJson } from "@/lib/xui";
+import { getGatewayProvider } from "@/lib/protocol";
 
 interface DeleteClientRequest {
   uuid?: string;
@@ -19,10 +19,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const inboundId = getInboundId();
-    await xuiJson(session, `/panel/api/inbounds/${encodeURIComponent(inboundId)}/delClient/${encodeURIComponent(uuid)}`, {
-      method: "POST"
-    });
+    const provider = getGatewayProvider();
+    await provider.deleteClient(session, uuid);
 
     await session.save();
     return NextResponse.json({ ok: true });

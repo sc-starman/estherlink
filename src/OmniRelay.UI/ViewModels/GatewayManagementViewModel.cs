@@ -77,6 +77,75 @@ public partial class GatewayManagementViewModel : ObservableObject
     public string AuthenticationDetailLabel =>
         IsHostKeyAuthSelected ? "Host Key File" : "Password";
 
+    public IReadOnlyList<(string Value, string Label)> AvailableGatewayProtocols => GatewayProtocols.All;
+
+    public int SelectedGatewayProtocolIndex
+    {
+        get
+        {
+            var selected = GatewayProtocols.Normalize(State.SelectedGatewayProtocol);
+            for (var i = 0; i < AvailableGatewayProtocols.Count; i++)
+            {
+                if (string.Equals(AvailableGatewayProtocols[i].Value, selected, StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+
+            return 0;
+        }
+        set
+        {
+            var normalizedIndex = Math.Clamp(value, 0, AvailableGatewayProtocols.Count - 1);
+            var protocol = AvailableGatewayProtocols[normalizedIndex].Value;
+            if (string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), protocol, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            State.SelectedGatewayProtocol = protocol;
+            Feedback = $"Protocol switched to {GatewayProtocols.ToLabel(protocol)}.";
+        }
+    }
+
+    public bool IsVlessProtocolSelected =>
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.VlessReality3xui, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsVlessPlain3xuiProtocolSelected =>
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.VlessPlain3xui, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsShadowTlsProtocolSelected =>
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.ShadowTlsV3ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsShadowsocks3xuiProtocolSelected =>
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.Shadowsocks3xui, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsOpenVpnProtocolSelected =>
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsIpsecL2tpProtocolSelected =>
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase);
+
+    public bool ShowEditableProtocolPort => !IsIpsecL2tpProtocolSelected;
+
+    public string FixedProtocolPortsText => "UDP 500, UDP 4500, UDP 1701 (fixed)";
+
+    public string ProtocolPortLabel =>
+        IsVlessProtocolSelected
+            ? "VLESS Reality Port"
+            : IsVlessPlain3xuiProtocolSelected
+                ? "VLESS (no TLS) Port"
+            : IsShadowsocks3xuiProtocolSelected
+                ? "Shadowsocks Port"
+            : IsShadowTlsProtocolSelected
+                ? "ShadowTLS Port"
+                : IsIpsecL2tpProtocolSelected
+                    ? "IPSec/L2TP Ports"
+                : "OpenVPN Port";
+
+    public string ProtocolPresetSwitchText =>
+        IsVlessProtocolSelected ? "Switch REALITY Pair" : "Switch Camouflage";
+
     [ObservableProperty]
     private string feedback = string.Empty;
 
@@ -218,27 +287,59 @@ public partial class GatewayManagementViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanRun))]
     private void SwitchRealityPair()
     {
-        var presets = GatewayRealityTargetCatalog.All;
-        var currentTarget = (_state.GatewayTarget ?? string.Empty).Trim();
-        var currentSni = (_state.GatewaySni ?? string.Empty).Trim();
-
-        var currentIndex = -1;
-        for (var i = 0; i < presets.Count; i++)
+        if (IsVlessProtocolSelected)
         {
-            if (string.Equals(presets[i].Target, currentTarget, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(presets[i].Sni, currentSni, StringComparison.OrdinalIgnoreCase))
+            var presets = GatewayRealityTargetCatalog.All;
+            var currentTarget = (_state.GatewayTarget ?? string.Empty).Trim();
+            var currentSni = (_state.GatewaySni ?? string.Empty).Trim();
+
+            var currentIndex = -1;
+            for (var i = 0; i < presets.Count; i++)
             {
-                currentIndex = i;
+                if (string.Equals(presets[i].Target, currentTarget, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(presets[i].Sni, currentSni, StringComparison.OrdinalIgnoreCase))
+                {
+                    currentIndex = i;
+                    break;
+                }
+            }
+
+            var nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % presets.Count;
+            var next = presets[nextIndex];
+
+            _state.GatewayTarget = next.Target;
+            _state.GatewaySni = next.Sni;
+            Feedback = $"Switched REALITY pair to {next.Sni} ({next.Target}).";
+            return;
+        }
+
+        if (IsOpenVpnProtocolSelected)
+        {
+            Feedback = "Preset switch is not used for OpenVPN protocol.";
+            return;
+        }
+
+        if (IsIpsecL2tpProtocolSelected)
+        {
+            Feedback = "Preset switch is not used for IPSec/L2TP protocol.";
+            return;
+        }
+
+        var catalog = GatewayCamouflageCatalog.All;
+        var current = (_state.ShadowTlsCamouflageServer ?? string.Empty).Trim();
+        var currentCatalogIndex = -1;
+        for (var i = 0; i < catalog.Count; i++)
+        {
+            if (string.Equals(catalog[i], current, StringComparison.OrdinalIgnoreCase))
+            {
+                currentCatalogIndex = i;
                 break;
             }
         }
 
-        var nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % presets.Count;
-        var next = presets[nextIndex];
-
-        _state.GatewayTarget = next.Target;
-        _state.GatewaySni = next.Sni;
-        Feedback = $"Switched REALITY pair to {next.Sni} ({next.Target}).";
+        var nextCamouflageIndex = currentCatalogIndex < 0 ? 0 : (currentCatalogIndex + 1) % catalog.Count;
+        _state.ShadowTlsCamouflageServer = catalog[nextCamouflageIndex];
+        Feedback = $"Switched camouflage server to {_state.ShadowTlsCamouflageServer}.";
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
@@ -718,7 +819,26 @@ public partial class GatewayManagementViewModel : ObservableObject
         {
             var request = BuildGatewayRequest();
             var status = await _gatewayDeployment.GetStatusAsync(request, sudoPassword);
-            GatewayServiceState = $"x-ui={status.XuiState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
+            var activeProtocolLabel = GatewayProtocols.ToLabel(status.ActiveProtocol);
+            if (string.Equals(GatewayProtocols.Normalize(status.ActiveProtocol), GatewayProtocols.ShadowTlsV3ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase))
+            {
+                GatewayServiceState = $"protocol={activeProtocolLabel}, sing-box={status.SingBoxState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
+                return;
+            }
+
+            if (string.Equals(GatewayProtocols.Normalize(status.ActiveProtocol), GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+            {
+                GatewayServiceState = $"protocol={activeProtocolLabel}, openvpn={status.OpenVpnState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
+                return;
+            }
+
+            if (string.Equals(GatewayProtocols.Normalize(status.ActiveProtocol), GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase))
+            {
+                GatewayServiceState = $"protocol={activeProtocolLabel}, ipsec={status.IpsecState}, xl2tpd={status.Xl2tpdState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
+                return;
+            }
+
+            GatewayServiceState = $"protocol={activeProtocolLabel}, x-ui={status.XuiState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
         }
         catch (Exception ex)
         {
@@ -759,24 +879,47 @@ public partial class GatewayManagementViewModel : ObservableObject
     {
         var config = BuildServiceConfig();
 
-        if (!int.TryParse(_state.GatewayPublicPortText.Trim(), out var publicPort) || publicPort <= 0)
-        {
-            throw new InvalidOperationException("Gateway public port must be a positive integer.");
-        }
-
         if (!int.TryParse(_state.GatewayPanelPortText.Trim(), out var panelPort) || panelPort <= 0)
         {
             throw new InvalidOperationException("Gateway panel port must be a positive integer.");
         }
 
-        if (string.IsNullOrWhiteSpace(_state.GatewaySni))
+        var selectedProtocol = GatewayProtocols.Normalize(_state.SelectedGatewayProtocol);
+        var publicPort = 0;
+        if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Gateway SNI is required.");
+            publicPort = 1701;
+        }
+        else if (!int.TryParse(_state.GatewayPublicPortText.Trim(), out publicPort) || publicPort <= 0)
+        {
+            throw new InvalidOperationException("Gateway public port must be a positive integer.");
         }
 
-        if (string.IsNullOrWhiteSpace(_state.GatewayTarget))
+        if (string.Equals(selectedProtocol, GatewayProtocols.VlessReality3xui, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Gateway target is required.");
+            if (string.IsNullOrWhiteSpace(_state.GatewaySni))
+            {
+                throw new InvalidOperationException("Gateway SNI is required for VLESS Reality.");
+            }
+
+            if (string.IsNullOrWhiteSpace(_state.GatewayTarget))
+            {
+                throw new InvalidOperationException("Gateway target is required for VLESS Reality.");
+            }
+        }
+        else if (string.Equals(selectedProtocol, GatewayProtocols.ShadowTlsV3ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(_state.ShadowTlsCamouflageServer))
+            {
+                throw new InvalidOperationException("Camouflage server is required for ShadowTLS.");
+            }
+        }
+        else if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(_state.OpenVpnNetwork))
+            {
+                throw new InvalidOperationException("OpenVPN tunnel network is required.");
+            }
         }
 
         var dnsMode = _state.GatewayDnsMode.Trim().ToLowerInvariant();
@@ -793,10 +936,14 @@ public partial class GatewayManagementViewModel : ObservableObject
         return new GatewayDeploymentRequest
         {
             Config = config,
+            SelectedGatewayProtocol = selectedProtocol,
             GatewayPublicPort = publicPort,
             GatewayPanelPort = panelPort,
             GatewaySni = _state.GatewaySni.Trim(),
             GatewayTarget = _state.GatewayTarget.Trim(),
+            ShadowTlsCamouflageServer = _state.ShadowTlsCamouflageServer.Trim(),
+            OpenVpnNetwork = _state.OpenVpnNetwork.Trim(),
+            OpenVpnClientDns = _state.OpenVpnClientDns.Trim(),
             GatewayDnsMode = dnsMode,
             GatewayDohEndpoints = _state.GatewayDohEndpointsText.Trim(),
             GatewayDnsUdpOnly = _state.GatewayDnsUdpOnly
@@ -925,6 +1072,21 @@ public partial class GatewayManagementViewModel : ObservableObject
             OnPropertyChanged(nameof(IsPasswordAuthSelected));
             OnPropertyChanged(nameof(TunnelAuthMethodIndex));
             OnPropertyChanged(nameof(AuthenticationDetailLabel));
+        }
+
+        if (e.PropertyName == nameof(GatewayStateStore.SelectedGatewayProtocol))
+        {
+            OnPropertyChanged(nameof(SelectedGatewayProtocolIndex));
+            OnPropertyChanged(nameof(IsVlessProtocolSelected));
+            OnPropertyChanged(nameof(IsVlessPlain3xuiProtocolSelected));
+            OnPropertyChanged(nameof(IsShadowsocks3xuiProtocolSelected));
+            OnPropertyChanged(nameof(IsShadowTlsProtocolSelected));
+            OnPropertyChanged(nameof(IsOpenVpnProtocolSelected));
+            OnPropertyChanged(nameof(IsIpsecL2tpProtocolSelected));
+            OnPropertyChanged(nameof(ShowEditableProtocolPort));
+            OnPropertyChanged(nameof(FixedProtocolPortsText));
+            OnPropertyChanged(nameof(ProtocolPortLabel));
+            OnPropertyChanged(nameof(ProtocolPresetSwitchText));
         }
 
         if (e.PropertyName is nameof(GatewayStateStore.TunnelKeyPassphrase) or nameof(GatewayStateStore.TunnelPassword) or nameof(GatewayStateStore.TunnelKeyPath))

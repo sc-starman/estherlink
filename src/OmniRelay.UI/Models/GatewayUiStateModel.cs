@@ -11,11 +11,15 @@ public sealed class GatewayUiStateModel
     public string TunnelHost { get; set; } = "vps.example.com";
     public string TunnelSshPortText { get; set; } = "22";
     public string TunnelRemotePortText { get; set; } = "15000";
+    public string SelectedGatewayProtocol { get; set; } = GatewayProtocols.VlessReality3xui;
     public string GatewayPublicPortText { get; set; } = "443";
     public string GatewayPanelPortText { get; set; } = "2054";
     public string GatewayBackendPortText { get; set; } = "15000";
     public string GatewaySni { get; set; } = string.Empty;
     public string GatewayTarget { get; set; } = string.Empty;
+    public string ShadowTlsCamouflageServer { get; set; } = string.Empty;
+    public string OpenVpnNetwork { get; set; } = "10.29.0.0/24";
+    public string OpenVpnClientDns { get; set; } = "1.1.1.1,8.8.8.8";
     public string GatewayDnsMode { get; set; } = "hybrid";
     public string GatewayDohEndpointsText { get; set; } = "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query";
     public bool GatewayDnsUdpOnly { get; set; } = true;

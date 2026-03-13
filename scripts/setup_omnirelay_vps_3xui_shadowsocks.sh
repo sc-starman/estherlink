@@ -69,13 +69,12 @@ Commands:
   dns-apply    Apply OmniRelay DNS-through-tunnel profile
   dns-status   Check DNS profile presence/readiness
   dns-repair   Restore/repair DNS profile
+  sync-clients Compatibility no-op (3x-ui manages clients via API)
 
 Options:
   --public-port <port>          Public client ingress port for 3x-ui/Xray inbound (default: ${PUBLIC_PORT})
   --panel-port <port>           OmniPanel public HTTPS port (default: ${PANEL_PORT})
   --backend-port <port>         Loopback port for reverse tunnel endpoint (default: ${BACKEND_PORT})
-  --gateway-sni <host>          REALITY SNI value for managed inbound (required for install)
-  --gateway-target <host:port>  REALITY target value for managed inbound (required for install)
   --ssh-port <port>             SSH port used by the Windows client to connect to VPS (default: ${SSH_PORT}); does not modify local sshd listen port
   --tunnel-user <name>          SSH tunnel user (default: ${TUNNEL_USER})
   --tunnel-auth <method>        host_key | password | both (default: ${TUNNEL_AUTH_METHOD})
@@ -266,12 +265,56 @@ configure_online_proxy_env() {
   export HTTP_PROXY="$ALL_PROXY"
 }
 
+sync_time_via_bootstrap_socks() {
+  local date_header remote_epoch now_epoch delta abs_delta was_ntp
+  was_ntp=""
+
+  configure_online_proxy_env
+  date_header="$(curl --silent --show-error --insecure --max-time 20 --connect-timeout 10 --retry 0 \
+    --socks5-hostname "127.0.0.1:${BOOTSTRAP_SOCKS_PORT}" -I "$PROXY_CHECK_URL" 2>/dev/null \
+    | tr -d '\r' \
+    | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')"
+  [[ -n "$date_header" ]] || return 1
+
+  remote_epoch="$(date -u -d "$date_header" +%s 2>/dev/null || true)"
+  [[ -n "$remote_epoch" ]] || return 1
+
+  now_epoch="$(date -u +%s 2>/dev/null || echo 0)"
+  delta=$(( remote_epoch - now_epoch ))
+  abs_delta=$delta
+  if (( abs_delta < 0 )); then
+    abs_delta=$(( -abs_delta ))
+  fi
+
+  if (( abs_delta <= 5 )); then
+    log "Clock skew via SOCKS is ${abs_delta}s; no clock adjustment needed."
+    return 0
+  fi
+
+  if command -v timedatectl >/dev/null 2>&1; then
+    was_ntp="$(timedatectl show -p NTP --value 2>/dev/null || true)"
+    [[ "$was_ntp" == "yes" ]] && timedatectl set-ntp false >/dev/null 2>&1 || true
+  fi
+
+  if ! date -u -s "@${remote_epoch}" >/dev/null 2>&1; then
+    [[ "$was_ntp" == "yes" ]] && timedatectl set-ntp true >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  command -v hwclock >/dev/null 2>&1 && hwclock --systohc >/dev/null 2>&1 || true
+  [[ "$was_ntp" == "yes" ]] && timedatectl set-ntp true >/dev/null 2>&1 || true
+  log "Adjusted system clock by ${delta}s via SOCKS-backed HTTPS date (${date_header})."
+  return 0
+}
+
 verify_bootstrap_socks() {
   progress 8 "Checking bootstrap SOCKS endpoint"
   local retries=24
   local wait_sec=5
   local listener_ok=0
   local curl_ok=0
+  local time_sync_attempted=0
+  local curl_err=""
 
   for ((i=1; i<=retries; i++)); do
     if ss -lnt "( sport = :${BOOTSTRAP_SOCKS_PORT} )" 2>/dev/null | awk 'NR>1 {print $0}' | grep -q .; then
@@ -282,9 +325,22 @@ verify_bootstrap_socks() {
 
     if (( listener_ok == 1 )); then
       configure_online_proxy_env
-      if curl --fail --silent --show-error --max-time 20 --socks5-hostname "127.0.0.1:${BOOTSTRAP_SOCKS_PORT}" "$PROXY_CHECK_URL" >/dev/null; then
+      if curl --fail --silent --show-error --max-time 20 --socks5-hostname "127.0.0.1:${BOOTSTRAP_SOCKS_PORT}" "$PROXY_CHECK_URL" >/dev/null 2>/tmp/omnirelay-bootstrap-curl.err; then
+        rm -f /tmp/omnirelay-bootstrap-curl.err
         curl_ok=1
         break
+      fi
+      curl_err="$(tr -d '\r' </tmp/omnirelay-bootstrap-curl.err 2>/dev/null || true)"
+      rm -f /tmp/omnirelay-bootstrap-curl.err
+      [[ -n "$curl_err" ]] && printf '%s\n' "$curl_err"
+      if (( time_sync_attempted == 0 )) && printf '%s' "$curl_err" | grep -qi "certificate is not yet valid"; then
+        log "Detected TLS clock skew during SOCKS probe; attempting clock sync via tunnel."
+        if sync_time_via_bootstrap_socks; then
+          time_sync_attempted=1
+          continue
+        fi
+        log "Clock sync attempt via SOCKS failed; continuing retries."
+        time_sync_attempted=1
       fi
     fi
 
@@ -311,6 +367,8 @@ Acquire::https::Proxy \"socks5h://127.0.0.1:${BOOTSTRAP_SOCKS_PORT}\";"
 install_packages_online() {
   progress 20 "Configuring apt to use SOCKS bootstrap"
   configure_apt_proxy
+  progress 22 "Syncing VPS clock over SOCKS bootstrap (if needed)"
+  sync_time_via_bootstrap_socks || log "Clock sync over SOCKS skipped/failed; continuing."
 
   progress 26 "Updating apt indexes"
   DEBIAN_FRONTEND=noninteractive apt-get update
@@ -583,20 +641,25 @@ xui_api_base_url() {
 }
 
 xui_wait_for_panel_ready() {
-  local retries=30
-  local probe_path
+  local retries=90
+  local probe_paths=()
+  local probe_path code
   PANEL_BASE_PATH="${PANEL_BASE_PATH#/}"
   PANEL_BASE_PATH="${PANEL_BASE_PATH%/}"
-  probe_path="/${PANEL_BASE_PATH}/"
+  probe_paths=("/${PANEL_BASE_PATH}/" "/${PANEL_BASE_PATH}" "/")
 
   disable_proxy_env
   for ((i=1; i<=retries; i++)); do
-    if curl --noproxy '*' --silent --output /dev/null --insecure --max-time 4 "http://127.0.0.1:${XUI_PANEL_PORT}${probe_path}" 2>/dev/null; then
-      return 0
-    fi
-    if curl --noproxy '*' --silent --output /dev/null --insecure --max-time 4 "https://127.0.0.1:${XUI_PANEL_PORT}${probe_path}" 2>/dev/null; then
-      return 0
-    fi
+    for probe_path in "${probe_paths[@]}"; do
+      code="$(curl --noproxy '*' --silent --insecure --max-time 4 --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${XUI_PANEL_PORT}${probe_path}" 2>/dev/null || true)"
+      if [[ -n "$code" && "$code" != "000" ]]; then
+        return 0
+      fi
+      code="$(curl --noproxy '*' --silent --insecure --max-time 4 --output /dev/null --write-out '%{http_code}' "https://127.0.0.1:${XUI_PANEL_PORT}${probe_path}" 2>/dev/null || true)"
+      if [[ -n "$code" && "$code" != "000" ]]; then
+        return 0
+      fi
+    done
     sleep 1
   done
 
@@ -604,23 +667,35 @@ xui_wait_for_panel_ready() {
 }
 
 xui_detect_api_scheme() {
+  local retries=45
+  local login_paths=()
   local login_path code
-  login_path="/${PANEL_BASE_PATH}/login/"
+  PANEL_BASE_PATH="${PANEL_BASE_PATH#/}"
+  PANEL_BASE_PATH="${PANEL_BASE_PATH%/}"
+  login_paths=("/${PANEL_BASE_PATH}/login/" "/${PANEL_BASE_PATH}/login" "/${PANEL_BASE_PATH}/" "/")
 
   disable_proxy_env
 
-  # Prefer HTTPS first because x-ui may enforce HTTPS with HTTP 307 redirects.
-  code="$(curl --noproxy '*' --silent --insecure --output /dev/null --write-out '%{http_code}' "https://127.0.0.1:${XUI_PANEL_PORT}${login_path}" 2>/dev/null || true)"
-  if [[ "$code" != "000" && -n "$code" ]]; then
-    XUI_API_SCHEME="https"
-    return 0
-  fi
+  for ((i=1; i<=retries; i++)); do
+    # Prefer HTTPS first because x-ui may enforce HTTPS with redirects.
+    for login_path in "${login_paths[@]}"; do
+      code="$(curl --noproxy '*' --silent --insecure --max-time 4 --output /dev/null --write-out '%{http_code}' "https://127.0.0.1:${XUI_PANEL_PORT}${login_path}" 2>/dev/null || true)"
+      if [[ -n "$code" && "$code" != "000" ]]; then
+        XUI_API_SCHEME="https"
+        return 0
+      fi
+    done
 
-  code="$(curl --noproxy '*' --silent --insecure --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${XUI_PANEL_PORT}${login_path}" 2>/dev/null || true)"
-  if [[ "$code" != "000" && -n "$code" ]]; then
-    XUI_API_SCHEME="http"
-    return 0
-  fi
+    for login_path in "${login_paths[@]}"; do
+      code="$(curl --noproxy '*' --silent --insecure --max-time 4 --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${XUI_PANEL_PORT}${login_path}" 2>/dev/null || true)"
+      if [[ -n "$code" && "$code" != "000" ]]; then
+        XUI_API_SCHEME="http"
+        return 0
+      fi
+    done
+
+    sleep 1
+  done
 
   return 1
 }
@@ -751,7 +826,7 @@ PY
 
 find_existing_managed_inbound_id() {
   local api_base="$1"
-  local list_resp existing_id
+  local list_resp existing_id existing_proto
 
   list_resp="$(curl --noproxy '*' --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" "${api_base}/inbounds/list" 2>/dev/null || true)"
   if [[ -z "$list_resp" ]]; then
@@ -772,20 +847,41 @@ find_existing_managed_inbound_id() {
   ' 2>/dev/null || true)"
 
   if [[ -n "$existing_id" && "$existing_id" != "null" ]]; then
-    INBOUND_ID="$existing_id"
-    return 0
+    existing_proto="$(printf '%s' "$list_resp" | jq -r --arg id "$existing_id" '
+      if .success != true then
+        empty
+      else
+        ((.obj // []) | map(select((.id|tostring) == $id)) | .[0].protocol) // empty
+      end
+    ' 2>/dev/null || true)"
+
+    if [[ "$existing_proto" == "shadowsocks" ]]; then
+      INBOUND_ID="$existing_id"
+      return 0
+    fi
+
+    log "Inbound on port ${PUBLIC_PORT} uses protocol '${existing_proto:-unknown}', replacing with managed Shadowsocks inbound."
+    local delete_resp delete_ok
+    delete_resp="$(curl --noproxy '*' --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" \
+      --request POST \
+      "${api_base}/inbounds/del/${existing_id}" 2>/dev/null || true)"
+    delete_ok="$(printf '%s' "$delete_resp" | jq -r '.success // empty' 2>/dev/null || true)"
+    if [[ "$delete_ok" != "true" ]]; then
+      delete_resp="$(curl --noproxy '*' --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" \
+        "${api_base}/inbounds/del/${existing_id}" 2>/dev/null || true)"
+      delete_ok="$(printf '%s' "$delete_resp" | jq -r '.success // empty' 2>/dev/null || true)"
+    fi
+    [[ "$delete_ok" == "true" ]] || die "Failed to delete existing 3x-ui inbound id=${existing_id} during protocol replacement."
+    INBOUND_ID=""
   fi
 
   return 1
 }
 
 provision_managed_inbound() {
-  progress 78 "Creating managed VLESS REALITY inbound"
-  local api_base cert_json private_key public_key client_uuid sub_id short_ids_json
+  progress 78 "Creating managed Shadowsocks inbound"
+  local api_base client_uuid sub_id ss_password
   local settings_json stream_settings_json sniffing_json add_resp success add_msg
-
-  [[ -n "$GATEWAY_SNI" ]] || die "--gateway-sni is required for install."
-  [[ -n "$GATEWAY_TARGET" ]] || die "--gateway-target is required for install."
 
   xui_api_login
   api_base="$(xui_api_base_url)/panel/api"
@@ -796,24 +892,22 @@ provision_managed_inbound() {
     return 0
   fi
 
-  cert_json="$(curl --noproxy '*' --fail --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" "${api_base}/server/getNewX25519Cert")"
-  private_key="$(printf '%s' "$cert_json" | jq -r '.obj.privateKey // empty')"
-  public_key="$(printf '%s' "$cert_json" | jq -r '.obj.publicKey // empty')"
-  [[ -n "$private_key" && -n "$public_key" ]] || die "3x-ui getNewX25519Cert did not return private/public key."
-
   client_uuid="$(random_uuid)"
   sub_id="$(random_string 16 | tr '[:upper:]' '[:lower:]')"
-  short_ids_json="$(generate_short_ids_json)"
+  ss_password="$(random_string 24)"
 
   settings_json="$(jq -cn \
     --arg uuid "$client_uuid" \
     --arg subId "$sub_id" \
+    --arg password "$ss_password" \
+    --arg method "chacha20-ietf-poly1305" \
     '{
       clients: [
         {
           id: $uuid,
-          flow: "xtls-rprx-vision",
           email: "OmniRelayAdmin",
+          password: $password,
+          method: "",
           limitIp: 0,
           totalGB: 0,
           expiryTime: 0,
@@ -824,46 +918,12 @@ provision_managed_inbound() {
           reset: 0
         }
       ],
-      decryption: "none",
+      method: $method,
+      network: "tcp",
       encryption: "none"
     }')"
 
-  stream_settings_json="$(jq -cn \
-    --arg target "$GATEWAY_TARGET" \
-    --arg sni "$GATEWAY_SNI" \
-    --arg privateKey "$private_key" \
-    --arg publicKey "$public_key" \
-    --argjson shortIds "$short_ids_json" \
-    '{
-      network: "tcp",
-      security: "reality",
-      externalProxy: [],
-      realitySettings: {
-        show: false,
-        xver: 0,
-        target: $target,
-        serverNames: [$sni],
-        privateKey: $privateKey,
-        minClientVer: "",
-        maxClientVer: "",
-        maxTimediff: 0,
-        shortIds: $shortIds,
-        mldsa65Seed: "",
-        settings: {
-          publicKey: $publicKey,
-          fingerprint: "chrome",
-          serverName: "",
-          spiderX: "/",
-          mldsa65Verify: ""
-        }
-      },
-      tcpSettings: {
-        acceptProxyProtocol: false,
-        header: {
-          type: "none"
-        }
-      }
-    }')"
+  stream_settings_json='{"network":"tcp","security":"none","externalProxy":[]}'
 
   sniffing_json='{"enabled":false,"destOverride":["http","tls","quic","fakedns"],"metadataOnly":false,"routeOnly":false}'
   add_resp="$(curl --noproxy '*' --fail --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" \
@@ -878,7 +938,7 @@ provision_managed_inbound() {
     --data-urlencode "lastTrafficResetTime=0" \
     --data-urlencode "listen=" \
     --data-urlencode "port=${PUBLIC_PORT}" \
-    --data-urlencode "protocol=vless" \
+    --data-urlencode "protocol=shadowsocks" \
     --data-urlencode "settings=${settings_json}" \
     --data-urlencode "streamSettings=${stream_settings_json}" \
     --data-urlencode "sniffing=${sniffing_json}" \
@@ -887,13 +947,43 @@ provision_managed_inbound() {
   success="$(printf '%s' "$add_resp" | jq -r '.success // false')"
   if [[ "$success" != "true" ]]; then
     add_msg="$(printf '%s' "$add_resp" | jq -r '.msg // "unknown error"' 2>/dev/null || printf 'unknown error')"
+    if [[ "$add_msg" == *"Duplicate email"* ]]; then
+      log "Managed default client email already exists; retrying inbound creation without pre-seeded client."
+      settings_json="$(jq -cn \
+        --arg method "chacha20-ietf-poly1305" \
+        '{
+          clients: [],
+          method: $method,
+          network: "tcp",
+          encryption: "none"
+        }')"
+      add_resp="$(curl --noproxy '*' --fail --silent --show-error --insecure --cookie "$XUI_COOKIE_JAR" \
+        --header 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
+        --data-urlencode "up=0" \
+        --data-urlencode "down=0" \
+        --data-urlencode "total=0" \
+        --data-urlencode "remark=omni-relay" \
+        --data-urlencode "enable=true" \
+        --data-urlencode "expiryTime=0" \
+        --data-urlencode "trafficReset=never" \
+        --data-urlencode "lastTrafficResetTime=0" \
+        --data-urlencode "listen=" \
+        --data-urlencode "port=${PUBLIC_PORT}" \
+        --data-urlencode "protocol=shadowsocks" \
+        --data-urlencode "settings=${settings_json}" \
+        --data-urlencode "streamSettings=${stream_settings_json}" \
+        --data-urlencode "sniffing=${sniffing_json}" \
+        "${api_base}/inbounds/add")"
+      success="$(printf '%s' "$add_resp" | jq -r '.success // false')"
+      add_msg="$(printf '%s' "$add_resp" | jq -r '.msg // "unknown error"' 2>/dev/null || printf 'unknown error')"
+    fi
     if [[ "$add_msg" == *"Port already exists"* ]]; then
       if find_existing_managed_inbound_id "$api_base"; then
         log "Detected existing inbound after port-conflict; reusing inbound_id=${INBOUND_ID}."
         return 0
       fi
     fi
-    die "Failed to create managed inbound via 3x-ui API: ${add_msg}"
+    [[ "$success" == "true" ]] || die "Failed to create managed inbound via 3x-ui API: ${add_msg}"
   fi
 
   INBOUND_ID="$(printf '%s' "$add_resp" | jq -r '.obj.id // empty')"
@@ -965,7 +1055,7 @@ EOF
 
 deploy_omnipanel_artifact() {
   progress 88 "Deploying OmniPanel artifact"
-  local download_url release_id release_dir tmp_tar current_dir nested_dir panel_public_host app_parent_dir
+  local download_url release_id release_dir tmp_tar current_dir nested_dir panel_public_host app_parent_dir panel_auth_file
   local panel_ready=false
 
   ensure_metadata_dir
@@ -1007,6 +1097,8 @@ deploy_omnipanel_artifact() {
   if [[ -z "$panel_public_host" ]]; then
     panel_public_host="localhost"
   fi
+  panel_auth_file="${OMNIPANEL_APP_DIR}/panel-auth.json"
+  jq -n --arg user "$PANEL_USER" --arg password "$PANEL_PASSWORD" '{username:$user,password:$password}' > "$panel_auth_file"
 
   cat > "$OMNIPANEL_ENV_FILE" <<EOF
 NODE_ENV=production
@@ -1014,8 +1106,14 @@ HOSTNAME=127.0.0.1
 PORT=${OMNIPANEL_INTERNAL_PORT}
 SESSION_SECRET=${SESSION_SECRET}
 NODE_TLS_REJECT_UNAUTHORIZED=0
+OMNIPANEL_AUTH_FILE=${panel_auth_file}
+OMNIPANEL_AUTH_USERNAME=${PANEL_USER}
+OMNIPANEL_AUTH_PASSWORD=${PANEL_PASSWORD}
+OMNIRELAY_ACTIVE_PROTOCOL=shadowsocks_3xui
 XUI_BASE_URL=$(xui_api_base_url)
 XUI_INBOUND_ID=${INBOUND_ID}
+XUI_AUTH_USERNAME=${PANEL_USER}
+XUI_AUTH_PASSWORD=${PANEL_PASSWORD}
 PANEL_PUBLIC_PORT=${PANEL_PORT}
 PANEL_PUBLIC_HOST=${panel_public_host}
 EOF
@@ -1045,6 +1143,8 @@ EOF
 
   ln -sfn "$release_dir" "$current_dir"
   chown -R omnigateway:omnigateway "$OMNIPANEL_APP_DIR"
+  chown omnigateway:omnigateway "$panel_auth_file"
+  chmod 0640 "$panel_auth_file"
   chmod 0755 "$app_parent_dir" "$OMNIPANEL_APP_DIR" "${OMNIPANEL_APP_DIR}/releases" "$release_dir"
 
   systemctl daemon-reload
@@ -1139,6 +1239,7 @@ write_gateway_metadata() {
   ensure_metadata_dir
 
   jq -n \
+    --arg activeProtocol "shadowsocks_3xui" \
     --arg inboundId "$INBOUND_ID" \
     --arg xuiPort "$XUI_PANEL_PORT" \
     --arg xuiPath "$PANEL_BASE_PATH" \
@@ -1150,6 +1251,7 @@ write_gateway_metadata() {
     --arg gatewaySni "$GATEWAY_SNI" \
     --arg gatewayTarget "$GATEWAY_TARGET" \
     '{
+      active_protocol: $activeProtocol,
       inbound_id: $inboundId,
       xui_panel_port: ($xuiPort | tonumber),
       xui_base_path: $xuiPath,
@@ -1523,6 +1625,12 @@ dns_repair_impl() {
   dns_apply_impl
 }
 
+sync_clients_impl() {
+  require_root
+  log "sync-clients is not required for shadowsocks_3xui; skipping."
+  echo "ok"
+}
+
 disable_haproxy() {
   if systemctl list-unit-files | grep -q '^haproxy\.service'; then
     systemctl disable --now haproxy || true
@@ -1587,7 +1695,7 @@ status_impl() {
   doh_endpoints="$(printf '%s' "$dns_json" | grep -o '"dohEndpoints":"[^"]*"' | sed 's/"dohEndpoints":"//;s/"$//')"
 
   if (( STATUS_JSON == 1 )); then
-    printf '{"sshState":"%s","xuiState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"bootstrapSocksListener":%s,"inboundId":"%s","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' \
+    printf '{"activeProtocol":"shadowsocks_3xui","sshState":"%s","xuiState":"%s","singBoxState":"inactive","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"bootstrapSocksListener":%s,"inboundId":"%s","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' \
       "$(json_escape "$ssh_state")" \
       "$(json_escape "$xui_state")" \
       "$(json_escape "$omnipanel_state")" \
@@ -1705,7 +1813,7 @@ health_impl() {
   progress 100 "Health checks completed"
 
   if (( HEALTH_JSON == 1 )); then
-    printf '{"healthy":%s,"sshState":"%s","xuiState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"bootstrapSocksListener":%s,"inboundId":"%s","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsLastError":"%s"}\n' \
+    printf '{"healthy":%s,"activeProtocol":"shadowsocks_3xui","sshState":"%s","xuiState":"%s","singBoxState":"inactive","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":%s,"bootstrapSocksPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"bootstrapSocksListener":%s,"inboundId":"%s","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsLastError":"%s"}\n' \
       "$healthy" \
       "$(json_escape "$ssh_state")" \
       "$(json_escape "$xui_state")" \
@@ -1864,6 +1972,12 @@ install_impl() {
   require_existing_sshd
 
   progress 3 "Validating platform"
+  systemctl disable --now omnirelay-singbox omnirelay-openvpn omnirelay-redsocks omnirelay-ipsec-rules 2>/dev/null || true
+  systemctl disable --now ipsec xl2tpd strongswan-starter 2>/dev/null || true
+  rm -f /etc/systemd/system/omnirelay-singbox.service /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service
+  rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec
+  rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf
+  systemctl daemon-reload
   setup_tunnel_user
   configure_sshd
   progress 8 "Bootstrap SOCKS pre-check skipped; using live online install checks"
@@ -2021,10 +2135,6 @@ validate_common() {
     *) die "Invalid --tunnel-auth value: ${TUNNEL_AUTH_METHOD}. Expected host_key|password|both." ;;
   esac
 
-  if [[ "$COMMAND" == "install" ]]; then
-    [[ -n "$GATEWAY_SNI" ]] || die "--gateway-sni is required for install."
-    [[ -n "$GATEWAY_TARGET" ]] || die "--gateway-target is required for install."
-  fi
 }
 
 main() {
@@ -2059,8 +2169,11 @@ main() {
     dns-repair)
       dns_repair_impl
       ;;
+    sync-clients)
+      sync_clients_impl
+      ;;
     *)
-      die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair"
+      die "Unknown command: ${COMMAND}. Expected install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair|sync-clients"
       ;;
   esac
 }

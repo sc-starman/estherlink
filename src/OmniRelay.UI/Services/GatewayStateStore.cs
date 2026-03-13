@@ -13,6 +13,7 @@ public partial class GatewayStateStore : ObservableObject
         var pair = GatewayRealityTargetCatalog.GetRandom();
         gatewaySni = pair.Sni;
         gatewayTarget = pair.Target;
+        shadowTlsCamouflageServer = GatewayCamouflageCatalog.GetRandom();
     }
 
     public ObservableCollection<AdapterChoiceModel> Adapters { get; } = [];
@@ -42,6 +43,9 @@ public partial class GatewayStateStore : ObservableObject
     private string tunnelRemotePortText = "15000";
 
     [ObservableProperty]
+    private string selectedGatewayProtocol = GatewayProtocols.VlessReality3xui;
+
+    [ObservableProperty]
     private string gatewayPublicPortText = "443";
 
     [ObservableProperty]
@@ -55,6 +59,15 @@ public partial class GatewayStateStore : ObservableObject
 
     [ObservableProperty]
     private string gatewayTarget = string.Empty;
+
+    [ObservableProperty]
+    private string shadowTlsCamouflageServer = string.Empty;
+
+    [ObservableProperty]
+    private string openVpnNetwork = "10.29.0.0/24";
+
+    [ObservableProperty]
+    private string openVpnClientDns = "1.1.1.1,8.8.8.8";
 
     [ObservableProperty]
     private string gatewayDnsMode = "hybrid";

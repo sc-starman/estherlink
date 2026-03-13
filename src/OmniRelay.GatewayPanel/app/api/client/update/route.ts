@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { getInboundId, xuiJson } from "@/lib/xui";
+import { getGatewayProvider } from "@/lib/protocol";
+import { type GatewayClientRecord } from "@/lib/providers/types";
 
 interface UpdateClientRequest {
   client?: Record<string, unknown>;
@@ -19,21 +20,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Client payload is required." }, { status: 400 });
   }
 
-  client.flow = "xtls-rprx-vision";
-
   try {
-    const inboundId = getInboundId();
-    const form = new URLSearchParams();
-    form.set("id", inboundId);
-    form.set("settings", JSON.stringify({ clients: [client] }));
-
-    await xuiJson(session, `/panel/api/inbounds/updateClient/${encodeURIComponent(clientId)}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-      },
-      body: form
-    });
+    const provider = getGatewayProvider();
+    await provider.updateClient(session, client as GatewayClientRecord);
 
     await session.save();
     return NextResponse.json({ ok: true });

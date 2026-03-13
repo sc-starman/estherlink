@@ -1,0 +1,242 @@
+import { promises as fs } from "node:fs";
+import { dirname, join } from "node:path";
+import { exec as execCallback } from "node:child_process";
+import { promisify } from "node:util";
+import { randomBytes, randomUUID } from "node:crypto";
+import QRCode from "qrcode";
+import { type OmniSession } from "@/lib/session";
+import { type ClientConfigPayload, type GatewayClientRecord, type GatewayInboundSnapshot, type GatewayProtocolProvider } from "@/lib/providers/types";
+
+const exec = promisify(execCallback);
+const DEFAULT_SYNC_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
+
+interface OpenVpnClientRecord extends GatewayClientRecord {
+  username: string;
+  password: string;
+}
+
+function parsePort(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt((value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
+}
+
+function getClientsFilePath(): string {
+  return process.env.OPENVPN_CLIENTS_FILE?.trim() || "/opt/omnirelay/omni-gateway/openvpn_clients.json";
+}
+
+function getExportsDir(): string {
+  return process.env.OPENVPN_EXPORT_DIR?.trim() || "/opt/omnirelay/omni-gateway/openvpn-exports";
+}
+
+function getPublicPort(): number {
+  return parsePort(process.env.OPENVPN_PUBLIC_PORT, 443);
+}
+
+function normalizeSudoCommand(command: string): string {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  if (/(^|\s)-n(\s|$)/.test(trimmed)) {
+    return trimmed;
+  }
+
+  return trimmed.replace(/^(\S*sudo)\s+/, "$1 -n ");
+}
+
+function randomAlphaNum(length: number): string {
+  return randomBytes(length)
+    .toString("base64")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, length);
+}
+
+function toSafeUsername(seed: string): string {
+  const normalized = seed
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 18);
+  return normalized || "client";
+}
+
+function makeUsername(email: string, existing: Set<string>): string {
+  const base = `ovpn_${toSafeUsername(email)}`;
+  if (!existing.has(base)) {
+    return base;
+  }
+
+  for (let i = 0; i < 100; i += 1) {
+    const candidate = `${base}${randomAlphaNum(4).toLowerCase()}`;
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return `ovpn_${randomAlphaNum(10).toLowerCase()}`;
+}
+
+async function readClients(): Promise<OpenVpnClientRecord[]> {
+  const filePath = getClientsFilePath();
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const payload = JSON.parse(raw) as unknown;
+    if (!Array.isArray(payload)) {
+      return [];
+    }
+
+    return payload
+      .map((item) => ({
+        id: String((item as Record<string, unknown>).id ?? ""),
+        email: String((item as Record<string, unknown>).email ?? ""),
+        enable: Boolean((item as Record<string, unknown>).enable ?? true),
+        username: String((item as Record<string, unknown>).username ?? ""),
+        password: String((item as Record<string, unknown>).password ?? "")
+      }))
+      .filter((item) => item.id && item.email && item.username && item.password);
+  } catch {
+    return [];
+  }
+}
+
+async function writeClients(clients: OpenVpnClientRecord[]): Promise<void> {
+  const filePath = getClientsFilePath();
+  await fs.mkdir(dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp`;
+  const sorted = [...clients].sort((left, right) => left.email.localeCompare(right.email));
+  await fs.writeFile(tempPath, `${JSON.stringify(sorted, null, 2)}\n`, { encoding: "utf8", mode: 0o640 });
+  await fs.rename(tempPath, filePath);
+}
+
+async function syncOpenVpn(): Promise<void> {
+  const command = normalizeSudoCommand(process.env.OPENVPN_SYNC_COMMAND?.trim() || DEFAULT_SYNC_COMMAND);
+  if (!command) {
+    return;
+  }
+
+  try {
+    await exec(command);
+  } catch (error) {
+    const failure = error as { message?: string; stdout?: string; stderr?: string };
+    const detail = [failure.message, failure.stderr, failure.stdout]
+      .map((part) => String(part ?? "").trim())
+      .filter((part) => part.length > 0)
+      .join("\n");
+    const lower = detail.toLowerCase();
+    if (
+      lower.includes("a password is required") ||
+      lower.includes("a terminal is required") ||
+      lower.includes("not allowed to run sudo")
+    ) {
+      throw new Error(`Gateway sync-clients failed: sudo permission issue for omnipanel user.\n${detail}`);
+    }
+
+    throw new Error(detail ? `Gateway sync-clients failed:\n${detail}` : "Gateway sync-clients failed.");
+  }
+}
+
+export class OpenVpnProvider implements GatewayProtocolProvider {
+  public readonly protocolId = "openvpn_tcp_relay";
+
+  public async getInbound(_session: OmniSession): Promise<GatewayInboundSnapshot> {
+    const clients = await readClients();
+    return {
+      inbound: {
+        id: 1,
+        protocol: this.protocolId,
+        port: getPublicPort(),
+        remark: "OmniRelay Managed OpenVPN (TCP)",
+        enable: true
+      },
+      clients: clients.map((item) => ({
+        id: item.id,
+        email: item.email,
+        enable: item.enable
+      }))
+    };
+  }
+
+  public async addClient(_session: OmniSession, email: string): Promise<GatewayClientRecord> {
+    const normalizedEmail = String(email ?? "").trim();
+    if (!normalizedEmail) {
+      throw new Error("Client email is required.");
+    }
+
+    const clients = await readClients();
+    const usernames = new Set(clients.map((item) => item.username));
+    const client: OpenVpnClientRecord = {
+      id: randomUUID(),
+      email: normalizedEmail,
+      enable: true,
+      username: makeUsername(normalizedEmail, usernames),
+      password: randomAlphaNum(24)
+    };
+
+    clients.push(client);
+    await writeClients(clients);
+    await syncOpenVpn();
+    return {
+      id: client.id,
+      email: client.email,
+      enable: client.enable
+    };
+  }
+
+  public async updateClient(_session: OmniSession, client: GatewayClientRecord): Promise<void> {
+    const clientId = String(client.id ?? "").trim();
+    if (!clientId) {
+      throw new Error("Client payload is required.");
+    }
+
+    const clients = await readClients();
+    const index = clients.findIndex((item) => item.id === clientId);
+    if (index < 0) {
+      throw new Error("Client not found.");
+    }
+
+    clients[index] = {
+      ...clients[index],
+      email: String(client.email ?? clients[index].email).trim() || clients[index].email,
+      enable: Boolean(client.enable)
+    };
+
+    await writeClients(clients);
+    await syncOpenVpn();
+  }
+
+  public async deleteClient(_session: OmniSession, clientId: string): Promise<void> {
+    const trimmed = String(clientId ?? "").trim();
+    if (!trimmed) {
+      throw new Error("Client id is required.");
+    }
+
+    const clients = await readClients();
+    const filtered = clients.filter((item) => item.id !== trimmed);
+    if (filtered.length === clients.length) {
+      throw new Error("Client not found.");
+    }
+
+    await writeClients(filtered);
+    await syncOpenVpn();
+  }
+
+  public async buildClientConfig(_session: OmniSession, _request: Request, clientId: string): Promise<ClientConfigPayload> {
+    const trimmedId = String(clientId ?? "").trim();
+    if (!trimmedId) {
+      throw new Error("Client id is required.");
+    }
+
+    const profilePath = join(getExportsDir(), `${trimmedId}.ovpn`);
+    let profile = "";
+    try {
+      profile = await fs.readFile(profilePath, "utf8");
+    } catch {
+      await syncOpenVpn();
+      profile = await fs.readFile(profilePath, "utf8");
+    }
+
+    const uri = profile.trimEnd();
+    const qrCodeDataUrl = await QRCode.toDataURL(uri, { width: 320, margin: 1 });
+    return { uri, qrCodeDataUrl };
+  }
+}

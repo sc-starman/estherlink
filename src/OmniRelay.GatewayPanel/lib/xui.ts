@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { type OmniSession } from "@/lib/session";
 
 interface XuiResponse<T = unknown> {
@@ -22,6 +21,24 @@ export function getXuiBaseUrl(): string {
 
 export function getInboundId(): string {
   return requireEnv("XUI_INBOUND_ID");
+}
+
+function getXuiLoginUsername(): string {
+  return (
+    process.env.XUI_AUTH_USERNAME?.trim() ||
+    process.env.XUI_USERNAME?.trim() ||
+    process.env.OMNIPANEL_AUTH_USERNAME?.trim() ||
+    ""
+  );
+}
+
+function getXuiLoginPassword(): string {
+  return (
+    process.env.XUI_AUTH_PASSWORD?.trim() ||
+    process.env.XUI_PASSWORD?.trim() ||
+    process.env.OMNIPANEL_AUTH_PASSWORD?.trim() ||
+    ""
+  );
 }
 
 function extractXuiCookie(headers: Headers): string | null {
@@ -85,14 +102,7 @@ async function loginAndStoreCookie(session: OmniSession, username: string, passw
   }
 
   session.xuiCookie = cookie;
-  session.username = username;
-  session.password = password;
-  session.isAuthenticated = true;
   return true;
-}
-
-export async function loginSessionToXui(session: OmniSession, username: string, password: string): Promise<boolean> {
-  return loginAndStoreCookie(session, username, password);
 }
 
 async function ensureXuiCookie(session: OmniSession): Promise<void> {
@@ -100,11 +110,13 @@ async function ensureXuiCookie(session: OmniSession): Promise<void> {
     return;
   }
 
-  if (!session.username || !session.password) {
-    throw new Error("Session is missing credentials.");
+  const username = getXuiLoginUsername();
+  const password = getXuiLoginPassword();
+  if (!username || !password) {
+    throw new Error("x-ui API credentials are not configured.");
   }
 
-  const ok = await loginAndStoreCookie(session, session.username, session.password);
+  const ok = await loginAndStoreCookie(session, username, password);
   if (!ok) {
     throw new Error("3x-ui login failed.");
   }
@@ -129,8 +141,18 @@ export async function xuiRequest(
     headers
   });
 
-  if ((response.status === 401 || response.status === 403) && retryOnAuthError && session.username && session.password) {
-    const relogin = await loginAndStoreCookie(session, session.username, session.password);
+  if (response.status === 401 || response.status === 403) {
+    session.xuiCookie = undefined;
+  }
+
+  if ((response.status === 401 || response.status === 403) && retryOnAuthError) {
+    const username = getXuiLoginUsername();
+    const password = getXuiLoginPassword();
+    if (!username || !password) {
+      return response;
+    }
+
+    const relogin = await loginAndStoreCookie(session, username, password);
     if (relogin) {
       return xuiRequest(session, endpointPath, init, false);
     }
@@ -159,21 +181,4 @@ export async function xuiJson<T>(
   }
 
   return payload;
-}
-
-export function generateClientPayload(email: string) {
-  const nowId = randomUUID();
-  return {
-    id: nowId,
-    flow: "xtls-rprx-vision",
-    email,
-    limitIp: 0,
-    totalGB: 0,
-    expiryTime: 0,
-    enable: true,
-    tgId: "",
-    subId: randomUUID().replace(/-/g, "").slice(0, 16),
-    comment: "",
-    reset: 0
-  };
 }

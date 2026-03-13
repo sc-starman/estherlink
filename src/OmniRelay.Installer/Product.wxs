@@ -3,7 +3,7 @@
   <Package
     Name="OmniRelay"
     Manufacturer="OmniRelay"
-    Version="1.34.18"
+    Version="1.36.1"
     Language="1033"
     UpgradeCode="{95EE2733-FDA4-4B0A-91CA-43D42B3E91E7}"
     Scope="perMachine">
@@ -14,7 +14,8 @@
 
     <Icon Id="OmniRelayIcon" SourceFile="..\OmniRelay.UI\Assets\app.ico" />
     <Property Id="ARPPRODUCTICON" Value="OmniRelayIcon" />
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />`r`n    <WixVariable Id="WixUILicenseRtf" Value="Assets\EULA.rtf" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="Assets\EULA.rtf" />
     <ui:WixUI Id="WixUI_InstallDir" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -84,4 +85,3 @@
     </Feature>
   </Package>
 </Wix>
-

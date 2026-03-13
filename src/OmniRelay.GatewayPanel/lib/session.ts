@@ -4,7 +4,6 @@ import { getIronSession, type SessionOptions } from "iron-session";
 export interface OmniSession {
   isAuthenticated: boolean;
   username?: string;
-  password?: string;
   xuiCookie?: string;
 }
 

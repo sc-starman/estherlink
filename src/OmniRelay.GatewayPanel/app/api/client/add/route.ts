@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { generateClientPayload, getInboundId, xuiJson } from "@/lib/xui";
+import { getGatewayProvider } from "@/lib/protocol";
 
 interface AddClientRequest {
   email?: string;
@@ -19,19 +19,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const inboundId = getInboundId();
-    const client = generateClientPayload(email);
-    const form = new URLSearchParams();
-    form.set("id", inboundId);
-    form.set("settings", JSON.stringify({ clients: [client] }));
-
-    await xuiJson(session, "/panel/api/inbounds/addClient", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-      },
-      body: form
-    });
+    const provider = getGatewayProvider();
+    const client = await provider.addClient(session, email);
 
     await session.save();
     return NextResponse.json({ ok: true, client });

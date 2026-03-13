@@ -8,9 +8,9 @@
         Icon="Assets/app.ico"
         WindowStyle="None"
         ResizeMode="CanMinimize"
-        Width="800"
+        Width="870"
         Height="640"
-        MinWidth="800"
+        MinWidth="870"
         MinHeight="540">
     <Grid>
         <Grid.RowDefinitions>

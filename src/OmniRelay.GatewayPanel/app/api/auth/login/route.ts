@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { loginSessionToXui } from "@/lib/xui";
+import { verifyPanelCredentials } from "@/lib/panel-auth";
 
 interface LoginRequest {
   username?: string;
@@ -17,11 +17,14 @@ export async function POST(request: Request) {
   }
 
   const session = await getSession();
-  const ok = await loginSessionToXui(session, username, password);
+  const ok = await verifyPanelCredentials(username, password);
   if (!ok) {
     return NextResponse.json({ message: "Invalid credentials." }, { status: 401 });
   }
 
+  session.isAuthenticated = true;
+  session.username = username;
+  session.xuiCookie = undefined;
   await session.save();
   return NextResponse.json({ ok: true });
 }

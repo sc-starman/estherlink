@@ -352,13 +352,13 @@ Primary ingress path (current):
 - Fail mode is fail-closed for client traffic (no direct VPS fallback).
 
 Helper setup scripts:
-- Primary control script (command-mode): `scripts/setup_omnirelay_vps_3xui.sh`
+- Primary control script (command-mode): `scripts/setup_omnirelay_vps_3xui_vless_reality.sh`
 - Rollback/legacy: `scripts/setup_OmniRelay_vps.sh`
 
 Example (manual online install using SOCKS bootstrap):
 
 ```bash
-sudo bash scripts/setup_omnirelay_vps_3xui.sh install --public-port 443 --panel-port 2054 --backend-port 15000 --ssh-port 22 --tunnel-user OmniRelay --tunnel-auth host_key --bootstrap-socks-port 16080 --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
+sudo bash scripts/setup_omnirelay_vps_3xui_vless_reality.sh install --public-port 443 --panel-port 2054 --backend-port 15000 --ssh-port 22 --tunnel-user OmniRelay --tunnel-auth host_key --bootstrap-socks-port 16080 --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
 ```
 
 DNS-through-tunnel commands:

@@ -11,10 +11,30 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\scripts\setup_omnirelay_vps_3xui.sh"
-             Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_3xui.sh')"
+    <Content Include="..\..\scripts\setup_omnirelay_vps_3xui_vless_reality.sh"
+             Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_3xui_vless_reality.sh')"
              CopyToOutputDirectory="PreserveNewest"
-             Link="GatewayScripts\\setup_omnirelay_vps_3xui.sh" />
+             Link="GatewayScripts\\setup_omnirelay_vps_3xui_vless_reality.sh" />
+    <Content Include="..\..\scripts\setup_omnirelay_vps_3xui_vless_plain.sh"
+             Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_3xui_vless_plain.sh')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayScripts\\setup_omnirelay_vps_3xui_vless_plain.sh" />
+    <Content Include="..\..\scripts\setup_omnirelay_vps_3xui_shadowsocks.sh"
+             Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_3xui_shadowsocks.sh')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayScripts\\setup_omnirelay_vps_3xui_shadowsocks.sh" />
+    <Content Include="..\..\scripts\setup_omnirelay_vps_singbox_shadowtls.sh"
+             Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_singbox_shadowtls.sh')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayScripts\\setup_omnirelay_vps_singbox_shadowtls.sh" />
+    <Content Include="..\..\scripts\setup_omnirelay_vps_openvpn.sh"
+             Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_openvpn.sh')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayScripts\\setup_omnirelay_vps_openvpn.sh" />
+    <Content Include="..\..\scripts\setup_omnirelay_vps_ipsec_l2tp.sh"
+             Condition="Exists('..\\..\\scripts\\setup_omnirelay_vps_ipsec_l2tp.sh')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayScripts\\setup_omnirelay_vps_ipsec_l2tp.sh" />
     <Content Include="..\OmniRelay.Installer\Product.wxs"
              Condition="Exists('..\\OmniRelay.Installer\\Product.wxs')"
              CopyToOutputDirectory="PreserveNewest"
