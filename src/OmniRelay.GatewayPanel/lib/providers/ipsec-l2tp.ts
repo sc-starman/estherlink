@@ -3,7 +3,6 @@ import { dirname } from "node:path";
 import { exec as execCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomBytes, randomUUID } from "node:crypto";
-import QRCode from "qrcode";
 import { type OmniSession } from "@/lib/session";
 import {
   type ClientConfigPayload,
@@ -367,6 +366,13 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
     }
 
     const server = resolveGatewayHost(request);
+    const setupSteps = [
+      "Add a new L2TP/IPSec PSK VPN profile on your device.",
+      "Set server/host to the Server value above.",
+      "Set IPSec pre-shared key to the value shown.",
+      "Use Username/Password for PPP authentication.",
+      "Save and connect."
+    ];
     const manualBundle = [
       "OmniRelay IPSec/L2TP Client Bundle",
       "=================================",
@@ -377,14 +383,21 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
       `Password: ${client.password}`,
       "",
       "Setup:",
-      "1) Add a new L2TP/IPSec PSK VPN profile on your device.",
-      "2) Set server/host to the Server value above.",
-      "3) Set IPSec pre-shared key to IPSec PSK.",
-      "4) Use Username/Password for PPP authentication.",
-      "5) Save and connect."
+      ...setupSteps.map((step, index) => `${index + 1}) ${step}`)
     ].join("\n");
 
-    const qrCodeDataUrl = await QRCode.toDataURL(manualBundle, { width: 320, margin: 1 });
-    return { uri: manualBundle, qrCodeDataUrl };
+    return {
+      mode: "ipsec_manual",
+      title: "IPSec/L2TP Manual Bundle",
+      uri: manualBundle,
+      fields: {
+        server,
+        ports: ["UDP 500", "UDP 4500", "UDP 1701"],
+        username: client.username,
+        password: client.password,
+        preSharedKey: psk
+      },
+      setupSteps
+    };
   }
 }

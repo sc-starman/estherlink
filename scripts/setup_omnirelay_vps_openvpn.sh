@@ -63,6 +63,8 @@ OPENVPN_ACCOUNTING_SCRIPT="${OPENVPN_DIR}/accounting-loop.sh"
 OPENVPN_ACCOUNTING_HEARTBEAT="${OPENVPN_DIR}/accounting-heartbeat.json"
 OPENVPN_ACCOUNTING_SERVICE="omnirelay-openvpn-accounting"
 OPENVPN_ACCOUNTING_TIMER="omnirelay-openvpn-accounting.timer"
+OPENVPN_SOCKS_UPSTREAM_PORT="${BACKEND_PORT}"
+OPENVPN_UPSTREAM_TYPE="socks5"
 
 OMNIPANEL_INTERNAL_PORT=0
 STATUS_JSON=0
@@ -80,6 +82,118 @@ random_base64(){ openssl rand -base64 "$1" | tr -d '\r\n'; }
 check_listener(){ ss -lnt "( sport = :$1 )" 2>/dev/null | awk 'NR>1{print}' | grep -q . && echo true || echo false; }
 choose_port(){ for _ in $(seq 1 200); do p=$((RANDOM%30000+22000)); [[ "$(check_listener "$p")" == "false" ]] && echo "$p" && return 0; done; die "cannot allocate random port"; }
 ensure_meta(){ install -d -m 0755 "$METADATA_DIR"; }
+
+socks_endpoint_healthy(){
+  local port="${1:-}"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  python3 - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+try:
+    with socket.create_connection(("127.0.0.1", port), timeout=2.5) as s:
+        s.settimeout(2.5)
+        s.sendall(b"\x05\x01\x00")
+        data = s.recv(2)
+except Exception:
+    sys.exit(1)
+
+if len(data) == 2 and data[0] == 0x05 and data[1] in (0x00, 0x02):
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+http_connect_endpoint_healthy(){
+  local port="${1:-}"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  python3 - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+req = b"CONNECT 1.1.1.1:443 HTTP/1.1\r\nHost: 1.1.1.1:443\r\nProxy-Connection: keep-alive\r\n\r\n"
+try:
+    with socket.create_connection(("127.0.0.1", port), timeout=3.5) as s:
+        s.settimeout(3.5)
+        s.sendall(req)
+        data = s.recv(64)
+except Exception:
+    sys.exit(1)
+
+if data.startswith(b"HTTP/1.0 ") or data.startswith(b"HTTP/1.1 "):
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+select_openvpn_socks_upstream(){
+  OPENVPN_SOCKS_UPSTREAM_PORT="$BACKEND_PORT"
+  OPENVPN_UPSTREAM_TYPE="socks5"
+  if socks_endpoint_healthy "$BACKEND_PORT"; then
+    OPENVPN_UPSTREAM_TYPE="socks5"
+    return 0
+  fi
+  if http_connect_endpoint_healthy "$BACKEND_PORT"; then
+    OPENVPN_UPSTREAM_TYPE="http-connect"
+    log "Runtime backend 127.0.0.1:${BACKEND_PORT} is HTTP CONNECT proxy (not SOCKS5); using redsocks type=http-connect."
+    return 0
+  fi
+  die "Runtime backend 127.0.0.1:${BACKEND_PORT} is not responsive as SOCKS5 or HTTP CONNECT."
+}
+
+ensure_redsocks_bind_available(){
+  local holder
+  holder="$(ss -lntp "( sport = :${OPENVPN_REDSOCKS_LOCAL_PORT} )" 2>/dev/null | awk 'NR>1 {print; exit}' || true)"
+  [[ -z "$holder" ]] && return 0
+  log "Detected stale listener on ${OPENVPN_REDSOCKS_LOCAL_PORT}; cleaning before redsocks start."
+  systemctl stop "$OPENVPN_REDSOCKS_SERVICE" >/dev/null 2>&1 || true
+  pkill -f "redsocks -c ${OPENVPN_REDSOCKS_CONFIG}" >/dev/null 2>&1 || true
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${OPENVPN_REDSOCKS_LOCAL_PORT}/tcp" >/dev/null 2>&1 || true
+  fi
+  sleep 1
+}
+
+ensure_easyrsa_index_attrs(){
+  install -d -m 0755 "$OPENVPN_PKI_DIR"
+  touch "${OPENVPN_PKI_DIR}/index.txt"
+  if [[ ! -f "${OPENVPN_PKI_DIR}/index.txt.attr" ]]; then
+    printf 'unique_subject = no\n' > "${OPENVPN_PKI_DIR}/index.txt.attr"
+    return 0
+  fi
+  if ! grep -q '^[[:space:]]*unique_subject[[:space:]]*=' "${OPENVPN_PKI_DIR}/index.txt.attr"; then
+    printf 'unique_subject = no\n' >> "${OPENVPN_PKI_DIR}/index.txt.attr"
+  fi
+}
+
+systemd_state(){
+  local unit="$1" state
+  state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+  state="$(printf '%s' "$state" | tr -d '\r' | awk 'NF{print $1; exit}')"
+  [[ -n "$state" ]] || state="inactive"
+  printf '%s' "$state"
+}
+
+systemd_state_any(){
+  local unit state
+  for unit in "$@"; do
+    state="$(systemd_state "$unit")"
+    if [[ "$state" == "active" || "$state" == "activating" || "$state" == "reloading" ]]; then
+      printf '%s' "$state"
+      return 0
+    fi
+  done
+  for unit in "$@"; do
+    state="$(systemd_state "$unit")"
+    if [[ -n "$state" && "$state" != "unknown" ]]; then
+      printf '%s' "$state"
+      return 0
+    fi
+  done
+  printf 'inactive'
+}
 
 normalize_bool(){
   local value
@@ -250,7 +364,7 @@ ensure_clients_seed_file(){
 
 init_openvpn_accounting_db(){
   install -d -m 0755 "$OPENVPN_DIR"
-  sqlite3 "$OPENVPN_ACCOUNTING_DB" <<'SQL'
+  sqlite3 "$OPENVPN_ACCOUNTING_DB" >/dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS clients (
@@ -290,6 +404,7 @@ setup_openvpn_pki(){
     install -d -m 0755 "$OPENVPN_EASYRSA_DIR"
     cp -a /usr/share/easy-rsa/. "$OPENVPN_EASYRSA_DIR/"
   fi
+  ensure_easyrsa_index_attrs
   local easyrsa
   easyrsa="${OPENVPN_EASYRSA_DIR}/easyrsa"
   chmod +x "$easyrsa"
@@ -391,7 +506,7 @@ write_heartbeat(){
 }
 
 init_db(){
-  sqlite3 "\$DB" <<'SQL'
+  sqlite3 "\$DB" >/dev/null <<'SQL'
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS clients (
@@ -487,7 +602,7 @@ main(){
     echo "DELETE FROM session_counters WHERE last_seen_at < \$cutoff_sec;"
     echo "COMMIT;"
   } > "\$sql_tmp"
-  sqlite3 "\$DB" < "\$sql_tmp"
+  sqlite3 "\$DB" < "\$sql_tmp" >/dev/null
   rm -f "\$sql_tmp"
 
   for username in "\${!active_users[@]}"; do
@@ -528,21 +643,18 @@ EOF
 }
 
 build_openvpn_dns_push_lines(){
-  local lines="" value
+  local value
   IFS=',' read -r -a dns_parts <<< "$OPENVPN_CLIENT_DNS"
   for value in "${dns_parts[@]}"; do
     value="$(echo "$value" | xargs || true)"
     [[ -n "$value" ]] || continue
-    lines="${lines}push \"dhcp-option DNS ${value}\"\n"
+    printf 'push "dhcp-option DNS %s"\n' "$value"
   done
-  printf '%b' "$lines"
 }
 
 write_openvpn_server_config(){
   progress 30 "Writing OpenVPN server configuration"
-  local dns_push
   install -d -m 0755 /var/log/openvpn
-  dns_push="$(build_openvpn_dns_push_lines)"
   cat > "$OPENVPN_SERVER_CONFIG" <<EOF
 port ${PUBLIC_PORT}
 proto tcp-server
@@ -550,11 +662,12 @@ dev tun
 topology subnet
 server ${OPENVPN_NET_ADDR} ${OPENVPN_NETMASK}
 push "redirect-gateway def1 bypass-dhcp"
-${dns_push}keepalive 10 60
+EOF
+  build_openvpn_dns_push_lines >> "$OPENVPN_SERVER_CONFIG"
+  cat >> "$OPENVPN_SERVER_CONFIG" <<EOF
+keepalive 10 60
 persist-key
 persist-tun
-user nobody
-group nogroup
 ca ${OPENVPN_PKI_DIR}/ca.crt
 cert ${OPENVPN_PKI_DIR}/issued/server.crt
 key ${OPENVPN_PKI_DIR}/private/server.key
@@ -578,6 +691,7 @@ EOF
 }
 
 write_redsocks_config(){
+  select_openvpn_socks_upstream
   cat > "$OPENVPN_REDSOCKS_CONFIG" <<EOF
 base {
   log_debug = off;
@@ -586,11 +700,11 @@ base {
   redirector = iptables;
 }
 redsocks {
-  local_ip = 127.0.0.1;
+  local_ip = 0.0.0.0;
   local_port = ${OPENVPN_REDSOCKS_LOCAL_PORT};
   ip = 127.0.0.1;
-  port = ${BACKEND_PORT};
-  type = socks5;
+  port = ${OPENVPN_SOCKS_UPSTREAM_PORT};
+  type = ${OPENVPN_UPSTREAM_TYPE};
 }
 EOF
 }
@@ -614,9 +728,12 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
+ExecStartPre=/usr/bin/env bash -c 'if command -v fuser >/dev/null 2>&1; then fuser -k ${OPENVPN_REDSOCKS_LOCAL_PORT}/tcp >/dev/null 2>&1 || true; fi'
 ExecStart=${redsocks_bin} -c ${OPENVPN_REDSOCKS_CONFIG}
 Restart=always
 RestartSec=2
+KillMode=control-group
+TimeoutStopSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -630,8 +747,8 @@ Type=simple
 ExecStart=/usr/sbin/openvpn --config ${OPENVPN_SERVER_CONFIG}
 Restart=always
 RestartSec=3
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_SETPCAP
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_SETPCAP
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -656,6 +773,7 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+  ensure_redsocks_bind_available
   systemctl daemon-reload
   systemctl enable --now "$OPENVPN_REDSOCKS_SERVICE"
   systemctl enable --now "$OPENVPN_SERVICE"
@@ -762,8 +880,9 @@ OMNIPANEL_AUTH_FILE=${PANEL_AUTH_FILE}
 OMNIPANEL_AUTH_USERNAME=${PANEL_USER}
 OMNIPANEL_AUTH_PASSWORD=${PANEL_PASSWORD}
 OMNIRELAY_ACTIVE_PROTOCOL=openvpn_tcp_relay
+OMNIPANEL_SESSION_SECURE=${PANEL_SSL_ENABLED}
 PANEL_PUBLIC_PORT=${PANEL_PORT}
-PANEL_PUBLIC_HOST=${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}
+PANEL_PUBLIC_HOST=${PANEL_DOMAIN:-${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}}
 OPENVPN_PUBLIC_PORT=${PUBLIC_PORT}
 OPENVPN_CLIENTS_FILE=${OPENVPN_CLIENTS_FILE}
 OPENVPN_EXPORT_DIR=${OPENVPN_EXPORT_DIR}
@@ -775,7 +894,7 @@ EOF
 [Unit]
 Description=OmniRelay OmniPanel
 After=network.target ${OPENVPN_SERVICE}.service
-Requires=${OPENVPN_SERVICE}.service
+Wants=${OPENVPN_SERVICE}.service
 [Service]
 Type=simple
 User=omnigateway
@@ -863,6 +982,34 @@ write_metadata(){
   chmod 0600 "$METADATA_FILE"
 }
 
+wait_openvpn_accounting_heartbeat(){
+  local i hb_ok hb_epoch now_epoch created_at created_epoch
+  for i in $(seq 1 20); do
+    hb_ok=false
+    hb_epoch=0
+    if [[ -f "$OPENVPN_ACCOUNTING_HEARTBEAT" ]]; then
+      hb_ok="$(jq -r '.ok // false' "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo false)"
+      hb_epoch="$(jq -r '.runAtEpoch // 0' "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo 0)"
+      now_epoch="$(date +%s)"
+      if [[ "$hb_ok" == "true" && "$hb_epoch" =~ ^[0-9]+$ ]] && (( hb_epoch > 0 )) && (( now_epoch - hb_epoch <= 180 )); then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+
+  created_at="$(jq -r '.created_at_utc // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  created_epoch="$(date -u -d "$created_at" +%s 2>/dev/null || echo 0)"
+  now_epoch="$(date +%s)"
+  if [[ "$created_epoch" =~ ^[0-9]+$ ]] && (( created_epoch > 0 )) && (( now_epoch - created_epoch <= 240 )); then
+    log "OpenVPN accounting heartbeat is still warming up; continuing within grace window."
+    return 0
+  fi
+
+  log "OpenVPN accounting heartbeat is not ready."
+  return 1
+}
+
 dns_apply(){
   progress 94 "Applying DNS-through-tunnel profile"
   jq -n --arg m "$DNS_MODE" --arg d "$DOH_ENDPOINTS" --argjson u "$( [[ "$DNS_UDP_ONLY" == "true" ]] && echo true || echo false )" '{mode:$m,dohEndpoints:$d,dnsUdpOnly:$u,updatedAtUtc:(now|todate)}' > "$DNS_PROFILE_FILE"
@@ -937,12 +1084,25 @@ write_client_profile(){
 
 sync_clients_cmd(){
   require_root
+  local old_redsocks_hash old_server_hash new_redsocks_hash new_server_hash
+  local redsocks_changed openvpn_config_changed
   ensure_clients_seed_file
+  old_redsocks_hash="$(sha256sum "$OPENVPN_REDSOCKS_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
+  old_server_hash="$(sha256sum "$OPENVPN_SERVER_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
+  select_openvpn_socks_upstream
+  parse_openvpn_network
   init_openvpn_accounting_db
   setup_openvpn_pki
   write_openvpn_auth_scripts
   write_openvpn_accounting_script
+  write_redsocks_config
   write_openvpn_server_config
+  new_redsocks_hash="$(sha256sum "$OPENVPN_REDSOCKS_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
+  new_server_hash="$(sha256sum "$OPENVPN_SERVER_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
+  redsocks_changed=false
+  openvpn_config_changed=false
+  [[ "$old_redsocks_hash" != "$new_redsocks_hash" ]] && redsocks_changed=true
+  [[ "$old_server_hash" != "$new_server_hash" ]] && openvpn_config_changed=true
   local easyrsa auth_tmp keep_tmp row id email enable username password cn cert_path key_path hash
   local total_gb_raw total_gb_bytes expiry_raw expiry_unix_ms now_sec sql_tmp enable_int
   easyrsa="${OPENVPN_EASYRSA_DIR}/easyrsa"
@@ -1000,6 +1160,7 @@ PY
     cert_path="${OPENVPN_PKI_DIR}/issued/${cn}.crt"
     key_path="${OPENVPN_PKI_DIR}/private/${cn}.key"
     if [[ ! -f "$cert_path" || ! -f "$key_path" ]]; then
+      ensure_easyrsa_index_attrs
       ( cd "$OPENVPN_EASYRSA_DIR" && EASYRSA_BATCH=1 "$easyrsa" build-client-full "$cn" nopass )
       cert_path="${OPENVPN_PKI_DIR}/issued/${cn}.crt"
       key_path="${OPENVPN_PKI_DIR}/private/${cn}.key"
@@ -1027,7 +1188,7 @@ DELETE FROM session_counters WHERE client_id NOT IN (SELECT client_id FROM sync_
 DROP TABLE sync_keep;
 COMMIT;
 SQL
-  sqlite3 "$OPENVPN_ACCOUNTING_DB" < "$sql_tmp"
+  sqlite3 "$OPENVPN_ACCOUNTING_DB" < "$sql_tmp" >/dev/null
   rm -f "$sql_tmp"
   install -m 0600 "$auth_tmp" "$OPENVPN_AUTH_FILE"
   rm -f "$auth_tmp"
@@ -1047,13 +1208,28 @@ SQL
   chown root:omnigateway "$OPENVPN_ACCOUNTING_DB" 2>/dev/null || true
   chmod 0640 "$OPENVPN_ACCOUNTING_DB" 2>/dev/null || true
   systemctl daemon-reload
-  systemctl restart "$OPENVPN_REDSOCKS_SERVICE"
-  if ! systemctl restart "$OPENVPN_SERVICE"; then
-    log "---- openvpn systemd status ----"
-    systemctl --no-pager --full status "$OPENVPN_SERVICE" 2>&1 || true
-    log "---- openvpn journal (last 80 lines) ----"
-    journalctl -u "$OPENVPN_SERVICE" -n 80 --no-pager 2>&1 || true
-    die "OpenVPN service is not active after syncing clients."
+  ensure_redsocks_bind_available
+  if [[ "$redsocks_changed" == "true" ]]; then
+    systemctl restart "$OPENVPN_REDSOCKS_SERVICE"
+  elif ! systemctl is-active --quiet "$OPENVPN_REDSOCKS_SERVICE"; then
+    systemctl start "$OPENVPN_REDSOCKS_SERVICE"
+  fi
+  if [[ "$openvpn_config_changed" == "true" ]]; then
+    if ! systemctl restart "$OPENVPN_SERVICE"; then
+      log "---- openvpn systemd status ----"
+      systemctl --no-pager --full status "$OPENVPN_SERVICE" 2>&1 || true
+      log "---- openvpn journal (last 80 lines) ----"
+      journalctl -u "$OPENVPN_SERVICE" -n 80 --no-pager 2>&1 || true
+      die "OpenVPN service is not active after syncing clients."
+    fi
+  elif ! systemctl is-active --quiet "$OPENVPN_SERVICE"; then
+    if ! systemctl start "$OPENVPN_SERVICE"; then
+      log "---- openvpn systemd status ----"
+      systemctl --no-pager --full status "$OPENVPN_SERVICE" 2>&1 || true
+      log "---- openvpn journal (last 80 lines) ----"
+      journalctl -u "$OPENVPN_SERVICE" -n 80 --no-pager 2>&1 || true
+      die "OpenVPN service is not active after syncing clients."
+    fi
   fi
   systemctl is-active --quiet "$OPENVPN_SERVICE" || die "OpenVPN service is not active after syncing clients."
   systemctl start "$OPENVPN_ACCOUNTING_SERVICE" >/dev/null 2>&1 || true
@@ -1064,14 +1240,15 @@ SQL
 
 status_cmd(){
   local sshState openvpnState redsocksState panelState nginxState fail2 backendListener publicListener panelListener internalListener dns iport
-  local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch
-  sshState="$(systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null || echo inactive)"
-  openvpnState="$(systemctl is-active "$OPENVPN_SERVICE" 2>/dev/null || echo inactive)"
-  redsocksState="$(systemctl is-active "$OPENVPN_REDSOCKS_SERVICE" 2>/dev/null || echo inactive)"
-  accountingTimerState="$(systemctl is-active "$OPENVPN_ACCOUNTING_TIMER" 2>/dev/null || echo inactive)"
-  accountingServiceState="$(systemctl is-active "$OPENVPN_ACCOUNTING_SERVICE" 2>/dev/null || echo inactive)"
-  panelState="$(systemctl is-active "$OMNIPANEL_SERVICE" 2>/dev/null || echo inactive)"
-  nginxState="$(systemctl is-active nginx 2>/dev/null || echo inactive)"
+  local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch createdAtUtc createdEpoch installGrace
+  local socksUpstreamPort socksUpstreamType
+  sshState="$(systemd_state_any ssh sshd)"
+  openvpnState="$(systemd_state "$OPENVPN_SERVICE")"
+  redsocksState="$(systemd_state "$OPENVPN_REDSOCKS_SERVICE")"
+  accountingTimerState="$(systemd_state "$OPENVPN_ACCOUNTING_TIMER")"
+  accountingServiceState="$(systemd_state "$OPENVPN_ACCOUNTING_SERVICE")"
+  panelState="$(systemd_state "$OMNIPANEL_SERVICE")"
+  nginxState="$(systemd_state nginx)"
   fail2="disabled"
   iport="$(jq -r '.omnipanel_internal_port // 0' "$METADATA_FILE" 2>/dev/null || echo 0)"
   backendListener="$(check_listener "$BACKEND_PORT")"
@@ -1083,6 +1260,10 @@ status_cmd(){
     internalListener="false"
   fi
   dns="$(dns_status_json)"
+  socksUpstreamPort="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\+\)[[:space:]]*;.*/\1/p' "$OPENVPN_REDSOCKS_CONFIG" 2>/dev/null | head -n1 || true)"
+  [[ "$socksUpstreamPort" =~ ^[0-9]+$ ]] || socksUpstreamPort="$BACKEND_PORT"
+  socksUpstreamType="$(sed -n 's/^[[:space:]]*type[[:space:]]*=[[:space:]]*\([^;[:space:]]\+\)[[:space:]]*;.*/\1/p' "$OPENVPN_REDSOCKS_CONFIG" 2>/dev/null | head -n1 || true)"
+  [[ -n "$socksUpstreamType" ]] || socksUpstreamType="socks5"
   accountingDbReady=false
   sqlite3 "$OPENVPN_ACCOUNTING_DB" "SELECT 1;" >/dev/null 2>&1 && accountingDbReady=true || true
   hbOk=false
@@ -1092,15 +1273,24 @@ status_cmd(){
     hbEpoch="$(jq -r '.runAtEpoch // 0' "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo 0)"
   fi
   nowEpoch="$(date +%s)"
+  createdAtUtc="$(jq -r '.created_at_utc // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  createdEpoch="$(date -u -d "$createdAtUtc" +%s 2>/dev/null || echo 0)"
+  installGrace=false
+  if [[ "$createdEpoch" =~ ^[0-9]+$ ]] && (( createdEpoch > 0 )) && (( nowEpoch - createdEpoch <= 240 )); then
+    installGrace=true
+  fi
   accountingHealthy=false
   if [[ "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$hbOk" == "true" && "$hbEpoch" =~ ^[0-9]+$ ]]; then
     if (( hbEpoch > 0 && (nowEpoch - hbEpoch) <= 120 )); then
       accountingHealthy=true
     fi
   fi
+  if [[ "$accountingHealthy" != "true" && "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$installGrace" == "true" ]]; then
+    accountingHealthy=true
+  fi
 
-  printf '{"activeProtocol":"openvpn_tcp_relay","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s","openVpnAccountingTimerState":"%s","openVpnAccountingServiceState":"%s","openVpnAccountingDbReady":%s,"openVpnAccountingHealthy":%s}\n' \
-    "$sshState" "$openvpnState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$PUBLIC_PORT" "$PANEL_PORT" "$iport" \
+  printf '{"activeProtocol":"openvpn_tcp_relay","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"socksUpstreamPort":%s,"socksUpstreamType":"%s","publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s","openVpnAccountingTimerState":"%s","openVpnAccountingServiceState":"%s","openVpnAccountingDbReady":%s,"openVpnAccountingHealthy":%s}\n' \
+    "$sshState" "$openvpnState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$socksUpstreamPort" "$socksUpstreamType" "$PUBLIC_PORT" "$PANEL_PORT" "$iport" \
     "$backendListener" "$publicListener" "$panelListener" "$internalListener" \
     "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" \
     "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy"
@@ -1186,6 +1376,7 @@ install_cmd(){
   configure_nginx
   configure_host_firewall
   write_metadata
+  wait_openvpn_accounting_heartbeat || true
   dns_apply
 
   progress 100 "Gateway install completed"
@@ -1200,6 +1391,9 @@ install_cmd(){
 start_cmd(){
   require_root
   progress 96 "Starting gateway services"
+  write_redsocks_config
+  ensure_redsocks_bind_available
+  systemctl daemon-reload
   systemctl enable --now "$OPENVPN_REDSOCKS_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_ACCOUNTING_TIMER" "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true
   systemctl start "$OPENVPN_ACCOUNTING_SERVICE" >/dev/null 2>&1 || true
   progress 100 "Gateway start completed"

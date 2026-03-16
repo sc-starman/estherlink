@@ -30,10 +30,36 @@ export interface GatewayInboundSnapshot {
   capabilities?: GatewayProtocolCapabilities;
 }
 
-export interface ClientConfigPayload {
-  uri: string;
-  qrCodeDataUrl: string;
-}
+export type ClientConfigPayload =
+  | {
+      mode: "qr";
+      uri: string;
+      qrCodeDataUrl: string;
+      title?: string;
+    }
+  | {
+      mode: "ipsec_manual";
+      uri: string;
+      title?: string;
+      fields: {
+        server: string;
+        ports: string[];
+        username: string;
+        password: string;
+        preSharedKey: string;
+      };
+      setupSteps: string[];
+    }
+  | {
+      mode: "openvpn_bundle";
+      uri: string;
+      title?: string;
+      username: string;
+      password: string;
+      privateKeyPassphrase: string;
+      ovpnFileName: string;
+      ovpnContent: string;
+    };
 
 export interface GatewayClientCreateOptions {
   totalGB?: number;

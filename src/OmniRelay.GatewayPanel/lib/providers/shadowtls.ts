@@ -278,6 +278,6 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
 
     const uri = JSON.stringify(config, null, 2);
     const qrCodeDataUrl = await QRCode.toDataURL(uri, { width: 320, margin: 1 });
-    return { uri, qrCodeDataUrl };
+    return { mode: "qr", uri, qrCodeDataUrl };
   }
 }

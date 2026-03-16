@@ -34,10 +34,36 @@ interface InboundResponse {
   capabilities?: ProtocolCapabilities;
 }
 
-interface ConfigPayload {
-  uri: string;
-  qrCodeDataUrl: string;
-}
+type ConfigPayload =
+  | {
+      mode: "qr";
+      uri: string;
+      qrCodeDataUrl: string;
+      title?: string;
+    }
+  | {
+      mode: "ipsec_manual";
+      uri: string;
+      title?: string;
+      fields: {
+        server: string;
+        ports: string[];
+        username: string;
+        password: string;
+        preSharedKey: string;
+      };
+      setupSteps: string[];
+    }
+  | {
+      mode: "openvpn_bundle";
+      uri: string;
+      title?: string;
+      username: string;
+      password: string;
+      privateKeyPassphrase: string;
+      ovpnFileName: string;
+      ovpnContent: string;
+    };
 
 const DEFAULT_CAPABILITIES: ProtocolCapabilities = {
   supportsTrafficLimit: false,
@@ -113,6 +139,76 @@ function formatRemainingDuration(unixMs: number, nowMs: number): string {
     return `${hours}h ${minutes}m`;
   }
   return `${Math.max(1, minutes)}m`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizeConfigPayload(raw: unknown): ConfigPayload {
+  if (!isRecord(raw)) {
+    throw new Error("Invalid client config payload.");
+  }
+
+  const mode = String(raw.mode ?? "").trim();
+  if (mode === "qr") {
+    const uri = String(raw.uri ?? "");
+    const qrCodeDataUrl = String(raw.qrCodeDataUrl ?? "");
+    if (!uri || !qrCodeDataUrl) {
+      throw new Error("QR config payload is incomplete.");
+    }
+    return {
+      mode: "qr",
+      uri,
+      qrCodeDataUrl,
+      title: String(raw.title ?? "")
+    };
+  }
+
+  if (mode === "ipsec_manual") {
+    const fields = isRecord(raw.fields) ? raw.fields : {};
+    const setupStepsRaw = Array.isArray(raw.setupSteps) ? raw.setupSteps : [];
+    return {
+      mode: "ipsec_manual",
+      uri: String(raw.uri ?? ""),
+      title: String(raw.title ?? ""),
+      fields: {
+        server: String(fields.server ?? ""),
+        ports: Array.isArray(fields.ports) ? fields.ports.map((item) => String(item)) : [],
+        username: String(fields.username ?? ""),
+        password: String(fields.password ?? ""),
+        preSharedKey: String(fields.preSharedKey ?? "")
+      },
+      setupSteps: setupStepsRaw.map((step) => String(step))
+    };
+  }
+
+  if (mode === "openvpn_bundle") {
+    return {
+      mode: "openvpn_bundle",
+      uri: String(raw.uri ?? ""),
+      title: String(raw.title ?? ""),
+      username: String(raw.username ?? ""),
+      password: String(raw.password ?? ""),
+      privateKeyPassphrase: String(raw.privateKeyPassphrase ?? "not set"),
+      ovpnFileName: String(raw.ovpnFileName ?? "omnirelay-client.ovpn"),
+      ovpnContent: String(raw.ovpnContent ?? "")
+    };
+  }
+
+  // Backward compatibility for older panel responses.
+  const legacyUri = String(raw.uri ?? "");
+  const legacyQr = String(raw.qrCodeDataUrl ?? "");
+  if (legacyUri && legacyQr) {
+    return {
+      mode: "qr",
+      uri: legacyUri,
+      qrCodeDataUrl: legacyQr,
+      title: "Client Config"
+    };
+  }
+
+  throw new Error("Unsupported config format for this protocol.");
 }
 
 type DialogMode = "add" | "edit";
@@ -304,14 +400,33 @@ export function PanelClient() {
     setError("");
 
     const response = await fetch(`/api/client/config?uuid=${encodeURIComponent(uuid)}`, { cache: "no-store" });
-    const payload = (await response.json()) as ConfigPayload & { message?: string };
+    const payload = (await response.json()) as unknown;
     if (!response.ok) {
-      setError(payload.message ?? "Failed to build config.");
+      const message = isRecord(payload) ? String(payload.message ?? "") : "";
+      setError(message || "Failed to build config.");
       return;
     }
 
-    setSelectedConfig(payload);
+    try {
+      const normalizedPayload = normalizeConfigPayload(payload);
+      setSelectedConfig(normalizedPayload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to parse client config payload.";
+      setError(message);
+      return;
+    }
+
     setCopied(false);
+  }
+
+  async function copyText(value: string, errorMessage: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError(errorMessage);
+    }
   }
 
   async function copyConfigUri() {
@@ -319,13 +434,29 @@ export function PanelClient() {
       return;
     }
 
-    try {
-      await navigator.clipboard.writeText(selectedConfig.uri);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setError("Failed to copy config.");
+    await copyText(selectedConfig.uri, "Failed to copy config.");
+  }
+
+  function downloadOpenVpnConfig() {
+    if (!selectedConfig || selectedConfig.mode !== "openvpn_bundle") {
+      return;
     }
+
+    const content = selectedConfig.ovpnContent || selectedConfig.uri;
+    if (!content.trim()) {
+      setError("OpenVPN profile content is empty.");
+      return;
+    }
+
+    const blob = new Blob([content], { type: "application/x-openvpn-profile" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = selectedConfig.ovpnFileName || "omnirelay-client.ovpn";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
   }
 
   async function logout() {
@@ -548,33 +679,109 @@ export function PanelClient() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4" onClick={() => setSelectedConfig(null)}>
           <section className="card w-full max-w-xl p-6" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-xl font-semibold text-slate-900">Client Config</h2>
+              <h2 className="text-xl font-semibold text-slate-900">{selectedConfig.title?.trim() || "Client Config"}</h2>
               <button className="rounded-xl border border-slate-300 px-3 py-1 text-sm" onClick={() => setSelectedConfig(null)}>
                 Close
               </button>
             </div>
-            <div className="mt-4 flex items-start gap-2">
-              <textarea readOnly className="h-28 w-full rounded-xl border border-slate-300 p-3 font-[var(--font-mono)] text-xs" value={selectedConfig.uri} />
-              <button
-                title="Copy config"
-                aria-label="Copy config"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100"
-                onClick={() => void copyConfigUri()}
-              >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <rect x="9" y="9" width="10" height="10" rx="2" />
-                  <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
-                </svg>
-              </button>
-            </div>
-            {copied ? <p className="mt-2 text-xs text-emerald-700">Copied.</p> : null}
-            <div className="mt-4 flex justify-center">
-              <Image src={selectedConfig.qrCodeDataUrl} width={240} height={240} alt="QR Code" className="rounded-xl border border-slate-200" />
-            </div>
+
+            {selectedConfig.mode === "qr" ? (
+              <>
+                <div className="mt-4 flex items-start gap-2">
+                  <textarea readOnly className="h-28 w-full rounded-xl border border-slate-300 p-3 font-[var(--font-mono)] text-xs" value={selectedConfig.uri} />
+                  <button
+                    title="Copy config"
+                    aria-label="Copy config"
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100"
+                    onClick={() => void copyConfigUri()}
+                  >
+                    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                      <rect x="9" y="9" width="10" height="10" rx="2" />
+                      <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  </button>
+                </div>
+                {copied ? <p className="mt-2 text-xs text-emerald-700">Copied.</p> : null}
+                <div className="mt-4 flex justify-center">
+                  {selectedConfig.qrCodeDataUrl ? (
+                    <Image src={selectedConfig.qrCodeDataUrl} width={240} height={240} alt="QR Code" className="rounded-xl border border-slate-200" />
+                  ) : (
+                    <p className="text-sm text-slate-600">QR code is not available for this config.</p>
+                  )}
+                </div>
+              </>
+            ) : null}
+
+            {selectedConfig.mode === "ipsec_manual" ? (
+              <div className="mt-4 space-y-3 text-sm text-slate-800">
+                <div className="grid gap-2 sm:grid-cols-[170px_1fr_auto] sm:items-center">
+                  <p className="font-medium text-slate-600">Server</p>
+                  <p className="font-[var(--font-mono)]">{selectedConfig.fields.server}</p>
+                  <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(selectedConfig.fields.server, "Failed to copy server value.")}>Copy</button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[170px_1fr_auto] sm:items-center">
+                  <p className="font-medium text-slate-600">Ports</p>
+                  <p>{selectedConfig.fields.ports.join(", ")}</p>
+                  <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(selectedConfig.fields.ports.join(", "), "Failed to copy ports.")}>Copy</button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[170px_1fr_auto] sm:items-center">
+                  <p className="font-medium text-slate-600">Username</p>
+                  <p className="font-[var(--font-mono)]">{selectedConfig.fields.username}</p>
+                  <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(selectedConfig.fields.username, "Failed to copy username.")}>Copy</button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[170px_1fr_auto] sm:items-center">
+                  <p className="font-medium text-slate-600">Password</p>
+                  <p className="font-[var(--font-mono)]">{selectedConfig.fields.password}</p>
+                  <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(selectedConfig.fields.password, "Failed to copy password.")}>Copy</button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[170px_1fr_auto] sm:items-center">
+                  <p className="font-medium text-slate-600">L2TP Pre-shared Key</p>
+                  <p className="font-[var(--font-mono)]">{selectedConfig.fields.preSharedKey}</p>
+                  <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(selectedConfig.fields.preSharedKey, "Failed to copy pre-shared key.")}>Copy</button>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="mb-2 text-xs uppercase tracking-[0.2em] text-slate-500">Setup Steps</p>
+                  <ol className="list-decimal space-y-1 pl-5 text-slate-700">
+                    {selectedConfig.setupSteps.map((step, index) => (
+                      <li key={`${step}-${index}`}>{step}</li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
+            ) : null}
+
+            {selectedConfig.mode === "openvpn_bundle" ? (
+              <div className="mt-4 space-y-3 text-sm text-slate-800">
+                <div className="grid gap-2 sm:grid-cols-[190px_1fr_auto] sm:items-center">
+                  <p className="font-medium text-slate-600">OpenVPN Username</p>
+                  <p className="font-[var(--font-mono)]">{selectedConfig.username}</p>
+                  <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(selectedConfig.username, "Failed to copy OpenVPN username.")}>Copy</button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[190px_1fr_auto] sm:items-center">
+                  <p className="font-medium text-slate-600">OpenVPN Password</p>
+                  <p className="font-[var(--font-mono)]">{selectedConfig.password}</p>
+                  <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(selectedConfig.password, "Failed to copy OpenVPN password.")}>Copy</button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[190px_1fr_auto] sm:items-center">
+                  <p className="font-medium text-slate-600">Private Key Passphrase</p>
+                  <p className="font-[var(--font-mono)]">{selectedConfig.privateKeyPassphrase}</p>
+                  <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(selectedConfig.privateKeyPassphrase, "Failed to copy private key passphrase.")}>Copy</button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button className="rounded-xl border border-cyan-600 px-4 py-2 text-sm font-medium text-cyan-700" onClick={downloadOpenVpnConfig}>
+                    Download .ovpn
+                  </button>
+                  <button className="rounded-xl border border-slate-300 px-4 py-2 text-sm" onClick={() => void copyText(selectedConfig.ovpnContent || selectedConfig.uri, "Failed to copy OpenVPN profile.")}>
+                    Copy .ovpn Text
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {copied ? <p className="mt-3 text-xs text-emerald-700">Copied.</p> : null}
           </section>
         </div>
       ) : null}
     </main>
   );
 }
-

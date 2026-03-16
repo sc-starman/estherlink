@@ -9,6 +9,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Windows;
 
@@ -609,8 +610,21 @@ public partial class GatewayManagementViewModel : ObservableObject
             (request, sudo, progress, token) => _gatewayDeployment.InstallGatewayAsync(request, sudo, progress, token),
             async (request, sudo, progress, op, token) =>
             {
+                if (!op.Success)
+                {
+                    await RefreshGatewayStatusAsync(sudo);
+                    await RefreshGatewayHealthAsync(
+                        request,
+                        sudo,
+                        progress,
+                        emitLogs: true,
+                        updateFeedback: false,
+                        cancellationToken: token);
+                    return;
+                }
+
                 await RefreshGatewayStatusAsync(sudo);
-                await RefreshGatewayHealthAsync(request, sudo, progress);
+                await PollGatewayHealthAfterInstallAsync(request, sudo, progress, token);
                 PrepareInstallSecretsForOneTimeDisplay(op);
             });
     }
@@ -1000,29 +1014,227 @@ public partial class GatewayManagementViewModel : ObservableObject
     private async Task<bool> RefreshGatewayHealthAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
-        IProgress<DeploymentProgressSnapshot>? progress = null)
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        bool emitLogs = true,
+        bool updateFeedback = true,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            var report = await _gatewayHealth.GetHealthAsync(request, sudoPassword, progress);
+            var report = await _gatewayHealth.GetHealthAsync(request, sudoPassword, progress, cancellationToken);
             GatewayHealthReport = report;
+            var failureDetails = report.Healthy ? string.Empty : BuildGatewayHealthFailureDetails(report);
             GatewayHealthSummary = report.Healthy
                 ? $"Healthy (checked {report.CheckedAtUtc:yyyy-MM-dd HH:mm:ss} UTC)"
-                : $"Unhealthy (checked {report.CheckedAtUtc:yyyy-MM-dd HH:mm:ss} UTC)";
+                : string.IsNullOrWhiteSpace(failureDetails)
+                    ? $"Unhealthy (checked {report.CheckedAtUtc:yyyy-MM-dd HH:mm:ss} UTC)"
+                    : $"Unhealthy (checked {report.CheckedAtUtc:yyyy-MM-dd HH:mm:ss} UTC) [{failureDetails}]";
             GatewayDnsSummary = $"DNS path={report.DnsPathHealthy}, config={report.DnsConfigPresent}, rules={report.DnsRuleActive}, doh={report.DohReachableViaTunnel}, udp53={report.Udp53PathReady}";
-            Feedback = GatewayHealthSummary;
-            AppendLog($"Gateway health: {GatewayHealthSummary}");
-            AppendLog($"Gateway DNS: {GatewayDnsSummary}");
-            return true;
+
+            if (updateFeedback)
+            {
+                Feedback = GatewayHealthSummary;
+            }
+
+            if (emitLogs)
+            {
+                AppendLog($"Gateway health: {GatewayHealthSummary}");
+                AppendLog($"Gateway DNS: {GatewayDnsSummary}");
+            }
+
+            return report.Healthy;
         }
         catch (Exception ex)
         {
             GatewayHealthSummary = $"Health check failed: {BuildGatewayConnectivityHint(ex.Message)}";
             GatewayDnsSummary = "DNS status unavailable";
-            Feedback = GatewayHealthSummary;
-            AppendLog(GatewayHealthSummary);
+            if (updateFeedback)
+            {
+                Feedback = GatewayHealthSummary;
+            }
+
+            if (emitLogs)
+            {
+                AppendLog(GatewayHealthSummary);
+            }
+
             return false;
         }
+    }
+
+    private async Task PollGatewayHealthAfterInstallAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        const int pollIntervalSeconds = 5;
+        const int maxPollSeconds = 90;
+        var attempts = Math.Max(1, maxPollSeconds / pollIntervalSeconds);
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            var healthy = await RefreshGatewayHealthAsync(
+                request,
+                sudoPassword,
+                progress,
+                emitLogs: false,
+                updateFeedback: false,
+                cancellationToken: cancellationToken);
+
+            if (healthy)
+            {
+                break;
+            }
+
+            if (attempt >= attempts)
+            {
+                break;
+            }
+
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayHealth,
+                Percent = 0,
+                Message = $"Waiting for gateway services to stabilize ({attempt}/{attempts})..."
+            });
+
+            await Task.Delay(TimeSpan.FromSeconds(pollIntervalSeconds), cancellationToken);
+        }
+
+        await RefreshGatewayHealthAsync(
+            request,
+            sudoPassword,
+            progress,
+            emitLogs: true,
+            updateFeedback: true,
+            cancellationToken: cancellationToken);
+    }
+
+    private static string BuildGatewayHealthFailureDetails(GatewayHealthReport report)
+    {
+        var failures = new List<string>();
+        if (!string.Equals(report.SshState, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            failures.Add($"ssh={report.SshState}");
+        }
+
+        var protocol = GatewayProtocols.Normalize(report.ActiveProtocol);
+        if (string.Equals(protocol, GatewayProtocols.ShadowTlsV3ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(report.SingBoxState, "active", StringComparison.OrdinalIgnoreCase))
+            {
+                failures.Add($"sing-box={report.SingBoxState}");
+            }
+        }
+        else if (string.Equals(protocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(report.OpenVpnState, "active", StringComparison.OrdinalIgnoreCase))
+            {
+                failures.Add($"openvpn={report.OpenVpnState}");
+            }
+
+            if (!TryGetRawBool(report.RawJson, "openVpnAccountingHealthy", out var accountingHealthy) || !accountingHealthy)
+            {
+                failures.Add("openvpn-accounting=unhealthy");
+            }
+        }
+        else if (string.Equals(protocol, GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(report.IpsecState, "active", StringComparison.OrdinalIgnoreCase))
+            {
+                failures.Add($"ipsec={report.IpsecState}");
+            }
+
+            if (!string.Equals(report.Xl2tpdState, "active", StringComparison.OrdinalIgnoreCase))
+            {
+                failures.Add($"xl2tpd={report.Xl2tpdState}");
+            }
+
+            if (!TryGetRawBool(report.RawJson, "ipsecAccountingHealthy", out var accountingHealthy) || !accountingHealthy)
+            {
+                failures.Add("ipsec-accounting=unhealthy");
+            }
+        }
+        else if (!string.Equals(report.XuiState, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            failures.Add($"x-ui={report.XuiState}");
+        }
+
+        if (!string.Equals(report.OmniPanelState, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            failures.Add($"omnipanel={report.OmniPanelState}");
+        }
+
+        if (!string.Equals(report.NginxState, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            failures.Add($"nginx={report.NginxState}");
+        }
+
+        if (!report.BackendListener)
+        {
+            failures.Add("backend-listener=down");
+        }
+
+        if (!report.PublicListener)
+        {
+            failures.Add("public-listener=down");
+        }
+
+        if (!report.PanelListener)
+        {
+            failures.Add("panel-listener=down");
+        }
+
+        if (!report.OmniPanelInternalListener)
+        {
+            failures.Add("panel-upstream=down");
+        }
+
+        if (!report.DnsPathHealthy)
+        {
+            var dnsError = string.IsNullOrWhiteSpace(report.DnsLastError) ? "failed" : report.DnsLastError;
+            failures.Add($"dns={dnsError}");
+        }
+
+        return string.Join(", ", failures.Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static bool TryGetRawBool(string rawJson, string propertyName, out bool value)
+    {
+        value = false;
+        if (string.IsNullOrWhiteSpace(rawJson) || string.IsNullOrWhiteSpace(propertyName))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            if (!doc.RootElement.TryGetProperty(propertyName, out var prop))
+            {
+                return false;
+            }
+
+            if (prop.ValueKind == JsonValueKind.True || prop.ValueKind == JsonValueKind.False)
+            {
+                value = prop.GetBoolean();
+                return true;
+            }
+
+            if (prop.ValueKind == JsonValueKind.String &&
+                bool.TryParse(prop.GetString(), out var parsed))
+            {
+                value = parsed;
+                return true;
+            }
+        }
+        catch
+        {
+            // Ignore malformed health payload and keep caller fallback behavior.
+        }
+
+        return false;
     }
 
     private GatewayDeploymentRequest BuildGatewayRequest()

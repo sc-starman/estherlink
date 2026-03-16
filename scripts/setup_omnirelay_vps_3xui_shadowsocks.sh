@@ -1136,6 +1136,7 @@ OMNIPANEL_AUTH_FILE=${panel_auth_file}
 OMNIPANEL_AUTH_USERNAME=${PANEL_USER}
 OMNIPANEL_AUTH_PASSWORD=${PANEL_PASSWORD}
 OMNIRELAY_ACTIVE_PROTOCOL=shadowsocks_3xui
+OMNIPANEL_SESSION_SECURE=${PANEL_SSL_ENABLED}
 XUI_BASE_URL=$(xui_api_base_url)
 XUI_INBOUND_ID=${INBOUND_ID}
 XUI_AUTH_USERNAME=${PANEL_USER}
@@ -1149,7 +1150,7 @@ EOF
 [Unit]
 Description=OmniRelay OmniPanel
 After=network.target x-ui.service
-Requires=x-ui.service
+Wants=x-ui.service
 
 [Service]
 Type=simple

@@ -329,7 +329,7 @@ EOF
 write_redsocks_config(){
   cat > "$IPSEC_REDSOCKS_CONFIG" <<EOF
 base { log_debug = off; log_info = on; daemon = off; redirector = iptables; }
-redsocks { local_ip = 127.0.0.1; local_port = ${IPSEC_REDSOCKS_LOCAL_PORT}; ip = 127.0.0.1; port = ${BACKEND_PORT}; type = socks5; }
+redsocks { local_ip = 0.0.0.0; local_port = ${IPSEC_REDSOCKS_LOCAL_PORT}; ip = 127.0.0.1; port = ${BACKEND_PORT}; type = socks5; }
 EOF
 }
 enable_ip_forward(){ echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-omnirelay-ipsec.conf; sysctl -q -w net.ipv4.ip_forward=1 || true; }
@@ -666,6 +666,7 @@ OMNIPANEL_AUTH_FILE=${PANEL_AUTH_FILE}
 OMNIPANEL_AUTH_USERNAME=${PANEL_USER}
 OMNIPANEL_AUTH_PASSWORD=${PANEL_PASSWORD}
 OMNIRELAY_ACTIVE_PROTOCOL=ipsec_l2tp_hwdsl2
+OMNIPANEL_SESSION_SECURE=${PANEL_SSL_ENABLED}
 PANEL_PUBLIC_PORT=${PANEL_PORT}
 PANEL_PUBLIC_HOST=${PANEL_DOMAIN:-${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}}
 IPSEC_L2TP_CLIENTS_FILE=${IPSEC_CLIENTS_FILE}
@@ -774,6 +775,34 @@ write_metadata(){
   chmod 0600 "$METADATA_FILE"
 }
 
+wait_ipsec_accounting_heartbeat(){
+  local i hb_ok hb_epoch now_epoch created_at created_epoch
+  for i in $(seq 1 20); do
+    hb_ok=false
+    hb_epoch=0
+    if [[ -f "$IPSEC_ACCOUNTING_HEARTBEAT" ]]; then
+      hb_ok="$(jq -r '.ok // false' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo false)"
+      hb_epoch="$(jq -r '.runAtEpoch // 0' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo 0)"
+      now_epoch="$(date +%s)"
+      if [[ "$hb_ok" == "true" && "$hb_epoch" =~ ^[0-9]+$ ]] && (( hb_epoch > 0 )) && (( now_epoch - hb_epoch <= 180 )); then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+
+  created_at="$(jq -r '.created_at_utc // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  created_epoch="$(date -u -d "$created_at" +%s 2>/dev/null || echo 0)"
+  now_epoch="$(date +%s)"
+  if [[ "$created_epoch" =~ ^[0-9]+$ ]] && (( created_epoch > 0 )) && (( now_epoch - created_epoch <= 240 )); then
+    log "IPSec accounting heartbeat is still warming up; continuing within grace window."
+    return 0
+  fi
+
+  log "IPSec accounting heartbeat is not ready."
+  return 1
+}
+
 dns_apply(){ progress 94 "Applying DNS-through-tunnel profile"; jq -n --arg m "$DNS_MODE" --arg d "$DOH_ENDPOINTS" --argjson u "$( [[ "$DNS_UDP_ONLY" == "true" ]] && echo true || echo false )" '{mode:$m,dohEndpoints:$d,dnsUdpOnly:$u,updatedAtUtc:(now|todate)}' > "$DNS_PROFILE_FILE"; progress 100 "DNS profile applied"; }
 dns_status_json(){ local cfg rule mode doh udpOnly udp53 path; if [[ -f "$DNS_PROFILE_FILE" ]]; then cfg=true; rule=true; mode="$(jq -r '.mode' "$DNS_PROFILE_FILE")"; doh="$(jq -r '.dohEndpoints' "$DNS_PROFILE_FILE")"; udpOnly="$(jq -r '.dnsUdpOnly' "$DNS_PROFILE_FILE")"; else cfg=false; rule=false; mode=unknown; doh=""; udpOnly=false; fi; udp53="$(check_listener 53)"; path=false; [[ "$cfg" == true && "$rule" == true ]] && path=true; printf '{"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' "$cfg" "$rule" "$cfg" "$udp53" "$path" "$mode" "$udpOnly" "$(printf '%s' "$doh" | sed 's/"/\\"/g')"; }
 dns_status(){ dns_status_json; }
@@ -875,7 +904,7 @@ EOF
 
 status_cmd(){
   local sshState ipsecState xl2tpdState redsocksState panelState nginxState fail2 backendListener publicListener panelListener internalListener dns iport ike natt l2tp
-  local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch
+  local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch createdAtUtc createdEpoch installGrace
   sshState="$(systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null || echo inactive)"
   ipsecState="$(systemctl is-active ipsec 2>/dev/null || systemctl is-active strongswan-starter 2>/dev/null || echo inactive)"
   xl2tpdState="$(systemctl is-active xl2tpd 2>/dev/null || echo inactive)"
@@ -901,11 +930,20 @@ status_cmd(){
     hbEpoch="$(jq -r '.runAtEpoch // 0' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo 0)"
   fi
   nowEpoch="$(date +%s)"
+  createdAtUtc="$(jq -r '.created_at_utc // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  createdEpoch="$(date -u -d "$createdAtUtc" +%s 2>/dev/null || echo 0)"
+  installGrace=false
+  if [[ "$createdEpoch" =~ ^[0-9]+$ ]] && (( createdEpoch > 0 )) && (( nowEpoch - createdEpoch <= 240 )); then
+    installGrace=true
+  fi
   accountingHealthy=false
   if [[ "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$hbOk" == "true" && "$hbEpoch" =~ ^[0-9]+$ ]]; then
     if (( hbEpoch > 0 && (nowEpoch - hbEpoch) <= 120 )); then
       accountingHealthy=true
     fi
+  fi
+  if [[ "$accountingHealthy" != "true" && "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$installGrace" == "true" ]]; then
+    accountingHealthy=true
   fi
   printf '{"activeProtocol":"ipsec_l2tp_hwdsl2","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"inactive","ipsecState":"%s","xl2tpdState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s","ipsecAccountingTimerState":"%s","ipsecAccountingServiceState":"%s","ipsecAccountingDbReady":%s,"ipsecAccountingHealthy":%s}\n' "$sshState" "$ipsecState" "$xl2tpdState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$IPSEC_L2TP_PORT" "$PANEL_PORT" "$iport" "$backendListener" "$publicListener" "$panelListener" "$internalListener" "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy"
 }
@@ -980,6 +1018,7 @@ install_cmd(){
   configure_nginx
   configure_host_firewall
   write_metadata
+  wait_ipsec_accounting_heartbeat || true
   dns_apply
   progress 100 "Gateway install completed"
   local endpoint scheme

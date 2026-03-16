@@ -131,6 +131,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             }
 
             await EnsureCleanProtocolSwitchAsync(request, sudoPassword, progress, cancellationToken);
+            await EnsureRuntimeSocksBackendReadyForInstallAsync(request, sudoPassword, progress, cancellationToken);
 
             progress?.Report(new DeploymentProgressSnapshot
             {
@@ -502,6 +503,105 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             Phase = DeploymentPhases.GatewayInstall,
             Percent = 4,
             Message = "Strict uninstall completed; continuing with install"
+        });
+    }
+
+    private async Task EnsureRuntimeSocksBackendReadyForInstallAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var selectedProtocol = GatewayProtocols.Normalize(request.SelectedGatewayProtocol);
+        if (!string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var backendPort = request.Config.TunnelRemotePort;
+        progress?.Report(new DeploymentProgressSnapshot
+        {
+            Phase = DeploymentPhases.GatewayInstall,
+            Percent = 4,
+            Message = $"Checking runtime tunnel backend endpoint (127.0.0.1:{backendPort})"
+        });
+
+        var command =
+            "set -euo pipefail; " +
+            $"port={backendPort}; " +
+            "python3 - \"$port\" <<'PY'\n" +
+            "import socket\n" +
+            "import sys\n" +
+            "port = int(sys.argv[1])\n" +
+            "def probe_socks() -> bool:\n" +
+            "    try:\n" +
+            "        with socket.create_connection((\"127.0.0.1\", port), timeout=4) as s:\n" +
+            "            s.settimeout(4)\n" +
+            "            s.sendall(b\"\\x05\\x01\\x00\")\n" +
+            "            data = s.recv(2)\n" +
+            "    except Exception:\n" +
+            "        return False\n" +
+            "    return len(data) == 2 and data[0] == 0x05 and data[1] in (0x00, 0x02)\n" +
+            "\n" +
+            "def probe_http_connect() -> bool:\n" +
+            "    req = b\"CONNECT 1.1.1.1:443 HTTP/1.1\\r\\nHost: 1.1.1.1:443\\r\\nProxy-Connection: keep-alive\\r\\n\\r\\n\"\n" +
+            "    try:\n" +
+            "        with socket.create_connection((\"127.0.0.1\", port), timeout=4) as s:\n" +
+            "            s.settimeout(4)\n" +
+            "            s.sendall(req)\n" +
+            "            data = s.recv(64)\n" +
+            "    except Exception:\n" +
+            "        return False\n" +
+            "    return data.startswith(b\"HTTP/1.0 \") or data.startswith(b\"HTTP/1.1 \")\n" +
+            "\n" +
+            "if probe_socks():\n" +
+            "    print(f\"Runtime backend probe passed on 127.0.0.1:{port} (mode=socks5).\")\n" +
+            "    raise SystemExit(0)\n" +
+            "if probe_http_connect():\n" +
+            "    print(f\"Runtime backend probe passed on 127.0.0.1:{port} (mode=http-connect).\")\n" +
+            "    raise SystemExit(0)\n" +
+            "try:\n" +
+            "    with socket.create_connection((\"127.0.0.1\", port), timeout=4) as s:\n" +
+            "        pass\n" +
+            "except Exception as ex:\n" +
+            "    print(f\"Runtime backend probe failed on 127.0.0.1:{port}: {ex}\")\n" +
+            "    raise SystemExit(44)\n" +
+            "print(f\"Runtime backend probe failed on 127.0.0.1:{port}: unsupported proxy protocol (expected socks5 or http-connect)\")\n" +
+            "raise SystemExit(44)\n" +
+            "PY";
+
+        var probeResult = await ExecuteCommandAsync(
+            request.Config,
+            command,
+            sudoPassword,
+            line =>
+            {
+                var clean = SanitizeTerminalLine(line);
+                if (string.IsNullOrWhiteSpace(clean))
+                {
+                    return;
+                }
+
+                progress?.Report(new DeploymentProgressSnapshot
+                {
+                    Phase = DeploymentPhases.GatewayInstall,
+                    Percent = 0,
+                    Message = $"[vps] {clean}"
+                });
+            },
+            cancellationToken);
+
+        if (!probeResult.Success)
+        {
+            throw new InvalidOperationException(
+                $"Runtime tunnel backend preflight failed on 127.0.0.1:{backendPort}. {probeResult.ErrorMessage}");
+        }
+
+        progress?.Report(new DeploymentProgressSnapshot
+        {
+            Phase = DeploymentPhases.GatewayInstall,
+            Percent = 4,
+            Message = $"Runtime tunnel backend check passed (127.0.0.1:{backendPort})"
         });
     }
 

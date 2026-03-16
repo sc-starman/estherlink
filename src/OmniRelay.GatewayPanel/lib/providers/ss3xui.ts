@@ -178,6 +178,6 @@ export class Shadowsocks3xuiProvider implements GatewayProtocolProvider {
       margin: 1
     });
 
-    return { uri, qrCodeDataUrl };
+    return { mode: "qr", uri, qrCodeDataUrl };
   }
 }

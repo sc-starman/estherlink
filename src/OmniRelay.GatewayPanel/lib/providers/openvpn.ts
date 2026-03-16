@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import { exec as execCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomBytes, randomUUID } from "node:crypto";
-import QRCode from "qrcode";
 import { type OmniSession } from "@/lib/session";
 import {
   type ClientConfigPayload,
@@ -136,6 +135,16 @@ function randomAlphaNum(length: number): string {
     .toString("base64")
     .replace(/[^a-zA-Z0-9]/g, "")
     .slice(0, length);
+}
+
+function toSafeFileStem(value: string): string {
+  const safe = value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return safe || "openvpn-client";
 }
 
 function normalizeTotalGB(value: unknown): number {
@@ -350,6 +359,12 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       throw new Error("Client id is required.");
     }
 
+    const clients = await readClients();
+    const client = clients.find((item) => item.id === trimmedId);
+    if (!client) {
+      throw new Error("Client not found.");
+    }
+
     const profilePath = join(getExportsDir(), `${trimmedId}.ovpn`);
     let profile = "";
     try {
@@ -359,8 +374,16 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       profile = await fs.readFile(profilePath, "utf8");
     }
 
-    const uri = profile.trimEnd();
-    const qrCodeDataUrl = await QRCode.toDataURL(uri, { width: 320, margin: 1 });
-    return { uri, qrCodeDataUrl };
+    const fileStem = toSafeFileStem(client.email);
+    return {
+      mode: "openvpn_bundle",
+      title: "OpenVPN Client Bundle",
+      uri: profile.trimEnd(),
+      username: client.username,
+      password: client.password,
+      privateKeyPassphrase: "not set",
+      ovpnFileName: `${fileStem}-${client.id.slice(0, 8)}.ovpn`,
+      ovpnContent: profile
+    };
   }
 }

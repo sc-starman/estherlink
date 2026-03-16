@@ -10,6 +10,26 @@ export interface OmniSession {
 const fallbackPassword = "dev-only-change-me-session-password-32chars";
 const sessionPassword = process.env.SESSION_SECRET ?? fallbackPassword;
 
+function parseBoolean(value: string | undefined): boolean | null {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "n", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return null;
+}
+
+const sessionCookieSecure =
+  parseBoolean(process.env.OMNIPANEL_SESSION_SECURE) ?? (process.env.NODE_ENV === "production");
+
 if (sessionPassword.length < 32) {
   throw new Error("SESSION_SECRET must be at least 32 characters.");
 }
@@ -19,7 +39,7 @@ export const sessionOptions: SessionOptions = {
   password: sessionPassword,
   cookieOptions: {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: sessionCookieSecure,
     sameSite: "lax",
     path: "/"
   }

@@ -126,9 +126,6 @@
                         <TextBlock Grid.Row="2" Text="Password" Style="{StaticResource FormLabelStyle}" Foreground="#E5E7EB"/>
                         <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding GatewayOperationPanelPasswordDisplay}" Style="{StaticResource ValueTextStyle}" Foreground="#FFFFFF"/>
                         <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
-                            <Button Command="{Binding ToggleGatewayOperationPanelPasswordVisibilityCommand}" ToolTip="{Binding GatewayOperationPanelPasswordToggleText}" Style="{StaticResource SecondaryButtonStyle}" Width="30" Height="30" Padding="0">
-                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="{Binding GatewayOperationPanelPasswordToggleIconGlyph}" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Button>
                             <Button Command="{Binding CopyGatewayOperationPanelPasswordCommand}" ToolTip="Copy password" Style="{StaticResource SecondaryButtonStyle}" Width="30" Height="30" Padding="0" Margin="8,0,0,0">
                                 <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8C8;" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Button>

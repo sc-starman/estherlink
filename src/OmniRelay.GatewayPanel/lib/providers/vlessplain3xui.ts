@@ -134,6 +134,6 @@ export class VlessPlain3xuiProvider implements GatewayProtocolProvider {
       margin: 1
     });
 
-    return { uri, qrCodeDataUrl };
+    return { mode: "qr", uri, qrCodeDataUrl };
   }
 }
