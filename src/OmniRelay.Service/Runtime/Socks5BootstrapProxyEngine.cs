@@ -153,6 +153,13 @@ public sealed class Socks5BootstrapProxyEngine
         }
         catch (Exception ex)
         {
+            if (ex is IOException ioEx &&
+                ioEx.Message.Contains("Unexpected EOF", StringComparison.OrdinalIgnoreCase))
+            {
+                // Expected for liveness probes that only open+close the socket.
+                return;
+            }
+
             _fileLog.Error("SOCKS5 connection handling failed.", ex);
             _runtime.SetBootstrapSocksStatus(true, _runtime.GetStatusSnapshot().TunnelConnected, ex.Message);
             try

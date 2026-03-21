@@ -7,6 +7,9 @@ namespace OmniRelay.Service.Runtime;
 
 public sealed class HttpConnectProxyEngine
 {
+    private static readonly IPAddress CloudflareDnsIpv4 = IPAddress.Parse("1.1.1.1");
+    private static readonly IPAddress GoogleDnsIpv4 = IPAddress.Parse("8.8.8.8");
+
     private readonly GatewayRuntime _runtime;
     private readonly ILogger<HttpConnectProxyEngine> _logger;
     private readonly FileLogWriter _fileLog;
@@ -158,9 +161,12 @@ public sealed class HttpConnectProxyEngine
             using var outboundStream = new NetworkStream(outboundSocket, ownsSocket: true);
             await stream.WriteAsync("HTTP/1.1 200 Connection Established\r\n\r\n"u8.ToArray(), connectionCts.Token);
 
-            _fileLog.Info(
-                $"CONNECT source={sourceAddress} target={request.Host}:{request.Port} ip={destinationIp} " +
-                $"egressIfIndex={adapterIndex} bindIp={bindIp} whitelistMatch={shouldUseWhitelist}");
+            if (!IsInternalProbeTraffic(sourceAddress, request, destinationIp))
+            {
+                _fileLog.Info(
+                    $"CONNECT source={sourceAddress} target={request.Host}:{request.Port} ip={destinationIp} " +
+                    $"egressIfIndex={adapterIndex} bindIp={bindIp} whitelistMatch={shouldUseWhitelist}");
+            }
 
             await RelayAsync(stream, outboundStream, connectionCts.Token);
         }
@@ -169,6 +175,13 @@ public sealed class HttpConnectProxyEngine
         }
         catch (Exception ex)
         {
+            if (ex is InvalidOperationException invalidOp &&
+                invalidOp.Message.Contains("Client closed before sending request.", StringComparison.OrdinalIgnoreCase))
+            {
+                // Expected for health checks that only open+close the local proxy socket.
+                return;
+            }
+
             _runtime.SetError(ex.Message);
             _fileLog.Error("Proxy connection handling failed.", ex);
 
@@ -314,6 +327,27 @@ public sealed class HttpConnectProxyEngine
         }
 
         return ipv4;
+    }
+
+    private static bool IsInternalProbeTraffic(IPAddress? sourceAddress, ConnectRequest request, IPAddress destinationIp)
+    {
+        if (sourceAddress is null || !IPAddress.IsLoopback(sourceAddress))
+        {
+            return false;
+        }
+
+        if (request.Port != 443)
+        {
+            return false;
+        }
+
+        if (request.Host.Equals("1.1.1.1", StringComparison.OrdinalIgnoreCase) ||
+            request.Host.Equals("8.8.8.8", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return destinationIp.Equals(CloudflareDnsIpv4) || destinationIp.Equals(GoogleDnsIpv4);
     }
 
     private sealed record ConnectRequest(string Host, int Port);

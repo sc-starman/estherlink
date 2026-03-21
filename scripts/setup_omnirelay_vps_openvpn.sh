@@ -56,6 +56,11 @@ OPENVPN_SERVICE="omnirelay-openvpn"
 OPENVPN_REDSOCKS_SERVICE="omnirelay-redsocks"
 OPENVPN_REDSOCKS_CONFIG="${OPENVPN_DIR}/redsocks.conf"
 OPENVPN_REDSOCKS_LOCAL_PORT=12345
+OPENVPN_DNS_BRIDGE_SERVICE="omnirelay-openvpn-dns"
+OPENVPN_DNS_BRIDGE_CONFIG="${OPENVPN_DIR}/dns-bridge.json"
+OPENVPN_DNS_BRIDGE_SCRIPT="${OPENVPN_DIR}/dns-bridge.py"
+OPENVPN_DNS_BRIDGE_LISTEN_HOST="0.0.0.0"
+OPENVPN_DNS_BRIDGE_LISTEN_PORT=1053
 OPENVPN_MANAGEMENT_PORT=17505
 OPENVPN_STATUS_FILE="/var/log/openvpn/omnirelay-status.log"
 OPENVPN_ACCOUNTING_DB="${OPENVPN_DIR}/accounting.db"
@@ -71,6 +76,19 @@ STATUS_JSON=0
 HEALTH_JSON=0
 OPENVPN_NET_ADDR=""
 OPENVPN_NETMASK=""
+OPENVPN_GATEWAY_IP=""
+
+ARG_PUBLIC_PORT_SET=false
+ARG_PANEL_PORT_SET=false
+ARG_BACKEND_PORT_SET=false
+ARG_SSH_PORT_SET=false
+ARG_BOOTSTRAP_SOCKS_PORT_SET=false
+ARG_OPENVPN_NETWORK_SET=false
+ARG_OPENVPN_CLIENT_DNS_SET=false
+ARG_DNS_MODE_SET=false
+ARG_DOH_ENDPOINTS_SET=false
+ARG_DNS_UDP_ONLY_SET=false
+ARG_VPS_IP_SET=false
 
 log(){ printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '[%s] ERROR: %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; exit 1; }
@@ -80,6 +98,27 @@ validate_port(){ [[ "$1" =~ ^[0-9]+$ ]] || die "$2 must be integer"; (( $1>=1 &&
 random_string(){ LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c "$1" || true; }
 random_base64(){ openssl rand -base64 "$1" | tr -d '\r\n'; }
 check_listener(){ ss -lnt "( sport = :$1 )" 2>/dev/null | awk 'NR>1{print}' | grep -q . && echo true || echo false; }
+check_dns_redirect_rule(){
+  local proto="$1"
+  iptables -t nat -C PREROUTING -i tun0 -p "$proto" --dport 53 -j REDIRECT --to-ports "${OPENVPN_DNS_BRIDGE_LISTEN_PORT}" >/dev/null 2>&1 && echo true || echo false
+}
+check_udp_only_rule(){
+  if [[ "$DNS_UDP_ONLY" != "true" ]]; then
+    echo true
+    return 0
+  fi
+  iptables -C FORWARD -i tun0 -s "$OPENVPN_NETWORK" -p udp ! --dport 53 -j REJECT --reject-with icmp-port-unreachable >/dev/null 2>&1 && echo true || echo false
+}
+check_dot_block_rule(){
+  iptables -C FORWARD -i tun0 -s "$OPENVPN_NETWORK" -p tcp --dport 853 -j REJECT --reject-with tcp-reset >/dev/null 2>&1 && echo true || echo false
+}
+clear_legacy_dns_dnat_rules(){
+  local line rule
+  while IFS= read -r line; do
+    rule="${line#-A PREROUTING }"
+    iptables -t nat -D PREROUTING $rule >/dev/null 2>&1 || true
+  done < <(iptables -t nat -S PREROUTING 2>/dev/null | grep -- '^-A PREROUTING ' | grep -- '-i tun0' | grep -- '--dport 53' | grep -- '-j DNAT' || true)
+}
 choose_port(){ for _ in $(seq 1 200); do p=$((RANDOM%30000+22000)); [[ "$(check_listener "$p")" == "false" ]] && echo "$p" && return 0; done; die "cannot allocate random port"; }
 ensure_meta(){ install -d -m 0755 "$METADATA_DIR"; }
 
@@ -203,6 +242,79 @@ normalize_bool(){
     false|0|no|n) printf 'false' ;;
     *) die "Boolean value expected but received '${1}'." ;;
   esac
+}
+
+normalize_csv(){
+  local raw="$1" item out=""
+  IFS=',' read -r -a items <<< "$raw"
+  for item in "${items[@]}"; do
+    item="$(printf '%s' "$item" | xargs || true)"
+    [[ -n "$item" ]] || continue
+    if [[ -n "$out" ]]; then
+      out+=","
+    fi
+    out+="$item"
+  done
+  printf '%s' "$out"
+}
+
+should_hydrate_from_metadata(){
+  case "$COMMAND" in
+    install) echo false ;;
+    *) echo true ;;
+  esac
+}
+
+hydrate_from_metadata(){
+  [[ "$(should_hydrate_from_metadata)" == "true" ]] || return 0
+  [[ -f "$METADATA_FILE" ]] || return 0
+
+  local value
+  if [[ "$ARG_PUBLIC_PORT_SET" != "true" ]]; then
+    value="$(jq -r '.public_port // empty' "$METADATA_FILE" 2>/dev/null || true)"
+    [[ "$value" =~ ^[0-9]+$ ]] && PUBLIC_PORT="$value"
+  fi
+  if [[ "$ARG_PANEL_PORT_SET" != "true" ]]; then
+    value="$(jq -r '.omnipanel_public_port // empty' "$METADATA_FILE" 2>/dev/null || true)"
+    [[ "$value" =~ ^[0-9]+$ ]] && PANEL_PORT="$value"
+  fi
+  if [[ "$ARG_BACKEND_PORT_SET" != "true" ]]; then
+    value="$(jq -r '.backend_port // empty' "$METADATA_FILE" 2>/dev/null || true)"
+    [[ "$value" =~ ^[0-9]+$ ]] && BACKEND_PORT="$value"
+  fi
+  if [[ "$ARG_VPS_IP_SET" != "true" ]]; then
+    value="$(jq -r '.vps_ip // empty' "$METADATA_FILE" 2>/dev/null || true)"
+    [[ -n "$value" && "$value" != "null" ]] && VPS_IP="$value"
+  fi
+  if [[ "$ARG_OPENVPN_NETWORK_SET" != "true" ]]; then
+    value="$(jq -r '.openvpn.network // empty' "$METADATA_FILE" 2>/dev/null || true)"
+    [[ -n "$value" && "$value" != "null" ]] && OPENVPN_NETWORK="$value"
+  fi
+  if [[ "$ARG_OPENVPN_CLIENT_DNS_SET" != "true" ]]; then
+    value="$(jq -r '.openvpn.client_dns // empty' "$METADATA_FILE" 2>/dev/null || true)"
+    [[ -n "$value" && "$value" != "null" ]] && OPENVPN_CLIENT_DNS="$value"
+  fi
+}
+
+hydrate_from_dns_profile(){
+  [[ "$(should_hydrate_from_metadata)" == "true" ]] || return 0
+  [[ -f "$DNS_PROFILE_FILE" ]] || return 0
+
+  local value
+  if [[ "$ARG_DNS_MODE_SET" != "true" ]]; then
+    value="$(jq -r '.mode // empty' "$DNS_PROFILE_FILE" 2>/dev/null || true)"
+    [[ -n "$value" && "$value" != "null" ]] && DNS_MODE="$value"
+  fi
+  if [[ "$ARG_DOH_ENDPOINTS_SET" != "true" ]]; then
+    value="$(jq -r '.dohEndpoints // empty' "$DNS_PROFILE_FILE" 2>/dev/null || true)"
+    [[ -n "$value" && "$value" != "null" ]] && DOH_ENDPOINTS="$value"
+  fi
+  if [[ "$ARG_DNS_UDP_ONLY_SET" != "true" ]]; then
+    value="$(jq -r '.dnsUdpOnly // empty' "$DNS_PROFILE_FILE" 2>/dev/null || true)"
+    if [[ -n "$value" && "$value" != "null" ]]; then
+      DNS_UDP_ONLY="$(normalize_bool "$value")"
+    fi
+  fi
 }
 
 load_omnipanel_common(){
@@ -348,11 +460,16 @@ if not raw:
 net = ipaddress.ip_network(raw, strict=False)
 if net.version != 4:
     raise SystemExit(2)
-print(f"{net.network_address} {net.netmask}")
+hosts = list(net.hosts())
+first_host = next(net.hosts(), None)
+if first_host is None:
+    raise SystemExit(3)
+print(f"{net.network_address} {net.netmask} {first_host}")
 PY
 )" || die "Invalid --openvpn-network value: ${OPENVPN_NETWORK}"
-  OPENVPN_NET_ADDR="${parsed%% *}"
-  OPENVPN_NETMASK="${parsed##* }"
+  OPENVPN_NET_ADDR="$(awk '{print $1}' <<<"$parsed")"
+  OPENVPN_NETMASK="$(awk '{print $2}' <<<"$parsed")"
+  OPENVPN_GATEWAY_IP="$(awk '{print $3}' <<<"$parsed")"
 }
 
 ensure_clients_seed_file(){
@@ -468,9 +585,20 @@ CHAIN="OMNIRELAY_OVPN"
 \$IPT -t nat -N "\$CHAIN" 2>/dev/null || true
 \$IPT -t nat -F "\$CHAIN"
 \$IPT -t nat -A "\$CHAIN" -d 127.0.0.0/8 -j RETURN
+\$IPT -t nat -A "\$CHAIN" -p tcp --dport 53 -j RETURN
+\$IPT -t nat -A "\$CHAIN" -p tcp --dport 853 -j RETURN
 \$IPT -t nat -A "\$CHAIN" -p tcp -j REDIRECT --to-ports "${OPENVPN_REDSOCKS_LOCAL_PORT}"
+\$IPT -t nat -C PREROUTING -i "\$DEV" -p udp --dport 53 -j REDIRECT --to-ports "${OPENVPN_DNS_BRIDGE_LISTEN_PORT}" 2>/dev/null || \$IPT -t nat -A PREROUTING -i "\$DEV" -p udp --dport 53 -j REDIRECT --to-ports "${OPENVPN_DNS_BRIDGE_LISTEN_PORT}"
+\$IPT -t nat -C PREROUTING -i "\$DEV" -p tcp --dport 53 -j REDIRECT --to-ports "${OPENVPN_DNS_BRIDGE_LISTEN_PORT}" 2>/dev/null || \$IPT -t nat -A PREROUTING -i "\$DEV" -p tcp --dport 53 -j REDIRECT --to-ports "${OPENVPN_DNS_BRIDGE_LISTEN_PORT}"
 \$IPT -t nat -C PREROUTING -i "\$DEV" -p tcp -j "\$CHAIN" 2>/dev/null || \$IPT -t nat -A PREROUTING -i "\$DEV" -p tcp -j "\$CHAIN"
+\$IPT -C FORWARD -i "\$DEV" -s "${OPENVPN_NETWORK}" -p tcp --dport 853 -j REJECT --reject-with tcp-reset 2>/dev/null || \$IPT -A FORWARD -i "\$DEV" -s "${OPENVPN_NETWORK}" -p tcp --dport 853 -j REJECT --reject-with tcp-reset
+\$IPT -C FORWARD -o "\$DEV" -d "${OPENVPN_NETWORK}" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \$IPT -A FORWARD -o "\$DEV" -d "${OPENVPN_NETWORK}" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 EOF
+  if [[ "$DNS_UDP_ONLY" == "true" ]]; then
+    cat >> "$OPENVPN_IPTABLES_UP" <<EOF
+\$IPT -C FORWARD -i "\$DEV" -s "${OPENVPN_NETWORK}" -p udp ! --dport 53 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || \$IPT -A FORWARD -i "\$DEV" -s "${OPENVPN_NETWORK}" -p udp ! --dport 53 -j REJECT --reject-with icmp-port-unreachable
+EOF
+  fi
   chmod 0755 "$OPENVPN_IPTABLES_UP"
   cat > "$OPENVPN_IPTABLES_DOWN" <<EOF
 #!/usr/bin/env bash
@@ -479,7 +607,12 @@ IPT="\$(command -v iptables || true)"
 [[ -n "\$IPT" ]] || exit 0
 DEV="\${dev:-tun0}"
 CHAIN="OMNIRELAY_OVPN"
+\$IPT -t nat -D PREROUTING -i "\$DEV" -p udp --dport 53 -j REDIRECT --to-ports "${OPENVPN_DNS_BRIDGE_LISTEN_PORT}" 2>/dev/null || true
+\$IPT -t nat -D PREROUTING -i "\$DEV" -p tcp --dport 53 -j REDIRECT --to-ports "${OPENVPN_DNS_BRIDGE_LISTEN_PORT}" 2>/dev/null || true
 \$IPT -t nat -D PREROUTING -i "\$DEV" -p tcp -j "\$CHAIN" 2>/dev/null || true
+\$IPT -D FORWARD -i "\$DEV" -s "${OPENVPN_NETWORK}" -p tcp --dport 853 -j REJECT --reject-with tcp-reset 2>/dev/null || true
+\$IPT -D FORWARD -i "\$DEV" -s "${OPENVPN_NETWORK}" -p udp ! --dport 53 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || true
+\$IPT -D FORWARD -o "\$DEV" -d "${OPENVPN_NETWORK}" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
 \$IPT -t nat -F "\$CHAIN" 2>/dev/null || true
 EOF
   chmod 0755 "$OPENVPN_IPTABLES_DOWN"
@@ -643,13 +776,297 @@ EOF
 }
 
 build_openvpn_dns_push_lines(){
-  local value
-  IFS=',' read -r -a dns_parts <<< "$OPENVPN_CLIENT_DNS"
-  for value in "${dns_parts[@]}"; do
-    value="$(echo "$value" | xargs || true)"
-    [[ -n "$value" ]] || continue
-    printf 'push "dhcp-option DNS %s"\n' "$value"
-  done
+  [[ -n "$OPENVPN_GATEWAY_IP" ]] || return 0
+  printf 'push "dhcp-option DNS %s"\n' "$OPENVPN_GATEWAY_IP"
+  printf '# OmniRelay DNS upstreams: %s\n' "$OPENVPN_CLIENT_DNS"
+}
+
+build_json_array_from_csv(){
+  local csv="$1"
+  python3 - "$csv" <<'PY'
+import json
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+parts = [item.strip() for item in raw.split(",") if item.strip()]
+print(json.dumps(parts))
+PY
+}
+
+write_dns_bridge_script(){
+  cat > "$OPENVPN_DNS_BRIDGE_SCRIPT" <<'PY'
+#!/usr/bin/env python3
+import base64
+import json
+import socket
+import socketserver
+import sys
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def _load_config(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("dns bridge config must be an object")
+    return payload
+
+
+def _parse_upstream(entry):
+    value = (entry or "").strip()
+    if not value:
+        raise ValueError("empty upstream entry")
+    if value.count(":") == 1 and value.rsplit(":", 1)[1].isdigit():
+        host, port_raw = value.rsplit(":", 1)
+        return host.strip(), int(port_raw)
+    return value, 53
+
+
+def _query_end_offset(query):
+    if len(query) < 12:
+        return None
+    qdcount = int.from_bytes(query[4:6], "big")
+    if qdcount < 1:
+        return None
+    cursor = 12
+    for _ in range(qdcount):
+        while True:
+            if cursor >= len(query):
+                return None
+            length = query[cursor]
+            cursor += 1
+            if length == 0:
+                break
+            if cursor + length > len(query):
+                return None
+            cursor += length
+        if cursor + 4 > len(query):
+            return None
+        cursor += 4
+    return cursor
+
+
+def _servfail(query):
+    if len(query) < 12:
+        return b""
+    offset = _query_end_offset(query)
+    if offset is None:
+        offset = len(query)
+    qdcount = query[4:6]
+    rd = query[2] & 0x01
+    flags = bytes([0x80 | rd, 0x82])
+    return query[0:2] + flags + qdcount + b"\x00\x00\x00\x00\x00\x00" + query[12:offset]
+
+
+def _with_query_id(query, response):
+    if len(query) < 2 or len(response) < 2:
+        return response
+    return query[0:2] + response[2:]
+
+
+class DnsBridge:
+    def __init__(self, config: dict):
+        self.listen_host = str(config.get("listen_host", "127.0.0.1")).strip() or "127.0.0.1"
+        self.listen_port = int(config.get("listen_port", 1053))
+        self.mode = str(config.get("mode", "doh")).strip().lower()
+        self.proxy_url = str(config.get("proxy_url", "")).strip()
+        self.allow_direct_doh = bool(config.get("allow_direct_doh", False))
+        self.fail_closed = bool(config.get("fail_closed", True))
+        self.doh_endpoints = [str(item).strip() for item in config.get("doh_endpoints", []) if str(item).strip()]
+        self.upstream_dns = [str(item).strip() for item in config.get("upstream_dns", []) if str(item).strip()]
+        timeout = config.get("timeout_seconds", 8)
+        self.timeout_seconds = float(timeout) if isinstance(timeout, (int, float)) else 8.0
+        self._opener = self._build_opener()
+
+    def _build_opener(self):
+        handlers = []
+        if self.proxy_url:
+            handlers.append(urllib.request.ProxyHandler({"https": self.proxy_url, "http": self.proxy_url}))
+        else:
+            handlers.append(urllib.request.ProxyHandler({}))
+        return urllib.request.build_opener(*handlers)
+
+    def _doh_query(self, endpoint, query):
+        if not self.proxy_url and not self.allow_direct_doh:
+            return None
+        encoded = base64.urlsafe_b64encode(query).decode("ascii").rstrip("=")
+        separator = "&" if "?" in endpoint else "?"
+        url = f"{endpoint}{separator}dns={encoded}"
+        request = urllib.request.Request(
+            url=url,
+            headers={"Accept": "application/dns-message", "User-Agent": "omnirelay-openvpn-dns-bridge/1"},
+            method="GET",
+        )
+        try:
+            with self._opener.open(request, timeout=self.timeout_seconds) as response:
+                if response.status != 200:
+                    return None
+                payload = response.read()
+                if len(payload) < 12:
+                    return None
+                return _with_query_id(query, payload)
+        except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, OSError):
+            return None
+
+    def _udp_query(self, query):
+        for upstream in self.upstream_dns:
+            try:
+                host, port = _parse_upstream(upstream)
+            except ValueError:
+                continue
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.settimeout(self.timeout_seconds)
+                sock.sendto(query, (host, port))
+                payload, _ = sock.recvfrom(4096)
+                if len(payload) >= 12:
+                    return _with_query_id(query, payload)
+            except OSError:
+                continue
+            finally:
+                sock.close()
+        return None
+
+    def resolve(self, query):
+        use_doh = self.mode in {"doh", "hybrid"}
+        use_udp = self.mode in {"udp", "hybrid"}
+
+        if use_doh:
+            for endpoint in self.doh_endpoints:
+                payload = self._doh_query(endpoint, query)
+                if payload is not None:
+                    return payload
+            if self.fail_closed:
+                return _servfail(query)
+
+        if use_udp:
+            payload = self._udp_query(query)
+            if payload is not None:
+                return payload
+
+        return _servfail(query)
+
+
+class UdpDnsHandler(socketserver.BaseRequestHandler):
+    bridge: DnsBridge
+
+    def handle(self):
+        payload, sock = self.request
+        response = self.bridge.resolve(payload)
+        if response:
+            sock.sendto(response, self.client_address)
+
+
+class TcpDnsHandler(socketserver.BaseRequestHandler):
+    bridge: DnsBridge
+
+    def handle(self):
+        self.request.settimeout(self.bridge.timeout_seconds)
+        while True:
+            try:
+                length_raw = self.request.recv(2)
+            except OSError:
+                break
+            if len(length_raw) != 2:
+                break
+            length = int.from_bytes(length_raw, "big")
+            if length <= 0 or length > 4096:
+                break
+            payload = b""
+            while len(payload) < length:
+                try:
+                    chunk = self.request.recv(length - len(payload))
+                except OSError:
+                    payload = b""
+                    break
+                if not chunk:
+                    payload = b""
+                    break
+                payload += chunk
+            if len(payload) != length:
+                break
+            response = self.bridge.resolve(payload)
+            if not response:
+                break
+            framed = len(response).to_bytes(2, "big") + response
+            try:
+                self.request.sendall(framed)
+            except OSError:
+                break
+
+
+def main():
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "/etc/omnirelay/gateway/openvpn/dns-bridge.json"
+    config = _load_config(config_path)
+    bridge = DnsBridge(config)
+
+    UdpDnsHandler.bridge = bridge
+    TcpDnsHandler.bridge = bridge
+
+    udp_server = socketserver.ThreadingUDPServer((bridge.listen_host, bridge.listen_port), UdpDnsHandler)
+    tcp_server = socketserver.ThreadingTCPServer((bridge.listen_host, bridge.listen_port), TcpDnsHandler)
+    udp_server.daemon_threads = True
+    tcp_server.daemon_threads = True
+
+    udp_thread = threading.Thread(target=udp_server.serve_forever, daemon=True)
+    tcp_thread = threading.Thread(target=tcp_server.serve_forever, daemon=True)
+    udp_thread.start()
+    tcp_thread.start()
+    udp_thread.join()
+    tcp_thread.join()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PY
+  chmod 0750 "$OPENVPN_DNS_BRIDGE_SCRIPT"
+}
+
+write_dns_bridge_config(){
+  local dns_mode normalized_client_dns normalized_doh proxy_url fail_closed
+  normalized_client_dns="$(normalize_csv "$OPENVPN_CLIENT_DNS")"
+  normalized_doh="$(normalize_csv "$DOH_ENDPOINTS")"
+  dns_mode="$DNS_MODE"
+  proxy_url=""
+  fail_closed=true
+
+  if [[ "$dns_mode" == "doh" || "$dns_mode" == "hybrid" ]]; then
+    if [[ "$OPENVPN_UPSTREAM_TYPE" == "http-connect" ]]; then
+      proxy_url="http://127.0.0.1:${BACKEND_PORT}"
+    fi
+  fi
+
+  jq -n \
+    --arg host "$OPENVPN_DNS_BRIDGE_LISTEN_HOST" \
+    --argjson port "$OPENVPN_DNS_BRIDGE_LISTEN_PORT" \
+    --arg mode "$dns_mode" \
+    --arg proxy "$proxy_url" \
+    --argjson allowDirectDoh false \
+    --argjson failClosed "$fail_closed" \
+    --argjson timeoutSeconds 8 \
+    --argjson dohEndpoints "$(build_json_array_from_csv "$normalized_doh")" \
+    --argjson upstreamDns "$(build_json_array_from_csv "$normalized_client_dns")" \
+    '{
+      listen_host:$host,
+      listen_port:$port,
+      mode:$mode,
+      proxy_url:$proxy,
+      allow_direct_doh:$allowDirectDoh,
+      fail_closed:$failClosed,
+      timeout_seconds:$timeoutSeconds,
+      doh_endpoints:$dohEndpoints,
+      upstream_dns:$upstreamDns
+    }' > "$OPENVPN_DNS_BRIDGE_CONFIG"
+  chmod 0640 "$OPENVPN_DNS_BRIDGE_CONFIG"
+}
+
+write_dns_bridge_assets(){
+  write_dns_bridge_script
+  write_dns_bridge_config
 }
 
 write_openvpn_server_config(){
@@ -737,11 +1154,26 @@ TimeoutStopSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+  cat > "/etc/systemd/system/${OPENVPN_DNS_BRIDGE_SERVICE}.service" <<EOF
+[Unit]
+Description=OmniRelay OpenVPN DNS bridge
+After=network-online.target ${OPENVPN_REDSOCKS_SERVICE}.service
+Wants=network-online.target ${OPENVPN_REDSOCKS_SERVICE}.service
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 ${OPENVPN_DNS_BRIDGE_SCRIPT} ${OPENVPN_DNS_BRIDGE_CONFIG}
+Restart=always
+RestartSec=2
+KillMode=control-group
+TimeoutStopSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
   cat > "/etc/systemd/system/${OPENVPN_SERVICE}.service" <<EOF
 [Unit]
 Description=OmniRelay OpenVPN (TCP)
-After=network-online.target ${OPENVPN_REDSOCKS_SERVICE}.service
-Wants=network-online.target ${OPENVPN_REDSOCKS_SERVICE}.service
+After=network-online.target ${OPENVPN_REDSOCKS_SERVICE}.service ${OPENVPN_DNS_BRIDGE_SERVICE}.service
+Wants=network-online.target ${OPENVPN_REDSOCKS_SERVICE}.service ${OPENVPN_DNS_BRIDGE_SERVICE}.service
 [Service]
 Type=simple
 ExecStart=/usr/sbin/openvpn --config ${OPENVPN_SERVER_CONFIG}
@@ -776,6 +1208,7 @@ EOF
   ensure_redsocks_bind_available
   systemctl daemon-reload
   systemctl enable --now "$OPENVPN_REDSOCKS_SERVICE"
+  systemctl enable --now "$OPENVPN_DNS_BRIDGE_SERVICE"
   systemctl enable --now "$OPENVPN_SERVICE"
   systemctl enable --now "$OPENVPN_ACCOUNTING_TIMER"
   systemctl start "$OPENVPN_ACCOUNTING_SERVICE" || true
@@ -957,27 +1390,53 @@ configure_host_firewall(){
 
 write_metadata(){
   progress 88 "Persisting managed gateway metadata"
+  ensure_meta
+  local created_at existing_intp resolved_intp effective_intp
+  created_at="$(jq -r '.created_at_utc // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  [[ -n "$created_at" && "$created_at" != "null" ]] || created_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  existing_intp="$(jq -r '.omnipanel_internal_port // 0' "$METADATA_FILE" 2>/dev/null || echo 0)"
+  resolved_intp="$(resolve_omnipanel_internal_port || true)"
+  effective_intp="$OMNIPANEL_INTERNAL_PORT"
+  if [[ ! "$effective_intp" =~ ^[0-9]+$ ]] || (( effective_intp <= 0 )); then
+    effective_intp="$existing_intp"
+  fi
+  if [[ ! "$effective_intp" =~ ^[0-9]+$ ]] || (( effective_intp <= 0 )); then
+    effective_intp="$resolved_intp"
+  fi
+  if [[ ! "$effective_intp" =~ ^[0-9]+$ ]] || (( effective_intp <= 0 )); then
+    effective_intp=0
+  fi
+
   jq -n \
     --arg proto "openvpn_tcp_relay" \
     --arg vps "$VPS_IP" \
     --arg port "$PUBLIC_PORT" \
     --arg panel "$PANEL_PORT" \
+    --arg backend "$BACKEND_PORT" \
     --arg user "$PANEL_USER" \
     --arg network "$OPENVPN_NETWORK" \
-    --arg dns "$OPENVPN_CLIENT_DNS" \
+    --arg dns "$(normalize_csv "$OPENVPN_CLIENT_DNS")" \
+    --arg dnsMode "$DNS_MODE" \
+    --arg dohEndpoints "$(normalize_csv "$DOH_ENDPOINTS")" \
+    --argjson dnsUdpOnly "$( [[ "$DNS_UDP_ONLY" == "true" ]] && echo true || echo false )" \
     --arg clientsFile "$OPENVPN_CLIENTS_FILE" \
     --arg exportsDir "$OPENVPN_EXPORT_DIR" \
     --arg accountingDb "$OPENVPN_ACCOUNTING_DB" \
-    --arg intp "$OMNIPANEL_INTERNAL_PORT" \
+    --arg dnsBridgeConfig "$OPENVPN_DNS_BRIDGE_CONFIG" \
+    --arg intp "$effective_intp" \
+    --arg createdAt "$created_at" \
     '{
       active_protocol:$proto,
       vps_ip:$vps,
       public_port:($port|tonumber),
       omnipanel_public_port:($panel|tonumber),
+      backend_port:($backend|tonumber),
       omnipanel_internal_port:($intp|tonumber),
       omnipanel_username:$user,
-      openvpn:{network:$network,client_dns:$dns,clients_file:$clientsFile,exports_dir:$exportsDir,accounting_db:$accountingDb},
-      created_at_utc:(now|todate)
+      dns:{mode:$dnsMode,doh_endpoints:$dohEndpoints,dns_udp_only:$dnsUdpOnly},
+      openvpn:{network:$network,client_dns:$dns,clients_file:$clientsFile,exports_dir:$exportsDir,accounting_db:$accountingDb,dns_bridge_config:$dnsBridgeConfig},
+      created_at_utc:$createdAt,
+      updated_at_utc:(now|todate)
     }' > "$METADATA_FILE"
   chmod 0600 "$METADATA_FILE"
 }
@@ -1011,13 +1470,91 @@ wait_openvpn_accounting_heartbeat(){
 }
 
 dns_apply(){
+  require_root
   progress 94 "Applying DNS-through-tunnel profile"
-  jq -n --arg m "$DNS_MODE" --arg d "$DOH_ENDPOINTS" --argjson u "$( [[ "$DNS_UDP_ONLY" == "true" ]] && echo true || echo false )" '{mode:$m,dohEndpoints:$d,dnsUdpOnly:$u,updatedAtUtc:(now|todate)}' > "$DNS_PROFILE_FILE"
+  clear_legacy_dns_dnat_rules
+  jq -n \
+    --arg m "$DNS_MODE" \
+    --arg d "$(normalize_csv "$DOH_ENDPOINTS")" \
+    --argjson u "$( [[ "$DNS_UDP_ONLY" == "true" ]] && echo true || echo false )" \
+    '{mode:$m,dohEndpoints:$d,dnsUdpOnly:$u,updatedAtUtc:(now|todate)}' > "$DNS_PROFILE_FILE"
+  write_redsocks_config
+  write_dns_bridge_assets
+  systemctl daemon-reload
+  systemctl restart "$OPENVPN_DNS_BRIDGE_SERVICE" >/dev/null 2>&1 || true
+  systemctl restart "$OPENVPN_SERVICE" >/dev/null 2>&1 || true
+  write_metadata
   progress 100 "DNS profile applied"
 }
 
+check_dns_bridge_probe(){
+  python3 - "$OPENVPN_DNS_BRIDGE_LISTEN_PORT" <<'PY'
+import random
+import socket
+import struct
+import sys
+
+host = "127.0.0.1"
+port = int(sys.argv[1])
+txid = random.randint(0, 65535)
+header = struct.pack("!HHHHHH", txid, 0x0100, 1, 0, 0, 0)
+qname = b"one.one.one.one"
+question = b"".join(bytes([len(part)]) + part.encode("ascii") for part in qname.decode("ascii").split(".")) + b"\x00" + struct.pack("!HH", 1, 1)
+payload = header + question
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.settimeout(4.0)
+try:
+    sock.sendto(payload, (host, port))
+    response, _ = sock.recvfrom(4096)
+except Exception:
+    sys.exit(1)
+finally:
+    sock.close()
+
+if len(response) < 12:
+    sys.exit(1)
+if response[:2] != struct.pack("!H", txid):
+    sys.exit(1)
+rcode = response[3] & 0x0F
+if rcode != 0:
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
+check_openvpn_client_dns_applied(){
+  local expected actual
+  expected="$(normalize_csv "$OPENVPN_CLIENT_DNS")"
+  if [[ ! -f "$OPENVPN_DNS_BRIDGE_CONFIG" ]]; then
+    echo false
+    return 0
+  fi
+  actual="$(jq -r '.upstream_dns // [] | join(",")' "$OPENVPN_DNS_BRIDGE_CONFIG" 2>/dev/null || true)"
+  [[ "$actual" == "$expected" ]] && echo true || echo false
+}
+
+check_config_drift(){
+  local meta_port cfg_port drift
+  drift=false
+  [[ -f "$METADATA_FILE" ]] || { echo false; return 0; }
+  [[ -f "$OPENVPN_SERVER_CONFIG" ]] || { echo true; return 0; }
+
+  meta_port="$(jq -r '.public_port // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  cfg_port="$(awk '/^[[:space:]]*port[[:space:]]+[0-9]+/{print $2; exit}' "$OPENVPN_SERVER_CONFIG" 2>/dev/null || true)"
+  if [[ "$meta_port" =~ ^[0-9]+$ && "$cfg_port" =~ ^[0-9]+$ ]] && [[ "$meta_port" != "$cfg_port" ]]; then
+    drift=true
+  fi
+  if [[ "$(check_openvpn_client_dns_applied)" != "true" ]]; then
+    drift=true
+  fi
+  echo "$drift"
+}
+
 dns_status_json(){
-  local cfg rule mode doh udpOnly udp53 path
+  local cfg rule mode doh udpOnly udp53_udp udp53_tcp udp_only_rule dot_block_rule path
+  local dns_bridge_state doh_reachable openvpn_dns_applied enforcement_mode egress_path drift
+  local bridge_proxy
   if [[ -f "$DNS_PROFILE_FILE" ]]; then
     cfg=true
     rule=true
@@ -1031,23 +1568,65 @@ dns_status_json(){
     doh=""
     udpOnly=false
   fi
-  udp53="$(check_listener 53)"
+  udp53_udp="$(check_dns_redirect_rule udp)"
+  udp53_tcp="$(check_dns_redirect_rule tcp)"
+  dot_block_rule="$(check_dot_block_rule)"
+  [[ "$udp53_udp" == "true" && "$udp53_tcp" == "true" ]] || rule=false
+  [[ "$dot_block_rule" == "true" ]] || rule=false
+  udp_only_rule="$(check_udp_only_rule)"
+  dns_bridge_state="$(systemd_state "$OPENVPN_DNS_BRIDGE_SERVICE")"
+  openvpn_dns_applied="$(check_openvpn_client_dns_applied)"
+  drift="$(check_config_drift)"
+  doh_reachable=false
+  if [[ "$dns_bridge_state" == "active" ]] && check_dns_bridge_probe; then
+    doh_reachable=true
+  fi
+  enforcement_mode="legacy"
+  egress_path="unknown"
+  bridge_proxy=""
+  if [[ -f "$OPENVPN_DNS_BRIDGE_CONFIG" ]]; then
+    enforcement_mode="dns_bridge_${mode}"
+    bridge_proxy="$(jq -r '.proxy_url // empty' "$OPENVPN_DNS_BRIDGE_CONFIG" 2>/dev/null || true)"
+    if [[ "$mode" == "udp" ]]; then
+      egress_path="direct_udp"
+    elif [[ -n "$bridge_proxy" ]]; then
+      egress_path="ic2_tunnel_http_connect"
+    else
+      egress_path="dns_proxy_unavailable"
+    fi
+  fi
   path=false
-  [[ "$cfg" == true && "$rule" == true ]] && path=true
-  printf '{"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' "$cfg" "$rule" "$cfg" "$udp53" "$path" "$mode" "$udpOnly" "$(printf '%s' "$doh" | sed 's/"/\\"/g')"
+  if [[ "$cfg" == true && "$rule" == true && "$udp53_udp" == "true" && "$udp53_tcp" == "true" && "$dns_bridge_state" == "active" && "$openvpn_dns_applied" == "true" && "$udp_only_rule" == "true" ]]; then
+    case "$mode" in
+      doh|hybrid) [[ "$doh_reachable" == "true" ]] && path=true ;;
+      udp) path=true ;;
+      *) path=false ;;
+    esac
+  fi
+  printf '{"dnsConfigPresent":%s,"dnsRuleActive":%s,"dot_block_active":%s,"dotBlockActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsBridgeState":"%s","openVpnClientDnsApplied":%s,"dnsEnforcementMode":"%s","dnsEgressPath":"%s","configDriftDetected":%s}\n' \
+    "$cfg" "$rule" "$dot_block_rule" "$dot_block_rule" "$doh_reachable" "$udp53_udp" "$path" "$mode" "$udpOnly" "$(printf '%s' "$doh" | sed 's/"/\\"/g')" \
+    "$dns_bridge_state" "$openvpn_dns_applied" "$enforcement_mode" "$egress_path" "$drift"
 }
 
 dns_status(){ dns_status_json; }
 dns_repair(){ progress 94 "Repairing DNS profile"; dns_apply; }
 
+build_profile_config_hash(){
+  local remote_host="$1" cert_path="$2" key_path="$3" username="$4" password="$5"
+  local cert_hash key_hash
+  cert_hash="$(sha256sum "$cert_path" 2>/dev/null | awk '{print $1}' || true)"
+  key_hash="$(sha256sum "$key_path" 2>/dev/null | awk '{print $1}' || true)"
+  printf '%s' "${remote_host}|${PUBLIC_PORT}|${cert_hash}|${key_hash}|${username}|${password}" | sha256sum | awk '{print $1}'
+}
+
 write_client_profile(){
   local id="$1" username="$2" password="$3" cert_path="$4" key_path="$5"
-  local remote_host profile
-  remote_host="$(jq -r '.vps_ip // empty' "$METADATA_FILE" 2>/dev/null || true)"
-  if [[ -z "$remote_host" ]]; then
-    remote_host="${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
-  fi
+  local remote_host profile cfg_hash
+  remote_host="${VPS_IP:-}"
+  [[ -n "$remote_host" ]] || remote_host="$(jq -r '.vps_ip // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  [[ -n "$remote_host" ]] || remote_host="$(hostname -I 2>/dev/null | awk '{print $1}')"
   [[ -n "$remote_host" ]] || remote_host="127.0.0.1"
+  cfg_hash="$(build_profile_config_hash "$remote_host" "$cert_path" "$key_path" "$username" "$password")"
   profile="${OPENVPN_EXPORT_DIR}/${id}.ovpn"
   {
     printf 'client\n'
@@ -1064,6 +1643,7 @@ write_client_profile(){
     printf 'cipher AES-256-GCM\n'
     printf 'auth SHA256\n'
     printf 'verb 3\n'
+    printf '# OmniRelay Profile Config Hash: %s\n' "$cfg_hash"
     printf '# OmniRelay Username: %s\n' "$username"
     printf '# OmniRelay Password: %s\n' "$password"
     printf '<ca>\n'
@@ -1082,27 +1662,57 @@ write_client_profile(){
   chmod 0640 "$profile"
 }
 
+ensure_client_profile(){
+  local id="$1" username="$2" password="$3" cert_path="$4" key_path="$5"
+  local profile remote_host expected_hash current_hash remote_line expected_remote
+  profile="${OPENVPN_EXPORT_DIR}/${id}.ovpn"
+  remote_host="${VPS_IP:-}"
+  [[ -n "$remote_host" ]] || remote_host="$(jq -r '.vps_ip // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  [[ -n "$remote_host" ]] || remote_host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [[ -n "$remote_host" ]] || remote_host="127.0.0.1"
+  expected_hash="$(build_profile_config_hash "$remote_host" "$cert_path" "$key_path" "$username" "$password")"
+  expected_remote="remote ${remote_host} ${PUBLIC_PORT}"
+
+  if [[ -s "$profile" ]]; then
+    current_hash="$(sed -n 's/^# OmniRelay Profile Config Hash: //p' "$profile" | head -n1 || true)"
+    remote_line="$(sed -n 's/^remote /remote /p' "$profile" | head -n1 || true)"
+    if [[ "$current_hash" == "$expected_hash" && "$remote_line" == "$expected_remote" ]]; then
+      return 0
+    fi
+    write_client_profile "$id" "$username" "$password" "$cert_path" "$key_path"
+    return 0
+  fi
+  write_client_profile "$id" "$username" "$password" "$cert_path" "$key_path"
+}
+
 sync_clients_cmd(){
   require_root
-  local old_redsocks_hash old_server_hash new_redsocks_hash new_server_hash
-  local redsocks_changed openvpn_config_changed
+  local old_redsocks_hash old_server_hash old_dns_bridge_hash
+  local new_redsocks_hash new_server_hash new_dns_bridge_hash
+  local redsocks_changed openvpn_config_changed dns_bridge_changed
   ensure_clients_seed_file
   old_redsocks_hash="$(sha256sum "$OPENVPN_REDSOCKS_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
   old_server_hash="$(sha256sum "$OPENVPN_SERVER_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
+  old_dns_bridge_hash="$(sha256sum "$OPENVPN_DNS_BRIDGE_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
   select_openvpn_socks_upstream
   parse_openvpn_network
+  clear_legacy_dns_dnat_rules
   init_openvpn_accounting_db
   setup_openvpn_pki
   write_openvpn_auth_scripts
   write_openvpn_accounting_script
   write_redsocks_config
+  write_dns_bridge_assets
   write_openvpn_server_config
   new_redsocks_hash="$(sha256sum "$OPENVPN_REDSOCKS_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
   new_server_hash="$(sha256sum "$OPENVPN_SERVER_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
+  new_dns_bridge_hash="$(sha256sum "$OPENVPN_DNS_BRIDGE_CONFIG" 2>/dev/null | awk '{print $1}' || true)"
   redsocks_changed=false
   openvpn_config_changed=false
+  dns_bridge_changed=false
   [[ "$old_redsocks_hash" != "$new_redsocks_hash" ]] && redsocks_changed=true
   [[ "$old_server_hash" != "$new_server_hash" ]] && openvpn_config_changed=true
+  [[ "$old_dns_bridge_hash" != "$new_dns_bridge_hash" ]] && dns_bridge_changed=true
   local easyrsa auth_tmp keep_tmp row id email enable username password cn cert_path key_path hash
   local total_gb_raw total_gb_bytes expiry_raw expiry_unix_ms now_sec sql_tmp enable_int
   easyrsa="${OPENVPN_EASYRSA_DIR}/easyrsa"
@@ -1179,7 +1789,7 @@ PY
       "$(printf '%s' "$id" | sed "s/'/''/g")" "$now_sec" >> "$sql_tmp"
     printf "UPDATE usage_totals SET updated_at=%s WHERE client_id='%s';\n" \
       "$now_sec" "$(printf '%s' "$id" | sed "s/'/''/g")" >> "$sql_tmp"
-    write_client_profile "$id" "$username" "$password" "$cert_path" "$key_path"
+    ensure_client_profile "$id" "$username" "$password" "$cert_path" "$key_path"
   done < <(jq -c '.[]' "$OPENVPN_CLIENTS_FILE" 2>/dev/null || true)
   cat >> "$sql_tmp" <<'SQL'
 DELETE FROM clients WHERE client_id NOT IN (SELECT client_id FROM sync_keep);
@@ -1214,6 +1824,11 @@ SQL
   elif ! systemctl is-active --quiet "$OPENVPN_REDSOCKS_SERVICE"; then
     systemctl start "$OPENVPN_REDSOCKS_SERVICE"
   fi
+  if [[ "$dns_bridge_changed" == "true" ]]; then
+    systemctl restart "$OPENVPN_DNS_BRIDGE_SERVICE"
+  elif ! systemctl is-active --quiet "$OPENVPN_DNS_BRIDGE_SERVICE"; then
+    systemctl start "$OPENVPN_DNS_BRIDGE_SERVICE"
+  fi
   if [[ "$openvpn_config_changed" == "true" ]]; then
     if ! systemctl restart "$OPENVPN_SERVICE"; then
       log "---- openvpn systemd status ----"
@@ -1235,22 +1850,27 @@ SQL
   systemctl start "$OPENVPN_ACCOUNTING_SERVICE" >/dev/null 2>&1 || true
   chown root:omnigateway "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
   chmod 0640 "$OPENVPN_ACCOUNTING_HEARTBEAT" 2>/dev/null || true
+  write_metadata
   echo "ok"
 }
 
 status_cmd(){
-  local sshState openvpnState redsocksState panelState nginxState fail2 backendListener publicListener panelListener internalListener dns iport
+  local sshState openvpnState redsocksState dnsBridgeState panelState nginxState fail2 backendListener publicListener panelListener internalListener dns iport
   local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch createdAtUtc createdEpoch installGrace
   local socksUpstreamPort socksUpstreamType
   sshState="$(systemd_state_any ssh sshd)"
   openvpnState="$(systemd_state "$OPENVPN_SERVICE")"
   redsocksState="$(systemd_state "$OPENVPN_REDSOCKS_SERVICE")"
+  dnsBridgeState="$(systemd_state "$OPENVPN_DNS_BRIDGE_SERVICE")"
   accountingTimerState="$(systemd_state "$OPENVPN_ACCOUNTING_TIMER")"
   accountingServiceState="$(systemd_state "$OPENVPN_ACCOUNTING_SERVICE")"
   panelState="$(systemd_state "$OMNIPANEL_SERVICE")"
   nginxState="$(systemd_state nginx)"
   fail2="disabled"
   iport="$(jq -r '.omnipanel_internal_port // 0' "$METADATA_FILE" 2>/dev/null || echo 0)"
+  if [[ ! "$iport" =~ ^[0-9]+$ ]] || (( iport <= 0 )); then
+    iport="$(resolve_omnipanel_internal_port || echo 0)"
+  fi
   backendListener="$(check_listener "$BACKEND_PORT")"
   publicListener="$(check_listener "$PUBLIC_PORT")"
   panelListener="$(check_listener "$PANEL_PORT")"
@@ -1289,15 +1909,17 @@ status_cmd(){
     accountingHealthy=true
   fi
 
-  printf '{"activeProtocol":"openvpn_tcp_relay","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"socksUpstreamPort":%s,"socksUpstreamType":"%s","publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s","openVpnAccountingTimerState":"%s","openVpnAccountingServiceState":"%s","openVpnAccountingDbReady":%s,"openVpnAccountingHealthy":%s}\n' \
+  printf '{"activeProtocol":"openvpn_tcp_relay","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"socksUpstreamPort":%s,"socksUpstreamType":"%s","publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dot_block_active":%s,"dotBlockActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsBridgeState":"%s","openVpnClientDnsApplied":%s,"dnsEnforcementMode":"%s","dnsEgressPath":"%s","configDriftDetected":%s,"redsocksState":"%s","openVpnAccountingTimerState":"%s","openVpnAccountingServiceState":"%s","openVpnAccountingDbReady":%s,"openVpnAccountingHealthy":%s}\n' \
     "$sshState" "$openvpnState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$socksUpstreamPort" "$socksUpstreamType" "$PUBLIC_PORT" "$PANEL_PORT" "$iport" \
     "$backendListener" "$publicListener" "$panelListener" "$internalListener" \
-    "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" \
+    "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dot_block_active // false' <<<"$dns")" "$(jq -r '.dotBlockActive // false' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" \
+    "$dnsBridgeState" "$(jq -r '.openVpnClientDnsApplied' <<<"$dns")" "$(jq -r '.dnsEnforcementMode' <<<"$dns")" "$(jq -r '.dnsEgressPath' <<<"$dns")" "$(jq -r '.configDriftDetected' <<<"$dns")" \
     "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy"
 }
 
 health_cmd(){
   local status healthy dnsLastError redsocksState
+  set_dns_error(){ [[ -z "$dnsLastError" ]] && dnsLastError="$1"; }
   status="$(status_cmd)"
   healthy=true
   [[ "$(jq -r '.sshState' <<<"$status")" == "active" ]] || healthy=false
@@ -1305,26 +1927,28 @@ health_cmd(){
   [[ "$(jq -r '.omniPanelState' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.nginxState' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.backendListener' <<<"$status")" == "true" ]] || healthy=false
-  [[ "$(jq -r '.publicListener' <<<"$status")" == "true" ]] || healthy=false
-  [[ "$(jq -r '.panelListener' <<<"$status")" == "true" ]] || healthy=false
   [[ "$(jq -r '.omniPanelInternalListener' <<<"$status")" == "true" ]] || healthy=false
   [[ "$(jq -r '.dnsPathHealthy' <<<"$status")" == "true" ]] || healthy=false
   redsocksState="$(jq -r '.redsocksState // "inactive"' <<<"$status")"
   [[ "$redsocksState" == "active" ]] || healthy=false
+  [[ "$(jq -r '.dnsBridgeState // "inactive"' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.openVpnAccountingHealthy // false' <<<"$status")" == "true" ]] || healthy=false
 
   dnsLastError=""
-  [[ "$(jq -r '.dnsConfigPresent' <<<"$status")" == "true" ]] || dnsLastError="dnsConfigMissing"
-  [[ "$(jq -r '.dnsRuleActive' <<<"$status")" == "true" ]] || dnsLastError="dnsRuleInactive"
+  [[ "$(jq -r '.dnsConfigPresent' <<<"$status")" == "true" ]] || set_dns_error "dns_config_missing"
+  [[ "$(jq -r '.dnsRuleActive' <<<"$status")" == "true" ]] || set_dns_error "dns_rule_missing"
+  [[ "$(jq -r '.dnsBridgeState // "inactive"' <<<"$status")" == "active" ]] || set_dns_error "dns_bridge_down"
+  [[ "$(jq -r '.configDriftDetected // false' <<<"$status")" == "false" ]] || set_dns_error "config_drift_detected"
+  [[ "$(jq -r '.openVpnClientDnsApplied // false' <<<"$status")" == "true" ]] || set_dns_error "dns_rule_missing"
   if [[ "$(jq -r '.dnsMode' <<<"$status")" == "hybrid" ]]; then
-    [[ "$(jq -r '.dohReachableViaTunnel' <<<"$status")" == "true" ]] || dnsLastError="dohUnreachableViaTunnel"
-    [[ "$(jq -r '.udp53PathReady' <<<"$status")" == "true" ]] || dnsLastError="udp53PathNotReady"
+    [[ "$(jq -r '.dohReachableViaTunnel' <<<"$status")" == "true" ]] || set_dns_error "dns_upstream_unreachable"
+    [[ "$(jq -r '.udp53PathReady' <<<"$status")" == "true" ]] || set_dns_error "dns_rule_missing"
   fi
   if [[ "$(jq -r '.dnsMode' <<<"$status")" == "doh" ]]; then
-    [[ "$(jq -r '.dohReachableViaTunnel' <<<"$status")" == "true" ]] || dnsLastError="dohUnreachableViaTunnel"
+    [[ "$(jq -r '.dohReachableViaTunnel' <<<"$status")" == "true" ]] || set_dns_error "dns_upstream_unreachable"
   fi
   if [[ "$(jq -r '.dnsMode' <<<"$status")" == "udp" ]]; then
-    [[ "$(jq -r '.udp53PathReady' <<<"$status")" == "true" ]] || dnsLastError="udp53PathNotReady"
+    [[ "$(jq -r '.udp53PathReady' <<<"$status")" == "true" ]] || set_dns_error "dns_rule_missing"
   fi
 
   jq -c --argjson healthy "$( [[ "$healthy" == true ]] && echo true || echo false )" --arg dnsLastError "$dnsLastError" 'del(.redsocksState) + {healthy:$healthy,dnsLastError:$dnsLastError}' <<<"$status"
@@ -1334,6 +1958,8 @@ install_cmd(){
   require_root
   progress 3 "Validating platform"
   ensure_meta
+  parse_openvpn_network
+  clear_legacy_dns_dnat_rules
   install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
   install -d -m 0755 /usr/local/lib/omnirelay
   if [[ -f "$OMNIPANEL_COMMON_SCRIPT" ]]; then
@@ -1342,7 +1968,7 @@ install_cmd(){
   if [[ -x "${IPSEC_RULES_CLEAR_SCRIPT:-}" ]]; then
     "${IPSEC_RULES_CLEAR_SCRIPT}" >/dev/null 2>&1 || true
   fi
-  systemctl disable --now "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" 2>/dev/null || true
+  systemctl disable --now "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_DNS_BRIDGE_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" 2>/dev/null || true
   systemctl disable --now x-ui 2>/dev/null || true
   systemctl disable --now omnirelay-singbox 2>/dev/null || true
   systemctl disable --now omnirelay-ipsec-accounting.timer omnirelay-ipsec-accounting.service omnirelay-ipsec-rules xl2tpd ipsec strongswan-starter 2>/dev/null || true
@@ -1350,6 +1976,7 @@ install_cmd(){
     /etc/systemd/system/x-ui.service \
     /etc/systemd/system/omnirelay-singbox.service \
     /etc/systemd/system/omnirelay-ipsec-rules.service \
+    /etc/systemd/system/omnirelay-openvpn-dns.service \
     /etc/systemd/system/omnirelay-redsocks.service \
     /etc/systemd/system/omnirelay-ipsec-accounting.service \
     /etc/systemd/system/omnirelay-ipsec-accounting.timer \
@@ -1367,6 +1994,7 @@ install_cmd(){
   write_openvpn_auth_scripts
   write_openvpn_accounting_script
   write_redsocks_config
+  write_dns_bridge_assets
   enable_ip_forward
   write_openvpn_server_config
   setup_runtime_services
@@ -1392,24 +2020,29 @@ start_cmd(){
   require_root
   progress 96 "Starting gateway services"
   write_redsocks_config
+  parse_openvpn_network
+  clear_legacy_dns_dnat_rules
+  write_dns_bridge_assets
   ensure_redsocks_bind_available
   systemctl daemon-reload
-  systemctl enable --now "$OPENVPN_REDSOCKS_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_ACCOUNTING_TIMER" "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl enable --now "$OPENVPN_REDSOCKS_SERVICE" "$OPENVPN_DNS_BRIDGE_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_ACCOUNTING_TIMER" "$OMNIPANEL_SERVICE" nginx >/dev/null 2>&1 || true
   systemctl start "$OPENVPN_ACCOUNTING_SERVICE" >/dev/null 2>&1 || true
+  write_metadata
   progress 100 "Gateway start completed"
 }
 
 stop_cmd(){
   require_root
   progress 96 "Stopping gateway services"
-  systemctl stop "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OMNIPANEL_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl stop "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OMNIPANEL_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_DNS_BRIDGE_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
+  write_metadata
   progress 100 "Gateway stop completed"
 }
 
 uninstall_cmd(){
   require_root
   progress 96 "Uninstalling gateway"
-  systemctl disable --now "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OMNIPANEL_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl disable --now "$OPENVPN_ACCOUNTING_TIMER" "$OPENVPN_ACCOUNTING_SERVICE" "$OMNIPANEL_SERVICE" "$OPENVPN_SERVICE" "$OPENVPN_DNS_BRIDGE_SERVICE" "$OPENVPN_REDSOCKS_SERVICE" nginx >/dev/null 2>&1 || true
   systemctl disable --now x-ui omnirelay-singbox omnirelay-ipsec-rules xl2tpd ipsec strongswan-starter omnirelay-ipsec-accounting.timer omnirelay-ipsec-accounting.service >/dev/null 2>&1 || true
   if [[ -x "${IPSEC_RULES_CLEAR_SCRIPT:-}" ]]; then
     "${IPSEC_RULES_CLEAR_SCRIPT}" >/dev/null 2>&1 || true
@@ -1417,6 +2050,7 @@ uninstall_cmd(){
   rm -f \
     "/etc/systemd/system/${OMNIPANEL_SERVICE}.service" \
     "/etc/systemd/system/${OPENVPN_SERVICE}.service" \
+    "/etc/systemd/system/${OPENVPN_DNS_BRIDGE_SERVICE}.service" \
     "/etc/systemd/system/${OPENVPN_REDSOCKS_SERVICE}.service" \
     "/etc/systemd/system/${OPENVPN_ACCOUNTING_SERVICE}.service" \
     "/etc/systemd/system/${OPENVPN_ACCOUNTING_TIMER}" \
@@ -1441,18 +2075,18 @@ parse_args(){
   fi
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --public-port) PUBLIC_PORT="${2:-}"; shift 2 ;;
-      --panel-port) PANEL_PORT="${2:-}"; shift 2 ;;
-      --backend-port) BACKEND_PORT="${2:-}"; shift 2 ;;
-      --ssh-port) SSH_PORT="${2:-}"; shift 2 ;;
-      --bootstrap-socks-port) BOOTSTRAP_SOCKS_PORT="${2:-}"; shift 2 ;;
+      --public-port) PUBLIC_PORT="${2:-}"; ARG_PUBLIC_PORT_SET=true; shift 2 ;;
+      --panel-port) PANEL_PORT="${2:-}"; ARG_PANEL_PORT_SET=true; shift 2 ;;
+      --backend-port) BACKEND_PORT="${2:-}"; ARG_BACKEND_PORT_SET=true; shift 2 ;;
+      --ssh-port) SSH_PORT="${2:-}"; ARG_SSH_PORT_SET=true; shift 2 ;;
+      --bootstrap-socks-port) BOOTSTRAP_SOCKS_PORT="${2:-}"; ARG_BOOTSTRAP_SOCKS_PORT_SET=true; shift 2 ;;
       --proxy-check-url) PROXY_CHECK_URL="${2:-}"; shift 2 ;;
-      --openvpn-network) OPENVPN_NETWORK="${2:-}"; shift 2 ;;
-      --openvpn-client-dns) OPENVPN_CLIENT_DNS="${2:-}"; shift 2 ;;
-      --dns-mode) DNS_MODE="${2:-}"; shift 2 ;;
-      --doh-endpoints) DOH_ENDPOINTS="${2:-}"; shift 2 ;;
-      --dns-udp-only) DNS_UDP_ONLY="${2:-}"; shift 2 ;;
-      --vps-ip) VPS_IP="${2:-}"; shift 2 ;;
+      --openvpn-network) OPENVPN_NETWORK="${2:-}"; ARG_OPENVPN_NETWORK_SET=true; shift 2 ;;
+      --openvpn-client-dns) OPENVPN_CLIENT_DNS="${2:-}"; ARG_OPENVPN_CLIENT_DNS_SET=true; shift 2 ;;
+      --dns-mode) DNS_MODE="${2:-}"; ARG_DNS_MODE_SET=true; shift 2 ;;
+      --doh-endpoints) DOH_ENDPOINTS="${2:-}"; ARG_DOH_ENDPOINTS_SET=true; shift 2 ;;
+      --dns-udp-only) DNS_UDP_ONLY="${2:-}"; ARG_DNS_UDP_ONLY_SET=true; shift 2 ;;
+      --vps-ip) VPS_IP="${2:-}"; ARG_VPS_IP_SET=true; shift 2 ;;
       --tunnel-user) TUNNEL_USER="${2:-}"; shift 2 ;;
       --tunnel-auth) TUNNEL_AUTH="${2:-}"; shift 2 ;;
       --panel-user) PANEL_USER="${2:-}"; shift 2 ;;
@@ -1473,6 +2107,11 @@ parse_args(){
 
 main(){
   parse_args "$@"
+  hydrate_from_metadata
+  hydrate_from_dns_profile
+
+  OPENVPN_CLIENT_DNS="$(normalize_csv "$OPENVPN_CLIENT_DNS")"
+  DOH_ENDPOINTS="$(normalize_csv "$DOH_ENDPOINTS")"
   validate_port "$PUBLIC_PORT" "--public-port"
   validate_port "$PANEL_PORT" "--panel-port"
   validate_port "$BACKEND_PORT" "--backend-port"

@@ -6,6 +6,9 @@
       mc:Ignorable="d"
       Title="Relay Service"
       Background="{DynamicResource Brush.Background}">
+    <Page.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+    </Page.Resources>
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="28" MaxWidth="980">
             <TextBlock Text="Configure and operate the Windows Relay service independently from VPS gateway operations."
@@ -19,6 +22,7 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -64,16 +68,22 @@
                         <ColumnDefinition Width="220"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="Service State" Style="{StaticResource FormLabelStyle}"/>
                     <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ServiceState}" Style="{StaticResource ValueTextStyle}"/>
@@ -84,20 +94,47 @@
                     <TextBlock Grid.Row="2" Text="Proxy Listen Port" Style="{StaticResource FormLabelStyle}"/>
                     <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Status.ProxyListenPort}" Style="{StaticResource ValueTextStyle}"/>
 
-                    <TextBlock Grid.Row="3" Text="Tunnel Connected" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Status.TunnelConnected}" Style="{StaticResource ValueTextStyle}"/>
+                    <TextBlock Grid.Row="3" Text="Status Stale" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding StatusStale}" Style="{StaticResource ValueTextStyle}"/>
 
-                    <TextBlock Grid.Row="4" Text="Bootstrap SOCKS Listening" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Status.BootstrapSocksListening}" Style="{StaticResource ValueTextStyle}"/>
+                    <TextBlock Grid.Row="4" Text="Tunnel State" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding EffectiveTunnelState}" Style="{StaticResource ValueTextStyle}"/>
 
-                    <TextBlock Grid.Row="5" Text="Bootstrap SOCKS Forward" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Status.BootstrapSocksRemoteForwardActive}" Style="{StaticResource ValueTextStyle}"/>
+                    <TextBlock Grid.Row="5" Text="Health State" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding HealthStateDisplay}" Style="{StaticResource ValueTextStyle}"/>
 
-                    <TextBlock Grid.Row="6" Text="Tunnel Last Error" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Status.TunnelLastError}" TextWrapping="Wrap" Style="{StaticResource ValueTextStyle}"/>
+                    <TextBlock Grid.Row="6" Text="Health Reason" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding HealthReasonDisplay}" TextWrapping="Wrap" Style="{StaticResource ValueTextStyle}"/>
 
-                    <TextBlock Grid.Row="7" Text="Last Error" Style="{StaticResource FormLabelStyle}"/>
-                    <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Status.LastError}" TextWrapping="Wrap" Style="{StaticResource ValueTextStyle}"/>
+                    <TextBlock Grid.Row="7" Text="Recovery Tier" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Status.RecoveryTier}" Style="{StaticResource ValueTextStyle}"/>
+
+                    <TextBlock Grid.Row="8" Text="Recovery Action" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding Status.RecoveryAction}" Style="{StaticResource ValueTextStyle}" TextWrapping="Wrap"/>
+
+                    <TextBlock Grid.Row="9" Text="Consecutive Failures" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding Status.ConsecutiveFailures}" Style="{StaticResource ValueTextStyle}"/>
+
+                    <TextBlock Grid.Row="10" Text="Last Healthy (UTC)" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding Status.LastHealthyUtc}" Style="{StaticResource ValueTextStyle}"/>
+
+                    <TextBlock Grid.Row="11" Text="Last Local Probe (UTC)" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding Status.LastLocalProbeUtc}" Style="{StaticResource ValueTextStyle}"/>
+
+                    <TextBlock Grid.Row="12" Text="Last End-to-End Probe (UTC)" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="12" Grid.Column="1" Text="{Binding Status.LastEndToEndProbeUtc}" Style="{StaticResource ValueTextStyle}"/>
+
+                    <TextBlock Grid.Row="13" Text="Tunnel Last Error" Style="{StaticResource FormLabelStyle}"/>
+                    <TextBlock Grid.Row="13" Grid.Column="1" Text="{Binding Status.TunnelLastError}" TextWrapping="Wrap" Style="{StaticResource ValueTextStyle}"/>
+
+                    <TextBlock Grid.Row="14"
+                               Grid.ColumnSpan="2"
+                               Margin="0,10,0,0"
+                               Text="{Binding TunnelModuleNote}"
+                               TextWrapping="Wrap"
+                               Style="{StaticResource MutedTextStyle}"
+                               Foreground="{DynamicResource Brush.Warning}"
+                               Visibility="{Binding ShowTunnelModuleNote, Converter={StaticResource BoolToVisibilityConverter}}"/>
                 </Grid>
             </Border>
 

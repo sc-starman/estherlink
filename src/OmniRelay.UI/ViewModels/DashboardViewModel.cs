@@ -8,6 +8,8 @@ namespace OmniRelay.UI.ViewModels;
 
 public partial class DashboardViewModel : ObservableObject
 {
+    private static readonly TimeSpan StatusStaleThreshold = TimeSpan.FromSeconds(45);
+
     private readonly GatewayOrchestratorService _orchestrator;
     private readonly GatewayStateStore _state;
 
@@ -114,7 +116,24 @@ public partial class DashboardViewModel : ObservableObject
         ServiceState = _state.ServiceState;
         ProxyState = status is null ? "Unavailable" : (status.ProxyRunning ? "Running" : "Stopped");
         LicenseState = status is null ? "Unavailable" : (status.LicenseValid ? "Valid" : "Invalid");
-        TunnelState = status is null ? "Unavailable" : (status.TunnelConnected ? "Connected" : "Disconnected");
+        if (status is null)
+        {
+            TunnelState = "Unavailable";
+        }
+        else if (!status.LastStatusUpdateUtc.HasValue ||
+                 DateTimeOffset.UtcNow - status.LastStatusUpdateUtc.Value > StatusStaleThreshold)
+        {
+            TunnelState = "Disconnected (stale)";
+        }
+        else if (!string.IsNullOrWhiteSpace(status.HealthState))
+        {
+            TunnelState = status.HealthState;
+        }
+        else
+        {
+            TunnelState = status.TunnelConnected ? "Connected" : "Disconnected";
+        }
+
         WhitelistCount = status?.WhitelistCount ?? 0;
         BlacklistCount = status?.BlacklistCount ?? 0;
     }

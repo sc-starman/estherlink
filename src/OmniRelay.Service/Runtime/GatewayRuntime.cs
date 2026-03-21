@@ -237,6 +237,7 @@ public sealed class GatewayRuntime
         {
             _status.ProxyRunning = running;
             _status.ProxyListenPort = port;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
         }
     }
 
@@ -246,6 +247,7 @@ public sealed class GatewayRuntime
         {
             _status.WhitelistAdapterIp = whitelistAdapterIp;
             _status.DefaultAdapterIp = defaultAdapterIp;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
         }
     }
 
@@ -257,6 +259,10 @@ public sealed class GatewayRuntime
             _status.TunnelLastConnectedAtUtc = connectedAtUtc;
             _status.TunnelReconnectCount = reconnectCount;
             _status.TunnelLastError = error;
+            _status.TunnelState = connected ? "Healthy" : "Disconnected";
+            _status.HealthState = connected ? "Healthy" : "Disconnected";
+            _status.HealthReasonCode = error;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
         }
     }
 
@@ -267,6 +273,50 @@ public sealed class GatewayRuntime
             _status.BootstrapSocksListening = listening;
             _status.BootstrapSocksRemoteForwardActive = remoteForwardActive;
             _status.BootstrapSocksLastError = error;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
+    public void SetResilienceStatus(
+        string tunnelState,
+        string healthState,
+        string? healthReasonCode,
+        int consecutiveFailures,
+        int recoveryTier,
+        string? recoveryAction,
+        DateTimeOffset? lastLocalProbeUtc,
+        DateTimeOffset? lastEndToEndProbeUtc,
+        DateTimeOffset? lastHealthyUtc,
+        bool tunnelConnected,
+        bool bootstrapSocksListening,
+        bool bootstrapSocksRemoteForwardActive,
+        string? tunnelLastError,
+        string? bootstrapSocksLastError,
+        int tunnelReconnectCount,
+        DateTimeOffset? tunnelLastConnectedAtUtc,
+        IReadOnlyList<string>? resilienceEvents)
+    {
+        lock (_sync)
+        {
+            _status.TunnelState = tunnelState;
+            _status.HealthState = healthState;
+            _status.HealthReasonCode = healthReasonCode;
+            _status.ConsecutiveFailures = Math.Max(0, consecutiveFailures);
+            _status.RecoveryTier = Math.Max(0, recoveryTier);
+            _status.RecoveryAction = recoveryAction;
+            _status.LastLocalProbeUtc = lastLocalProbeUtc;
+            _status.LastEndToEndProbeUtc = lastEndToEndProbeUtc;
+            _status.LastHealthyUtc = lastHealthyUtc;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+
+            _status.TunnelConnected = tunnelConnected;
+            _status.BootstrapSocksListening = bootstrapSocksListening;
+            _status.BootstrapSocksRemoteForwardActive = bootstrapSocksRemoteForwardActive;
+            _status.TunnelLastError = tunnelLastError;
+            _status.BootstrapSocksLastError = bootstrapSocksLastError;
+            _status.TunnelReconnectCount = tunnelReconnectCount;
+            _status.TunnelLastConnectedAtUtc = tunnelLastConnectedAtUtc;
+            _status.ResilienceEvents = resilienceEvents?.ToArray() ?? [];
         }
     }
 
@@ -302,6 +352,7 @@ public sealed class GatewayRuntime
             _status.LicenseTransferWindowStartAt = result.TransferWindowStartAt;
             _status.LicenseActiveDeviceHint = result.ActiveDeviceIdHint;
             _status.LastError = result.Error;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
         }
     }
 
@@ -310,6 +361,7 @@ public sealed class GatewayRuntime
         lock (_sync)
         {
             _status.LastError = message;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
         }
     }
 
@@ -319,6 +371,17 @@ public sealed class GatewayRuntime
         {
             return new GatewayStatus
             {
+                TunnelState = _status.TunnelState,
+                HealthState = _status.HealthState,
+                HealthReasonCode = _status.HealthReasonCode,
+                ConsecutiveFailures = _status.ConsecutiveFailures,
+                RecoveryTier = _status.RecoveryTier,
+                RecoveryAction = _status.RecoveryAction,
+                LastLocalProbeUtc = _status.LastLocalProbeUtc,
+                LastEndToEndProbeUtc = _status.LastEndToEndProbeUtc,
+                LastHealthyUtc = _status.LastHealthyUtc,
+                LastStatusUpdateUtc = _status.LastStatusUpdateUtc,
+                ResilienceEvents = _status.ResilienceEvents?.ToArray() ?? [],
                 ServiceRunning = _status.ServiceRunning,
                 ProxyRunning = _status.ProxyRunning,
                 ProxyListenPort = _status.ProxyListenPort,
@@ -361,6 +424,10 @@ public sealed class GatewayRuntime
         _status.BootstrapSocksRemoteForwardActive = false;
         _status.TunnelLastError = reason;
         _status.BootstrapSocksLastError = reason;
+        _status.TunnelState = "RecoveringTier1";
+        _status.HealthState = "Degraded";
+        _status.HealthReasonCode = reason;
+        _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
     }
 
     private static bool RequiresTunnelRestart(ServiceConfig previous, ServiceConfig current, out string summary)

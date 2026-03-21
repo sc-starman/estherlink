@@ -12,7 +12,8 @@ internal static class SshTunnelProcessFactory
     public static bool TryCreateReverseTunnelStartInfo(
         ServiceConfig config,
         out ProcessStartInfo? startInfo,
-        out string? error)
+        out string? error,
+        bool includeSourceBind = true)
     {
         var args = new List<string>
         {
@@ -28,13 +29,14 @@ internal static class SshTunnelProcessFactory
         args.Add("-R");
         args.Add($"127.0.0.1:{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}");
 
-        return TryCreateStartInfo(config, args, out startInfo, out error);
+        return TryCreateStartInfo(config, args, out startInfo, out error, null, includeSourceBind);
     }
 
     public static bool TryCreateConnectionTestStartInfo(
         ServiceConfig config,
         out ProcessStartInfo? startInfo,
-        out string? error)
+        out string? error,
+        bool includeSourceBind = true)
     {
         var args = new List<string>
         {
@@ -44,14 +46,15 @@ internal static class SshTunnelProcessFactory
             "-o", "TCPKeepAlive=yes"
         };
 
-        return TryCreateStartInfo(config, args, out startInfo, out error);
+        return TryCreateStartInfo(config, args, out startInfo, out error, null, includeSourceBind);
     }
 
     public static bool TryCreateRemoteCommandStartInfo(
         ServiceConfig config,
         string remoteCommand,
         out ProcessStartInfo? startInfo,
-        out string? error)
+        out string? error,
+        bool includeSourceBind = true)
     {
         var args = new List<string>
         {
@@ -66,7 +69,7 @@ internal static class SshTunnelProcessFactory
             return false;
         }
 
-        return TryCreateStartInfo(config, args, out startInfo, out error, remoteCommand);
+        return TryCreateStartInfo(config, args, out startInfo, out error, remoteCommand, includeSourceBind);
     }
 
     private static bool TryCreateStartInfo(
@@ -74,7 +77,8 @@ internal static class SshTunnelProcessFactory
         List<string> args,
         out ProcessStartInfo? startInfo,
         out string? error,
-        string? remoteCommand = null)
+        string? remoteCommand = null,
+        bool includeSourceBind = true)
     {
         startInfo = null;
         error = ValidateRequiredFields(config);
@@ -83,7 +87,7 @@ internal static class SshTunnelProcessFactory
             return false;
         }
 
-        if (!TryGetTunnelBindIp(config, out var bindIp, out error))
+        if (!TryGetTunnelBindIp(config, out _, out error))
         {
             return false;
         }

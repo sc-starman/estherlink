@@ -13,8 +13,10 @@ namespace OmniRelay.UI.Services;
 public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatewayHealthService
 {
     private const string GatewayCtlPath = "/usr/local/sbin/omnirelay-gatewayctl";
+    private const string TunnelCtlPath = "/usr/local/sbin/omnirelay-tunnelctl";
     private const string RemoteInstallScriptPath = "/tmp/omnirelay-gatewayctl.sh";
     private const string RemoteOmniPanelCommonScriptPath = "/tmp/omnirelay-omnipanel-common.sh";
+    private const string RemoteTunnelModuleScriptPath = "/tmp/omnirelay-tunnel-module.sh";
     private const string RemoteUploadedPanelCertPath = "/tmp/omnirelay-omnipanel-upload.crt";
     private const string RemoteUploadedPanelKeyPath = "/tmp/omnirelay-omnipanel-upload.key";
 
@@ -130,6 +132,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrap.Message}");
             }
 
+            await EnsureTunnelModuleInstalledAsync(request, sudoPassword, DeploymentPhases.GatewayInstall, progress, cancellationToken);
             await EnsureCleanProtocolSwitchAsync(request, sudoPassword, progress, cancellationToken);
             await EnsureRuntimeSocksBackendReadyForInstallAsync(request, sudoPassword, progress, cancellationToken);
 
@@ -748,6 +751,71 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         await UploadFileAsync(request, localScript, RemoteOmniPanelCommonScriptPath, progress, cancellationToken);
     }
 
+    private async Task UploadTunnelModuleScriptAsync(
+        GatewayDeploymentRequest request,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var localScript = ResolveTunnelModuleScriptPath();
+        await UploadFileAsync(request, localScript, RemoteTunnelModuleScriptPath, progress, cancellationToken);
+    }
+
+    private async Task EnsureTunnelModuleInstalledAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        string phase,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        progress?.Report(new DeploymentProgressSnapshot
+        {
+            Phase = phase,
+            Percent = 4,
+            Message = "Ensuring tunnel watchdog module"
+        });
+
+        await UploadTunnelModuleScriptAsync(request, progress, cancellationToken);
+
+        const string probeUrl = "https://1.1.1.1/cdn-cgi/trace";
+        var command =
+            "set -euo pipefail; " +
+            $"chmod +x {ShellQuote(RemoteTunnelModuleScriptPath)}; " +
+            $"sed -i 's/\\r$//' {ShellQuote(RemoteTunnelModuleScriptPath)} || true; " +
+            $"bash -n {ShellQuote(RemoteTunnelModuleScriptPath)} >/tmp/omnirelay-tunnelctl.syntax.log 2>&1 || {{ cat /tmp/omnirelay-tunnelctl.syntax.log; exit 43; }}; " +
+            $"bash {ShellQuote(RemoteTunnelModuleScriptPath)} install " +
+            $"--backend-host '127.0.0.1' " +
+            $"--backend-port {request.Config.TunnelRemotePort} " +
+            $"--probe-url {ShellQuote(probeUrl)} " +
+            $"--timeout 12 --json; " +
+            $"[ -x {ShellQuote(TunnelCtlPath)} ] || {{ echo 'Tunnel module did not install correctly.'; exit 44; }}; " +
+            $"sed -i 's/\\r$//' {ShellQuote(TunnelCtlPath)} || true; " +
+            $"/usr/bin/env bash {ShellQuote(TunnelCtlPath)} status --json >/tmp/omnirelay-tunnelctl.status.log 2>&1 || {{ cat /tmp/omnirelay-tunnelctl.status.log; exit 45; }}";
+
+        var result = await ExecuteCommandAsync(
+            request.Config,
+            command,
+            sudoPassword,
+            line =>
+            {
+                var clean = SanitizeTerminalLine(line);
+                if (!string.IsNullOrWhiteSpace(clean))
+                {
+                    progress?.Report(new DeploymentProgressSnapshot
+                    {
+                        Phase = phase,
+                        Percent = 0,
+                        Message = $"[vps] {clean}"
+                    });
+                }
+            },
+            cancellationToken);
+
+        if (!result.Success)
+        {
+            throw new InvalidOperationException($"Failed to install tunnel module: {result.ErrorMessage}");
+        }
+    }
+
     private async Task UploadFileAsync(
         GatewayDeploymentRequest request,
         string localPath,
@@ -860,6 +928,26 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return path;
     }
 
+    private static string ResolveTunnelModuleScriptPath()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        const string scriptFileName = "setup_omnirelay_gateway_tunnel_module.sh";
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
+            Path.Combine(baseDir, scriptFileName),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
+        };
+
+        var path = candidates.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException($"Tunnel module script not found. Expected {scriptFileName} in app GatewayScripts content.");
+        }
+
+        return path;
+    }
+
     private async Task<GatewayOperationResult> RunSimpleGatewayCommandAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
@@ -872,8 +960,9 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             ValidateRequest(request);
             EnsureSudoPassword(sudoPassword);
+            await EnsureTunnelModuleInstalledAsync(request, sudoPassword, phase, progress, cancellationToken);
 
-            var args = BuildCommonArgs(request);
+            var args = $"{BuildCommonArgs(request)} {BuildProtocolArgs(request)}".Trim();
             var command =
                 "set -euo pipefail; " +
                 $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo 'Gateway control script is not installed on VPS. Run Install Gateway first.'; exit 31; }}; " +

@@ -2,6 +2,17 @@ namespace OmniRelay.Core.Status;
 
 public sealed class GatewayStatus
 {
+    public string TunnelState { get; set; } = "Disconnected";
+    public string HealthState { get; set; } = "Disconnected";
+    public string? HealthReasonCode { get; set; }
+    public int ConsecutiveFailures { get; set; }
+    public int RecoveryTier { get; set; }
+    public string? RecoveryAction { get; set; }
+    public DateTimeOffset? LastLocalProbeUtc { get; set; }
+    public DateTimeOffset? LastEndToEndProbeUtc { get; set; }
+    public DateTimeOffset? LastHealthyUtc { get; set; }
+    public DateTimeOffset? LastStatusUpdateUtc { get; set; }
+    public IReadOnlyList<string> ResilienceEvents { get; set; } = [];
     public bool ServiceRunning { get; set; }
     public bool ProxyRunning { get; set; }
     public int ProxyListenPort { get; set; }

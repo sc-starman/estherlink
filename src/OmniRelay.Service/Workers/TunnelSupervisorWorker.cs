@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using OmniRelay.Core.Networking;
 using OmniRelay.Service.Runtime;
 
@@ -211,7 +212,16 @@ public sealed class TunnelSupervisorWorker : BackgroundService
                 {
                     _lastError = cleaned;
                     _fileLog.Warn($"Tunnel process exited. exitCode={exitCode} error={cleaned}");
-                    if (HasRemoteForwardFailure(cleaned))
+                    if (TryGetRemoteForwardConflictPort(cleaned, out var conflictPort))
+                    {
+                        var portText = conflictPort > 0 ? conflictPort.ToString() : config.TunnelRemotePort.ToString();
+                        _lastError =
+                            $"Gateway remote-forward port {portText} is already in use by another SSH session/relay. " +
+                            "Stop the other relay/session or use a different Tunnel Remote Port.";
+                        _fileLog.Warn(_lastError);
+                    }
+
+                    if (HasRemoteForwardFailure(cleaned) && !TryGetRemoteForwardConflictPort(cleaned, out _))
                     {
                         await TryScheduleRemoteForwardCleanupAsync(config, CancellationToken.None);
                     }
@@ -250,13 +260,22 @@ public sealed class TunnelSupervisorWorker : BackgroundService
         OmniRelay.Core.Configuration.ServiceConfig config,
         CancellationToken cancellationToken)
     {
-        // Dedicated tunnel user only: clear stale user sessions that can keep remote -R listen ports occupied.
+        if (config.TunnelRemotePort <= 0 || config.BootstrapSocksRemotePort <= 0)
+        {
+            return;
+        }
+
+        // Clean only stale listener owners for the forwarded ports.
+        var ports = $"{config.TunnelRemotePort} {config.BootstrapSocksRemotePort}";
         var remoteCommand =
-            "if command -v pkill >/dev/null 2>&1; then " +
-            "u=" + ShellSingleQuote(config.TunnelUser.Trim()) + "; " +
-            "nohup sh -lc 'sleep 1; pkill -KILL -u " + EscapeForSingleQuotedShell(config.TunnelUser.Trim()) + " >/dev/null 2>&1 || true' >/dev/null 2>&1 & " +
-            "echo \"Remote tunnel session cleanup scheduled for user: $u\"; " +
-            "else echo 'pkill is not available; skipping remote cleanup.'; fi";
+            "ports=" + ShellSingleQuote(ports) + "; " +
+            "killed=0; " +
+            "for p in $ports; do " +
+            "for pid in $(ss -lntp \"( sport = :$p )\" 2>/dev/null | sed -n \"s/.*pid=\\([0-9]\\+\\).*/\\1/p\" | sort -u); do " +
+            "kill -KILL \"$pid\" >/dev/null 2>&1 && killed=$((killed+1)) || true; " +
+            "done; " +
+            "done; " +
+            "echo \"Remote forward listener cleanup attempted for ports: $ports; killed=$killed\"";
 
         if (!SshTunnelProcessFactory.TryCreateRemoteCommandStartInfo(config, remoteCommand, out var psi, out var error) || psi is null)
         {
@@ -435,6 +454,26 @@ public sealed class TunnelSupervisorWorker : BackgroundService
         return error.Contains("remote port forwarding failed", StringComparison.OrdinalIgnoreCase) ||
                error.Contains("forwarding failed", StringComparison.OrdinalIgnoreCase) ||
                error.Contains("administratively prohibited", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryGetRemoteForwardConflictPort(string? error, out int port)
+    {
+        port = 0;
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return false;
+        }
+
+        var match = Regex.Match(
+            error,
+            @"remote port forwarding failed for listen port\s+(\d+)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        return int.TryParse(match.Groups[1].Value, out port);
     }
 
     private static string EscapePowerShellSingleQuoted(string value)

@@ -17,9 +17,8 @@ builder.Services.AddSingleton<TunnelConnectionTester>();
 builder.Services.AddSingleton<IpcCommandHandler>();
 builder.Services.AddSingleton<HttpConnectProxyEngine>();
 builder.Services.AddSingleton<Socks5BootstrapProxyEngine>();
-builder.Services.AddHostedService<ProxyCoordinatorWorker>();
 builder.Services.AddHostedService<IpcServerWorker>();
-builder.Services.AddHostedService<TunnelSupervisorWorker>();
+builder.Services.AddHostedService<TunnelResilienceOrchestratorWorker>();
 
 var host = builder.Build();
 await host.RunAsync();
