@@ -28,6 +28,70 @@
 
   const createIntentButton = document.querySelector('[data-action="create-intent"]');
   const checkoutResult = document.getElementById('checkout-result');
+  const redirectModal = document.getElementById('payment-redirect-modal');
+  const redirectCountdown = document.getElementById('payment-redirect-countdown');
+  const redirectAmount = document.getElementById('payment-redirect-amount');
+  const redirectGoNowButton = document.getElementById('payment-redirect-go-now');
+  const redirectCloseButton = document.getElementById('payment-redirect-close');
+  let redirectTimerId = null;
+  let redirectIntervalId = null;
+  let redirectTargetUrl = '';
+  let remainingSeconds = 10;
+
+  const clearRedirectTimers = () => {
+    if (redirectTimerId) {
+      clearTimeout(redirectTimerId);
+      redirectTimerId = null;
+    }
+    if (redirectIntervalId) {
+      clearInterval(redirectIntervalId);
+      redirectIntervalId = null;
+    }
+  };
+
+  const closeRedirectModal = () => {
+    clearRedirectTimers();
+    redirectTargetUrl = '';
+    if (redirectModal) {
+      redirectModal.classList.add('hidden');
+    }
+  };
+
+  const redirectNow = () => {
+    if (!redirectTargetUrl) {
+      return;
+    }
+    const url = redirectTargetUrl;
+    closeRedirectModal();
+    window.location.href = url;
+  };
+
+  if (redirectCloseButton) {
+    redirectCloseButton.addEventListener('click', () => {
+      closeRedirectModal();
+    });
+  }
+
+  if (redirectGoNowButton) {
+    redirectGoNowButton.addEventListener('click', () => {
+      redirectNow();
+    });
+  }
+
+  if (redirectModal) {
+    redirectModal.addEventListener('click', (event) => {
+      if (event.target === redirectModal) {
+        closeRedirectModal();
+      }
+    });
+  }
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && redirectModal && !redirectModal.classList.contains('hidden')) {
+      closeRedirectModal();
+    }
+  });
+
   if (createIntentButton && checkoutResult) {
     createIntentButton.addEventListener('click', async () => {
       createIntentButton.disabled = true;
@@ -43,7 +107,48 @@
           return;
         }
 
-        checkoutResult.innerHTML = `Order <span class="font-mono">${payload.orderId}</span> created. Intent <span class="font-mono">${payload.intentId}</span>. Status: ${payload.status}.`;
+        const intentId = payload.intentId;
+        if (!intentId) {
+          checkoutResult.textContent = 'Create intent succeeded but intent id is missing.';
+          return;
+        }
+
+        const amount =
+          payload.amount ??
+          payload.fiatAmount ??
+          createIntentButton.getAttribute('data-payment-amount') ??
+          '0.00';
+
+        redirectTargetUrl = `https://gate.paykrypt.io/pay/${encodeURIComponent(intentId)}`;
+        remainingSeconds = 10;
+
+        if (redirectAmount) {
+          const parsedAmount = Number(amount);
+          const amountText = Number.isFinite(parsedAmount) ? parsedAmount.toFixed(2) : String(amount);
+          redirectAmount.textContent = `$${amountText}`;
+        }
+
+        if (redirectCountdown) {
+          redirectCountdown.textContent = String(remainingSeconds);
+        }
+
+        checkoutResult.textContent = '';
+
+        if (redirectModal) {
+          redirectModal.classList.remove('hidden');
+        }
+
+        clearRedirectTimers();
+        redirectIntervalId = setInterval(() => {
+          remainingSeconds = Math.max(remainingSeconds - 1, 0);
+          if (redirectCountdown) {
+            redirectCountdown.textContent = String(remainingSeconds);
+          }
+        }, 1000);
+
+        redirectTimerId = setTimeout(() => {
+          redirectNow();
+        }, 10000);
       } catch {
         checkoutResult.textContent = 'Failed to contact server.';
       } finally {

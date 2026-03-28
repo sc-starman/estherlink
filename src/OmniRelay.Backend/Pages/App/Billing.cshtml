@@ -18,7 +18,11 @@
             <h2 class="text-2xl font-bold">One-Time License</h2>
             <p class="text-4xl font-bold mt-2">$@Model.PriceUsd.ToString("0.00")</p>
             <p class="text-slate-300 mt-2">Perpetual usage + 1 year software updates.</p>
-            <button type="button" data-action="create-intent" class="mt-4 px-5 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">
+            <button
+                type="button"
+                data-action="create-intent"
+                data-payment-amount="@Model.PriceUsd.ToString("0.00")"
+                class="mt-4 px-5 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">
                 Create Payment Intent
             </button>
             <div id="checkout-result" class="mt-4 text-sm text-slate-100"></div>
@@ -82,4 +86,41 @@
             }
         </section>
     </section>
+</div>
+
+<div id="payment-redirect-modal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-slate-950/70"></div>
+    <div class="relative z-10 flex min-h-full items-center justify-center p-4">
+        <div class="w-full max-w-lg rounded-2xl border border-cyan-500/40 bg-slate-900 shadow-xl">
+            <div class="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+                <h3 class="text-lg font-semibold">Redirecting To Payment Gateway</h3>
+                <button
+                    type="button"
+                    id="payment-redirect-close"
+                    class="rounded p-1 text-slate-300 hover:bg-slate-800 hover:text-white"
+                    aria-label="Cancel redirect">
+                    <span aria-hidden="true" class="text-xl leading-none">&times;</span>
+                </button>
+            </div>
+            <div class="space-y-4 px-5 py-5">
+                <p class="text-slate-200">
+                    You're now redirecting to Crypto Payment Gateway site in
+                    <span id="payment-redirect-countdown" class="font-semibold text-cyan-300">10</span>
+                    seconds.
+                </p>
+                <div class="rounded-lg border border-slate-700 bg-slate-950/50 px-4 py-3 text-sm text-slate-200">
+                    Amount to pay:
+                    <span id="payment-redirect-amount" class="font-semibold text-white">$0.00</span>
+                </div>
+                <div class="flex justify-end gap-3">
+                    <button
+                        type="button"
+                        id="payment-redirect-go-now"
+                        class="px-4 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">
+                        Go Now
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
