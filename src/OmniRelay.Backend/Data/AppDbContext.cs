@@ -37,6 +37,7 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRo
         {
             entity.ToTable("app_users");
             entity.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(x => x.IsAdmin).HasColumnName("is_admin").HasDefaultValue(false).IsRequired();
             entity.Property(x => x.Email).HasMaxLength(256);
             entity.Property(x => x.NormalizedEmail).HasMaxLength(256);
             entity.Property(x => x.UserName).HasMaxLength(256);

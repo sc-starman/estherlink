@@ -21,6 +21,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -142,8 +143,11 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.SlidingExpiration = true;
     options.LoginPath = "/account/login";
     options.LogoutPath = "/account/logout";
-    options.AccessDeniedPath = "/account/login";
+    options.AccessDeniedPath = "/account/access-denied";
 });
+
+builder.Services.AddAuthorization(AdminAuthorizationPolicy.Configure);
+builder.Services.AddScoped<IAuthorizationHandler, IsAdminAuthorizationHandler>();
 
 builder.Services.AddHttpClient(nameof(PayKryptClient));
 builder.Services.AddHttpClient<IRecaptchaVerifier, RecaptchaVerifier>();
@@ -151,6 +155,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddRazorPages(options =>
 {
     options.Conventions.AuthorizeFolder("/App");
+    options.Conventions.AuthorizeFolder("/Admin", AdminAuthorizationPolicy.Name);
     options.Conventions.AllowAnonymousToFolder("/Account");
     options.Conventions.AllowAnonymousToPage("/Index");
     options.Conventions.AllowAnonymousToPage("/Docs");

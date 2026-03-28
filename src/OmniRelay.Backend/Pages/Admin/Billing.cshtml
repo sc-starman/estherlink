@@ -1,0 +1,89 @@
+@page "/admin/billing"
+@model OmniRelay.Backend.Pages.Admin.BillingModel
+@{
+    ViewData["Title"] = "Admin Billing";
+    ViewData["AdminNav"] = "billing";
+}
+
+<div class="max-w-7xl mx-auto px-4 py-10 grid md:grid-cols-[240px_1fr] gap-6">
+    <partial name="_AdminSidebar" view-data="ViewData" />
+
+    <section class="space-y-5">
+        <div>
+            <h1 class="text-3xl font-bold">Billing</h1>
+            <p class="text-slate-400 mt-1">Order-centric view across all users.</p>
+        </div>
+
+        <div class="flex items-center justify-between text-sm text-slate-300">
+            <p>Total: <strong>@Model.TotalItems</strong></p>
+            <p>Page @Model.PageNumber / @Model.TotalPages</p>
+        </div>
+
+        @if (Model.Items.Count == 0)
+        {
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">No billing orders found.</div>
+        }
+        else
+        {
+            <div class="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-950/70 text-slate-300">
+                        <tr>
+                            <th class="text-left px-4 py-3">Order ID</th>
+                            <th class="text-left px-4 py-3">User Email</th>
+                            <th class="text-left px-4 py-3">Amount</th>
+                            <th class="text-left px-4 py-3">Currency</th>
+                            <th class="text-left px-4 py-3">Order Status</th>
+                            <th class="text-left px-4 py-3">Created (UTC)</th>
+                            <th class="text-left px-4 py-3">Updated (UTC)</th>
+                            <th class="text-left px-4 py-3">Issued License</th>
+                            <th class="text-left px-4 py-3">Latest Intent ID</th>
+                            <th class="text-left px-4 py-3">Latest Intent Status</th>
+                            <th class="text-left px-4 py-3">Intent Expires (UTC)</th>
+                            <th class="text-left px-4 py-3">Provider Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var item in Model.Items)
+                    {
+                        <tr class="border-t border-slate-800">
+                            <td class="px-4 py-3 font-mono text-xs">@item.OrderId</td>
+                            <td class="px-4 py-3">@item.UserEmail</td>
+                            <td class="px-4 py-3">@item.Amount.ToString("0.00")</td>
+                            <td class="px-4 py-3">@item.Currency</td>
+                            <td class="px-4 py-3">@item.OrderStatus</td>
+                            <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>
+                            <td class="px-4 py-3">@item.UpdatedAt.ToString("u")</td>
+                            <td class="px-4 py-3 font-mono text-xs">@(item.IssuedLicenseKey ?? "n/a")</td>
+                            <td class="px-4 py-3 font-mono text-xs">@(item.LatestIntentId ?? "n/a")</td>
+                            <td class="px-4 py-3">@(item.LatestIntentStatus ?? "n/a")</td>
+                            <td class="px-4 py-3">@(item.LatestIntentExpiresAt?.ToString("u") ?? "n/a")</td>
+                            <td class="px-4 py-3">@(item.LatestProviderMessage ?? "n/a")</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="flex items-center justify-between">
+                @if (Model.PageNumber > 1)
+                {
+                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/billing?pageNumber=@(Model.PageNumber - 1)">Previous</a>
+                }
+                else
+                {
+                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">Previous</span>
+                }
+
+                @if (Model.PageNumber < Model.TotalPages)
+                {
+                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/billing?pageNumber=@(Model.PageNumber + 1)">Next</a>
+                }
+                else
+                {
+                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">Next</span>
+                }
+            </div>
+        }
+    </section>
+</div>
