@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Globalization;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 using OmniRelay.Backend.Configuration;
 using OmniRelay.Backend.Contracts.App;
@@ -34,6 +35,34 @@ builder.Logging.AddJsonConsole();
 builder.Services.Configure<AdminSecurityOptions>(builder.Configuration.GetSection("Admin"));
 builder.Services.Configure<LicensingOptions>(builder.Configuration.GetSection("Licensing"));
 builder.Services.Configure<PayKryptOptions>(builder.Configuration.GetSection("PayKrypt"));
+builder.Services.PostConfigure<PayKryptOptions>(options =>
+{
+    options.BaseUrl = ParseStringOrDefault(
+        Environment.GetEnvironmentVariable("PAYKRYPT_BASE_URL"),
+        options.BaseUrl);
+    options.SecretApiKey = ParseStringOrDefault(
+        Environment.GetEnvironmentVariable("PAYKRYPT_SECRET_API_KEY"),
+        options.SecretApiKey);
+
+    var webhookSecret = Environment.GetEnvironmentVariable("PAYKRYPT_WEBHOOK_SECRET");
+    if (webhookSecret is not null)
+    {
+        options.WebhookSecret = webhookSecret.Trim();
+    }
+
+    options.PriceUsd = ParseDecimalOrDefault(
+        Environment.GetEnvironmentVariable("PAYKRYPT_PRICE_USD"),
+        options.PriceUsd);
+    options.ExpiresInMinutes = ParseIntOrDefault(
+        Environment.GetEnvironmentVariable("PAYKRYPT_EXPIRES_IN_MINUTES"),
+        options.ExpiresInMinutes);
+    options.AllowedChains = ParseStringListOrDefault(
+        Environment.GetEnvironmentVariable("PAYKRYPT_ALLOWED_CHAINS"),
+        options.AllowedChains);
+    options.AllowedAssets = ParseStringListOrDefault(
+        Environment.GetEnvironmentVariable("PAYKRYPT_ALLOWED_ASSETS"),
+        options.AllowedAssets);
+});
 builder.Services.Configure<CommerceOptions>(builder.Configuration.GetSection("Commerce"));
 builder.Services.Configure<WebOptions>(builder.Configuration.GetSection("Web"));
 builder.Services.Configure<EmailDeliveryOptions>(builder.Configuration.GetSection("EmailDelivery"));
@@ -1045,6 +1074,70 @@ static double ParseDoubleOrDefault(string? value, double defaultValue)
     return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
         ? parsed
         : defaultValue;
+}
+
+static int ParseIntOrDefault(string? value, int defaultValue)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultValue;
+    }
+
+    return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+        ? parsed
+        : defaultValue;
+}
+
+static decimal ParseDecimalOrDefault(string? value, decimal defaultValue)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultValue;
+    }
+
+    return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed)
+        ? parsed
+        : defaultValue;
+}
+
+static List<string> ParseStringListOrDefault(string? value, IEnumerable<string>? defaultValue)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return NormalizeStringList(defaultValue);
+    }
+
+    var trimmed = value.Trim();
+    List<string>? parsed = null;
+
+    if (trimmed.StartsWith('[') && trimmed.EndsWith(']'))
+    {
+        try
+        {
+            parsed = JsonSerializer.Deserialize<List<string>>(trimmed);
+        }
+        catch
+        {
+            parsed = null;
+        }
+    }
+
+    parsed ??= trimmed
+        .Split([',', ';', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+        .Select(item => item.Trim())
+        .ToList();
+
+    return parsed.Count == 0 ? NormalizeStringList(defaultValue) : NormalizeStringList(parsed);
+}
+
+static List<string> NormalizeStringList(IEnumerable<string>? values)
+{
+    return values?
+        .Select(item => item?.Trim())
+        .Where(item => !string.IsNullOrWhiteSpace(item))
+        .Select(item => item!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList() ?? [];
 }
 
 static string ParseStringOrDefault(string? value, string defaultValue)

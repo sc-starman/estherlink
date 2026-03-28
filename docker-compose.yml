@@ -84,10 +84,13 @@ services:
       Admin__ApiKeyPepper: dev-admin-pepper
       Licensing__SigningKeyRotationDays: 90
       Licensing__OfflineCacheTtlHours: 24
-      PayKrypt__BaseUrl: https://api-sandbox.paykrypt.io
-      PayKrypt__SecretApiKey: sk_test_change_me
-      PayKrypt__PriceUsd: 149
-      PayKrypt__ExpiresInMinutes: 45
+      PAYKRYPT_BASE_URL: ${PAYKRYPT_BASE_URL:-https://api-sandbox.paykrypt.io}
+      PAYKRYPT_SECRET_API_KEY: ${PAYKRYPT_SECRET_API_KEY:-sk_test_change_me}
+      PAYKRYPT_WEBHOOK_SECRET: ${PAYKRYPT_WEBHOOK_SECRET:-}
+      PAYKRYPT_PRICE_USD: ${PAYKRYPT_PRICE_USD:-149}
+      PAYKRYPT_ALLOWED_CHAINS: ${PAYKRYPT_ALLOWED_CHAINS:-}
+      PAYKRYPT_ALLOWED_ASSETS: ${PAYKRYPT_ALLOWED_ASSETS:-}
+      PAYKRYPT_EXPIRES_IN_MINUTES: ${PAYKRYPT_EXPIRES_IN_MINUTES:-45}
       Commerce__PaidLicensePlan: professional
       Commerce__PaidMaxDevices: 3
       Commerce__TrialDays: 2
