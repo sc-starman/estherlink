@@ -92,6 +92,7 @@ public sealed class AdminPanelTests : IClassFixture<IntegrationTestWebApplicatio
         var paidUserLicenseId = Guid.NewGuid();
         var orderId = Guid.NewGuid();
         var intentId = Guid.NewGuid();
+        var couponId = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
 
         await authFactory.ExecuteDbContextAsync(async dbContext =>
@@ -185,6 +186,19 @@ public sealed class AdminPanelTests : IClassFixture<IntegrationTestWebApplicatio
                 UpdatedAt = now
             });
 
+            dbContext.DiscountCoupons.Add(new DiscountCouponEntity
+            {
+                Id = couponId,
+                Code = "OMNI-ADMIN-TEST",
+                NormalizedCode = "OMNI-ADMIN-TEST",
+                DiscountPercent = 25,
+                MaxUses = 10,
+                TimesRedeemed = 2,
+                IsActive = true,
+                CreatedAt = now,
+                CreatedByUserId = adminUserId
+            });
+
             await dbContext.SaveChangesAsync();
         });
 
@@ -211,6 +225,11 @@ public sealed class AdminPanelTests : IClassFixture<IntegrationTestWebApplicatio
         Assert.Equal(HttpStatusCode.OK, billingResponse.StatusCode);
         Assert.Contains(orderId.ToString(), billingHtml, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Awaiting payment", billingHtml, StringComparison.Ordinal);
+
+        var discountsResponse = await client.GetAsync("/admin/discounts");
+        var discountsHtml = await discountsResponse.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.OK, discountsResponse.StatusCode);
+        Assert.Contains("OMNI-ADMIN-TEST", discountsHtml, StringComparison.Ordinal);
     }
 }
 
@@ -295,6 +314,7 @@ internal sealed class AdminPanelTestWebApplicationFactory : WebApplicationFactor
         dbContext.AuditEvents.RemoveRange(dbContext.AuditEvents);
         dbContext.PayKryptIntents.RemoveRange(dbContext.PayKryptIntents);
         dbContext.CommerceOrders.RemoveRange(dbContext.CommerceOrders);
+        dbContext.DiscountCoupons.RemoveRange(dbContext.DiscountCoupons);
         dbContext.UserLicenses.RemoveRange(dbContext.UserLicenses);
         dbContext.PayKryptWebhookEvents.RemoveRange(dbContext.PayKryptWebhookEvents);
         dbContext.Users.RemoveRange(dbContext.Users);

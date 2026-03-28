@@ -23,6 +23,7 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRo
     public DbSet<AdminApiKeyEntity> AdminApiKeys => Set<AdminApiKeyEntity>();
     public DbSet<AuditEventEntity> AuditEvents => Set<AuditEventEntity>();
     public DbSet<UserLicenseEntity> UserLicenses => Set<UserLicenseEntity>();
+    public DbSet<DiscountCouponEntity> DiscountCoupons => Set<DiscountCouponEntity>();
     public DbSet<CommerceOrderEntity> CommerceOrders => Set<CommerceOrderEntity>();
     public DbSet<PayKryptIntentEntity> PayKryptIntents => Set<PayKryptIntentEntity>();
     public DbSet<PayKryptWebhookEventEntity> PayKryptWebhookEvents => Set<PayKryptWebhookEventEntity>();
@@ -225,6 +226,35 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRo
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<DiscountCouponEntity>(entity =>
+        {
+            entity.ToTable("discount_coupons", table =>
+            {
+                table.HasCheckConstraint("ck_discount_coupons_percent_range", "discount_percent >= 1 AND discount_percent <= 99");
+                table.HasCheckConstraint("ck_discount_coupons_max_uses_positive", "max_uses > 0");
+                table.HasCheckConstraint("ck_discount_coupons_times_redeemed_non_negative", "times_redeemed >= 0");
+            });
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.Code).HasColumnName("code").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.NormalizedCode).HasColumnName("normalized_code").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.DiscountPercent).HasColumnName("discount_percent").IsRequired();
+            entity.Property(x => x.MaxUses).HasColumnName("max_uses").IsRequired();
+            entity.Property(x => x.TimesRedeemed).HasColumnName("times_redeemed").HasDefaultValue(0).IsRequired();
+            entity.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true).IsRequired();
+            entity.Property(x => x.DisabledAt).HasColumnName("disabled_at");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(x => x.CreatedByUserId).HasColumnName("created_by_user_id").IsRequired();
+
+            entity.HasIndex(x => x.NormalizedCode).IsUnique();
+            entity.HasIndex(x => x.CreatedAt);
+
+            entity.HasOne(x => x.CreatedByUser)
+                .WithMany(x => x.CreatedDiscountCoupons)
+                .HasForeignKey(x => x.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
         modelBuilder.Entity<CommerceOrderEntity>(entity =>
         {
             entity.ToTable("commerce_orders");
@@ -232,20 +262,32 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRo
             entity.Property(x => x.Id).ValueGeneratedNever();
             entity.Property(x => x.UserId).HasColumnName("user_id").IsRequired();
             entity.Property(x => x.OrderType).HasColumnName("order_type").HasMaxLength(32).IsRequired();
+            entity.Property(x => x.BaseFiatAmount).HasColumnName("base_fiat_amount").HasColumnType("numeric(18,2)").IsRequired();
+            entity.Property(x => x.DiscountAmount).HasColumnName("discount_amount").HasColumnType("numeric(18,2)").HasDefaultValue(0m).IsRequired();
             entity.Property(x => x.FiatAmount).HasColumnName("fiat_amount").HasColumnType("numeric(18,2)").IsRequired();
             entity.Property(x => x.Currency).HasColumnName("currency").HasMaxLength(8).IsRequired();
             entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(32).IsRequired();
+            entity.Property(x => x.DiscountCouponId).HasColumnName("discount_coupon_id");
+            entity.Property(x => x.DiscountCode).HasColumnName("discount_code").HasMaxLength(64);
+            entity.Property(x => x.DiscountPercent).HasColumnName("discount_percent");
+            entity.Property(x => x.DiscountConsumed).HasColumnName("discount_consumed").HasDefaultValue(false).IsRequired();
             entity.Property(x => x.IssuedLicenseId).HasColumnName("issued_license_id");
             entity.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(x => x.UpdatedAt).HasColumnName("updated_at").IsRequired();
 
             entity.HasIndex(x => new { x.UserId, x.CreatedAt });
             entity.HasIndex(x => x.IssuedLicenseId).IsUnique();
+            entity.HasIndex(x => x.DiscountCouponId);
 
             entity.HasOne(x => x.User)
                 .WithMany(x => x.Orders)
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(x => x.DiscountCoupon)
+                .WithMany(x => x.Orders)
+                .HasForeignKey(x => x.DiscountCouponId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             entity.HasOne(x => x.IssuedLicense)
                 .WithMany(x => x.IssuedByOrders)

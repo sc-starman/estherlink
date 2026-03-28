@@ -16,6 +16,8 @@ public sealed class IndexModel : PageModel
     public int TrialLicenses { get; private set; }
     public int PaidLicenses { get; private set; }
     public int BillingOrders { get; private set; }
+    public int DiscountCoupons { get; private set; }
+    public int ActiveDiscountCoupons { get; private set; }
 
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
@@ -30,5 +32,13 @@ public sealed class IndexModel : PageModel
         BillingOrders = await _dbContext.CommerceOrders
             .AsNoTracking()
             .CountAsync(cancellationToken);
+
+        DiscountCoupons = await _dbContext.DiscountCoupons
+            .AsNoTracking()
+            .CountAsync(cancellationToken);
+
+        ActiveDiscountCoupons = await _dbContext.DiscountCoupons
+            .AsNoTracking()
+            .CountAsync(x => x.IsActive && x.DisabledAt == null, cancellationToken);
     }
 }

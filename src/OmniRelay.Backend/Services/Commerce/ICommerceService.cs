@@ -20,7 +20,8 @@ public interface IDownloadCatalogService
 public interface ICommerceService
 {
     Task<TrialResult> StartTrialAsync(Guid userId, string userEmail, CancellationToken cancellationToken);
-    Task<CreateCheckoutResult> CreateCheckoutIntentAsync(Guid userId, string userEmail, CancellationToken cancellationToken);
+    Task<CheckoutQuoteResult> QuoteCheckoutAsync(Guid userId, string? couponCode, CancellationToken cancellationToken);
+    Task<CreateCheckoutResult> CreateCheckoutIntentAsync(Guid userId, string userEmail, string? couponCode, CancellationToken cancellationToken);
     Task<OrderStatusResult?> GetOrderStatusAsync(Guid userId, Guid orderId, bool refreshFromProvider, CancellationToken cancellationToken);
     Task<WebhookProcessResult> ProcessWebhookAsync(string payload, string? externalEventId, CancellationToken cancellationToken);
 }
@@ -32,7 +33,23 @@ public sealed record CreateCheckoutResult(
     string IntentId,
     string Status,
     DateTimeOffset? ExpiresAt,
-    IReadOnlyList<PayKryptDepositAddress> DepositAddresses);
+    IReadOnlyList<PayKryptDepositAddress> DepositAddresses,
+    decimal BaseAmount,
+    decimal DiscountAmount,
+    decimal FinalAmount,
+    string Currency,
+    string? AppliedCouponCode,
+    int? AppliedDiscountPercent);
+
+public sealed record CheckoutQuoteResult(
+    bool Success,
+    string Message,
+    decimal BaseAmount,
+    decimal DiscountAmount,
+    decimal FinalAmount,
+    string Currency,
+    string? AppliedCouponCode,
+    int? AppliedDiscountPercent);
 
 public sealed record OrderStatusResult(
     Guid OrderId,
@@ -43,7 +60,11 @@ public sealed record OrderStatusResult(
     string? LicenseKey,
     DateTimeOffset? ExpiresAt,
     decimal Amount,
-    string Currency);
+    string Currency,
+    decimal BaseAmount,
+    decimal DiscountAmount,
+    string? AppliedCouponCode,
+    int? AppliedDiscountPercent);
 
 public sealed record WebhookProcessResult(bool Success, string Message);
 

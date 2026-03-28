@@ -22,11 +22,17 @@ public sealed class BillingModel : PageModel
     }
 
     public decimal PriceUsd { get; private set; }
+    public decimal InitialBaseAmount { get; private set; }
+    public decimal InitialDiscountAmount { get; private set; }
+    public decimal InitialFinalAmount { get; private set; }
     public List<PaymentAttemptItem> Attempts { get; private set; } = [];
 
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
         PriceUsd = _payKryptOptions.Value.PriceUsd;
+        InitialBaseAmount = PriceUsd;
+        InitialDiscountAmount = 0m;
+        InitialFinalAmount = PriceUsd;
 
         var userId = User.GetUserId();
         if (userId is null)
@@ -54,12 +60,16 @@ public sealed class BillingModel : PageModel
                         {
                             AttemptId = "n/a",
                             OrderId = order.Id,
+                            BaseAmount = order.BaseFiatAmount,
+                            DiscountAmount = order.DiscountAmount,
                             Amount = order.FiatAmount,
                             Currency = order.Currency,
                             State = order.Status,
                             CreatedAt = order.CreatedAt,
                             UpdatedAt = order.UpdatedAt,
-                            IssuedLicenseKey = order.IssuedLicense?.LicenseKey
+                            IssuedLicenseKey = order.IssuedLicense?.LicenseKey,
+                            AppliedCouponCode = order.DiscountCode,
+                            AppliedDiscountPercent = order.DiscountPercent
                         }
                     };
                 }
@@ -68,13 +78,17 @@ public sealed class BillingModel : PageModel
                 {
                     AttemptId = intent.PayKryptIntentId,
                     OrderId = order.Id,
+                    BaseAmount = order.BaseFiatAmount,
+                    DiscountAmount = order.DiscountAmount,
                     Amount = order.FiatAmount,
                     Currency = order.Currency,
                     State = intent.Status,
                     CreatedAt = intent.CreatedAt,
                     UpdatedAt = intent.UpdatedAt,
                     IssuedLicenseKey = order.IssuedLicense?.LicenseKey,
-                    ProviderMessage = ExtractProviderMessage(intent.RawJson)
+                    ProviderMessage = ExtractProviderMessage(intent.RawJson),
+                    AppliedCouponCode = order.DiscountCode,
+                    AppliedDiscountPercent = order.DiscountPercent
                 });
             })
             .OrderByDescending(x => x.CreatedAt)
@@ -130,6 +144,8 @@ public sealed class BillingModel : PageModel
     {
         public string AttemptId { get; set; } = string.Empty;
         public Guid OrderId { get; set; }
+        public decimal BaseAmount { get; set; }
+        public decimal DiscountAmount { get; set; }
         public decimal Amount { get; set; }
         public string Currency { get; set; } = "USD";
         public string State { get; set; } = string.Empty;
@@ -137,5 +153,7 @@ public sealed class BillingModel : PageModel
         public DateTimeOffset UpdatedAt { get; set; }
         public string? IssuedLicenseKey { get; set; }
         public string? ProviderMessage { get; set; }
+        public string? AppliedCouponCode { get; set; }
+        public int? AppliedDiscountPercent { get; set; }
     }
 }

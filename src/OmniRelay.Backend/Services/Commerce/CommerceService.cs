@@ -15,6 +15,7 @@ public sealed class CommerceService : ICommerceService
     {
         WriteIndented = false
     };
+    private const string CheckoutCurrency = "USD";
 
     private readonly AppDbContext _dbContext;
     private readonly IPayKryptClient _payKryptClient;
@@ -88,19 +89,70 @@ public sealed class CommerceService : ICommerceService
         return new TrialResult(true, "Trial started successfully.", license.LicenseKey, trialExpiresAt);
     }
 
-    public async Task<CreateCheckoutResult> CreateCheckoutIntentAsync(Guid userId, string userEmail, CancellationToken cancellationToken)
+    public async Task<CheckoutQuoteResult> QuoteCheckoutAsync(Guid userId, string? couponCode, CancellationToken cancellationToken)
+    {
+        _ = userId;
+        var payOpts = _payKryptOptions.Value;
+        var baseAmount = RoundMoney(payOpts.PriceUsd);
+        var resolution = await ResolveCouponAsync(couponCode, cancellationToken);
+        if (!resolution.Success)
+        {
+            return new CheckoutQuoteResult(
+                false,
+                resolution.Message,
+                baseAmount,
+                0m,
+                baseAmount,
+                CheckoutCurrency,
+                null,
+                null);
+        }
+
+        var discountPercent = resolution.Coupon?.DiscountPercent ?? 0;
+        var discountAmount = RoundMoney(baseAmount * discountPercent / 100m);
+        var finalAmount = RoundMoney(Math.Max(0m, baseAmount - discountAmount));
+
+        return new CheckoutQuoteResult(
+            true,
+            "Quote ready.",
+            baseAmount,
+            discountAmount,
+            finalAmount,
+            CheckoutCurrency,
+            resolution.Coupon?.Code,
+            resolution.Coupon?.DiscountPercent);
+    }
+
+    public async Task<CreateCheckoutResult> CreateCheckoutIntentAsync(Guid userId, string userEmail, string? couponCode, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         var payOpts = _payKryptOptions.Value;
+        var baseAmount = RoundMoney(payOpts.PriceUsd);
+        var resolution = await ResolveCouponAsync(couponCode, cancellationToken);
+        if (!resolution.Success)
+        {
+            throw new InvalidOperationException(resolution.Message);
+        }
+
+        var coupon = resolution.Coupon;
+        var discountPercent = coupon?.DiscountPercent ?? 0;
+        var discountAmount = RoundMoney(baseAmount * discountPercent / 100m);
+        var finalAmount = RoundMoney(Math.Max(0m, baseAmount - discountAmount));
 
         var order = new CommerceOrderEntity
         {
             Id = Guid.NewGuid(),
             UserId = userId,
             OrderType = "license_purchase",
-            FiatAmount = payOpts.PriceUsd,
-            Currency = "USD",
+            BaseFiatAmount = baseAmount,
+            DiscountAmount = discountAmount,
+            FiatAmount = finalAmount,
+            Currency = CheckoutCurrency,
             Status = "creating_intent",
+            DiscountCouponId = coupon?.Id,
+            DiscountCode = coupon?.Code,
+            DiscountPercent = coupon?.DiscountPercent,
+            DiscountConsumed = false,
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -110,8 +162,8 @@ public sealed class CommerceService : ICommerceService
 
         var createRequest = new PayKryptCreateIntentRequest
         {
-            Amount = payOpts.PriceUsd.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture),
-            Currency = "USD",
+            Amount = finalAmount.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture),
+            Currency = CheckoutCurrency,
             Description = $"OmniRelay License Order {order.Id}",
             CustomerEmail = userEmail,
             AllowedChains = payOpts.AllowedChains.Count == 0 ? null : payOpts.AllowedChains,
@@ -151,7 +203,13 @@ public sealed class CommerceService : ICommerceService
             intent.Id,
             intent.Status,
             intent.ExpiresAt,
-            intent.DepositAddresses ?? []);
+            intent.DepositAddresses ?? [],
+            baseAmount,
+            discountAmount,
+            finalAmount,
+            CheckoutCurrency,
+            coupon?.Code,
+            coupon?.DiscountPercent);
     }
 
     public async Task<OrderStatusResult?> GetOrderStatusAsync(Guid userId, Guid orderId, bool refreshFromProvider, CancellationToken cancellationToken)
@@ -169,7 +227,20 @@ public sealed class CommerceService : ICommerceService
         var intent = order.PayKryptIntents.OrderByDescending(x => x.CreatedAt).FirstOrDefault();
         if (intent is null)
         {
-            return new OrderStatusResult(order.Id, order.Status, string.Empty, "missing", false, null, null, order.FiatAmount, order.Currency);
+            return new OrderStatusResult(
+                order.Id,
+                order.Status,
+                string.Empty,
+                "missing",
+                false,
+                null,
+                null,
+                order.FiatAmount,
+                order.Currency,
+                order.BaseFiatAmount,
+                order.DiscountAmount,
+                order.DiscountCode,
+                order.DiscountPercent);
         }
 
         if (refreshFromProvider)
@@ -190,7 +261,11 @@ public sealed class CommerceService : ICommerceService
             order.IssuedLicense?.LicenseKey,
             intent.ExpiresAt,
             order.FiatAmount,
-            order.Currency);
+            order.Currency,
+            order.BaseFiatAmount,
+            order.DiscountAmount,
+            order.DiscountCode,
+            order.DiscountPercent);
     }
 
     public async Task<WebhookProcessResult> ProcessWebhookAsync(string payload, string? externalEventId, CancellationToken cancellationToken)
@@ -280,6 +355,19 @@ public sealed class CommerceService : ICommerceService
         {
             intentEntity.Order.Status = "paid";
 
+            if (intentEntity.Order.DiscountCouponId.HasValue && !intentEntity.Order.DiscountConsumed)
+            {
+                var coupon = await _dbContext.DiscountCoupons.FirstOrDefaultAsync(
+                    x => x.Id == intentEntity.Order.DiscountCouponId.Value,
+                    cancellationToken);
+                if (coupon is not null)
+                {
+                    coupon.TimesRedeemed += 1;
+                }
+
+                intentEntity.Order.DiscountConsumed = true;
+            }
+
             if (!intentEntity.Order.IssuedLicenseId.HasValue)
             {
                 await _licenseIssuanceService.IssuePaidLicenseAsync(intentEntity.Order.UserId, intentEntity.Order.Id, cancellationToken);
@@ -337,5 +425,59 @@ public sealed class CommerceService : ICommerceService
         Random.Shared.NextBytes(buffer);
         var hex = Convert.ToHexString(buffer);
         return $"OMNI-{prefix}-{hex[..4]}-{hex[4..8]}-{hex[8..12]}";
+    }
+
+    private static decimal RoundMoney(decimal amount)
+        => decimal.Round(amount, 2, MidpointRounding.AwayFromZero);
+
+    private async Task<CouponResolution> ResolveCouponAsync(string? couponCode, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeCouponCode(couponCode);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return CouponResolution.Ok(null);
+        }
+
+        var coupon = await _dbContext.DiscountCoupons
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.NormalizedCode == normalized, cancellationToken);
+
+        if (coupon is null)
+        {
+            return CouponResolution.Fail("Coupon code is invalid.");
+        }
+
+        if (!coupon.IsActive || coupon.DisabledAt.HasValue)
+        {
+            return CouponResolution.Fail("Coupon code is disabled.");
+        }
+
+        if (coupon.TimesRedeemed >= coupon.MaxUses)
+        {
+            return CouponResolution.Fail("Coupon code has reached its max usage.");
+        }
+
+        if (coupon.DiscountPercent is < 1 or > 99)
+        {
+            return CouponResolution.Fail("Coupon discount is invalid.");
+        }
+
+        return CouponResolution.Ok(coupon);
+    }
+
+    private static string? NormalizeCouponCode(string? couponCode)
+    {
+        if (string.IsNullOrWhiteSpace(couponCode))
+        {
+            return null;
+        }
+
+        return couponCode.Trim().ToUpperInvariant();
+    }
+
+    private readonly record struct CouponResolution(bool Success, string Message, DiscountCouponEntity? Coupon)
+    {
+        public static CouponResolution Ok(DiscountCouponEntity? coupon) => new(true, string.Empty, coupon);
+        public static CouponResolution Fail(string message) => new(false, message, null);
     }
 }

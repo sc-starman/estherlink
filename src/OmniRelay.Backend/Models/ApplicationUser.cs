@@ -9,4 +9,5 @@ public sealed class ApplicationUser : IdentityUser<Guid>
 
     public ICollection<Data.Entities.UserLicenseEntity> UserLicenses { get; set; } = [];
     public ICollection<Data.Entities.CommerceOrderEntity> Orders { get; set; } = [];
+    public ICollection<Data.Entities.DiscountCouponEntity> CreatedDiscountCoupons { get; set; } = [];
 }

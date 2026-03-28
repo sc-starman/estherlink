@@ -50,9 +50,13 @@ public sealed class BillingModel : PageModel
             {
                 x.Id,
                 UserEmail = x.User.Email,
+                x.BaseFiatAmount,
+                x.DiscountAmount,
                 x.FiatAmount,
                 x.Currency,
                 x.Status,
+                x.DiscountCode,
+                x.DiscountPercent,
                 x.CreatedAt,
                 x.UpdatedAt,
                 IssuedLicenseKey = x.IssuedLicense != null ? x.IssuedLicense.LicenseKey : null,
@@ -79,9 +83,13 @@ public sealed class BillingModel : PageModel
         {
             OrderId = x.Id,
             UserEmail = x.UserEmail ?? string.Empty,
+            BaseAmount = x.BaseFiatAmount,
+            DiscountAmount = x.DiscountAmount,
             Amount = x.FiatAmount,
             Currency = x.Currency,
             OrderStatus = x.Status,
+            AppliedCouponCode = x.DiscountCode,
+            AppliedDiscountPercent = x.DiscountPercent,
             CreatedAt = x.CreatedAt,
             UpdatedAt = x.UpdatedAt,
             IssuedLicenseKey = x.IssuedLicenseKey,
@@ -141,9 +149,13 @@ public sealed class BillingModel : PageModel
     {
         public Guid OrderId { get; set; }
         public string UserEmail { get; set; } = string.Empty;
+        public decimal BaseAmount { get; set; }
+        public decimal DiscountAmount { get; set; }
         public decimal Amount { get; set; }
         public string Currency { get; set; } = "USD";
         public string OrderStatus { get; set; } = string.Empty;
+        public string? AppliedCouponCode { get; set; }
+        public int? AppliedDiscountPercent { get; set; }
         public DateTimeOffset CreatedAt { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
         public string? IssuedLicenseKey { get; set; }

@@ -31,7 +31,10 @@
                         <tr>
                             <th class="text-left px-4 py-3">Order ID</th>
                             <th class="text-left px-4 py-3">User Email</th>
-                            <th class="text-left px-4 py-3">Amount</th>
+                            <th class="text-left px-4 py-3">Base</th>
+                            <th class="text-left px-4 py-3">Discount</th>
+                            <th class="text-left px-4 py-3">Final</th>
+                            <th class="text-left px-4 py-3">Coupon</th>
                             <th class="text-left px-4 py-3">Currency</th>
                             <th class="text-left px-4 py-3">Order Status</th>
                             <th class="text-left px-4 py-3">Created (UTC)</th>
@@ -49,7 +52,14 @@
                         <tr class="border-t border-slate-800">
                             <td class="px-4 py-3 font-mono text-xs">@item.OrderId</td>
                             <td class="px-4 py-3">@item.UserEmail</td>
-                            <td class="px-4 py-3">@item.Amount.ToString("0.00")</td>
+                            <td class="px-4 py-3">@item.BaseAmount.ToString("0.00")</td>
+                            <td class="px-4 py-3 text-emerald-300">-@item.DiscountAmount.ToString("0.00")</td>
+                            <td class="px-4 py-3 font-semibold">@item.Amount.ToString("0.00")</td>
+                            <td class="px-4 py-3 font-mono text-xs">
+                                @(string.IsNullOrWhiteSpace(item.AppliedCouponCode)
+                                    ? "none"
+                                    : $"{item.AppliedCouponCode} ({item.AppliedDiscountPercent ?? 0}%)")
+                            </td>
                             <td class="px-4 py-3">@item.Currency</td>
                             <td class="px-4 py-3">@item.OrderStatus</td>
                             <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>

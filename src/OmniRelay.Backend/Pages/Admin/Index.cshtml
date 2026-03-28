@@ -11,10 +11,10 @@
     <section class="space-y-6">
         <div>
             <h1 class="text-3xl font-bold">Admin Panel</h1>
-            <p class="text-slate-400 mt-1">Read-only operational views for licenses and billing.</p>
+            <p class="text-slate-400 mt-1">Operational views for licenses and billing, plus discount coupon management.</p>
         </div>
 
-        <div class="grid gap-4 md:grid-cols-3">
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <article class="rounded-xl border border-slate-800 bg-slate-900 p-5">
                 <p class="text-xs uppercase tracking-widest text-slate-400">Trial Licenses</p>
                 <p class="mt-2 text-3xl font-bold">@Model.TrialLicenses</p>
@@ -31,6 +31,13 @@
                 <p class="text-xs uppercase tracking-widest text-slate-400">Billing Orders</p>
                 <p class="mt-2 text-3xl font-bold">@Model.BillingOrders</p>
                 <a href="/admin/billing" class="mt-3 inline-block text-sm text-cyan-300 hover:text-cyan-200">Open list</a>
+            </article>
+
+            <article class="rounded-xl border border-slate-800 bg-slate-900 p-5">
+                <p class="text-xs uppercase tracking-widest text-slate-400">Discount Coupons</p>
+                <p class="mt-2 text-3xl font-bold">@Model.DiscountCoupons</p>
+                <p class="mt-1 text-xs text-slate-400">Active: @Model.ActiveDiscountCoupons</p>
+                <a href="/admin/discounts" class="mt-3 inline-block text-sm text-cyan-300 hover:text-cyan-200">Open list</a>
             </article>
         </div>
     </section>

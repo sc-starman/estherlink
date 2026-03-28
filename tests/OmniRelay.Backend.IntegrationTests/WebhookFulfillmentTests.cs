@@ -21,6 +21,7 @@ public sealed class WebhookFulfillmentTests : IClassFixture<IntegrationTestWebAp
 
         var userId = Guid.NewGuid();
         var orderId = Guid.NewGuid();
+        var couponId = Guid.NewGuid();
         var intentId = "pi_test_confirmed_001";
 
         _factory.PayKryptClient.Intents[intentId] = new OmniRelay.Backend.Services.Commerce.PayKryptIntentResponse
@@ -47,14 +48,33 @@ public sealed class WebhookFulfillmentTests : IClassFixture<IntegrationTestWebAp
                 EmailConfirmed = true
             });
 
+            dbContext.DiscountCoupons.Add(new DiscountCouponEntity
+            {
+                Id = couponId,
+                Code = "OMNI-WEBHOOK-25",
+                NormalizedCode = "OMNI-WEBHOOK-25",
+                DiscountPercent = 25,
+                MaxUses = 2,
+                TimesRedeemed = 0,
+                IsActive = true,
+                CreatedAt = DateTimeOffset.UtcNow,
+                CreatedByUserId = userId
+            });
+
             dbContext.CommerceOrders.Add(new CommerceOrderEntity
             {
                 Id = orderId,
                 UserId = userId,
                 OrderType = "license_purchase",
-                FiatAmount = 149m,
+                BaseFiatAmount = 149m,
+                DiscountAmount = 37.25m,
+                FiatAmount = 111.75m,
                 Currency = "USD",
                 Status = "awaiting_payment",
+                DiscountCouponId = couponId,
+                DiscountCode = "OMNI-WEBHOOK-25",
+                DiscountPercent = 25,
+                DiscountConsumed = false,
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow
             });
@@ -106,6 +126,11 @@ public sealed class WebhookFulfillmentTests : IClassFixture<IntegrationTestWebAp
 
             var userLicenses = dbContext.UserLicenses.Count();
             Assert.Equal(1, userLicenses);
+
+            var coupon = await dbContext.DiscountCoupons.FindAsync(couponId);
+            Assert.NotNull(coupon);
+            Assert.Equal(1, coupon!.TimesRedeemed);
+            Assert.True(order.DiscountConsumed);
 
             var webhookEvents = dbContext.PayKryptWebhookEvents.Count();
             Assert.Equal(1, webhookEvents);

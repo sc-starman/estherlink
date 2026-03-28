@@ -1,0 +1,182 @@
+@page "/admin/discounts"
+@model OmniRelay.Backend.Pages.Admin.DiscountsModel
+@{
+    ViewData["Title"] = "Admin Discounts";
+    ViewData["AdminNav"] = "discounts";
+}
+
+<div class="max-w-7xl mx-auto px-4 py-10 grid md:grid-cols-[240px_1fr] gap-6">
+    <partial name="_AdminSidebar" view-data="ViewData" />
+
+    <section class="space-y-5">
+        <div>
+            <h1 class="text-3xl font-bold">Discount Coupons</h1>
+            <p class="text-slate-400 mt-1">Create and manage reusable percentage coupons for billing checkout.</p>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Model.NoticeMessage))
+        {
+            <div class="rounded-lg border border-emerald-500/50 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-200">
+                @Model.NoticeMessage
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
+        {
+            <div class="rounded-lg border border-rose-500/50 bg-rose-950/30 px-4 py-3 text-sm text-rose-200">
+                @Model.ErrorMessage
+            </div>
+        }
+
+        <section class="rounded-xl border border-slate-800 bg-slate-900 p-5">
+            <h2 class="text-lg font-semibold">Create Coupon</h2>
+            <p class="mt-1 text-sm text-slate-400">Leave code empty for automatic secure generation.</p>
+
+            <form method="post" asp-page-handler="Create" class="mt-4 grid gap-4 md:grid-cols-4">
+                <div class="md:col-span-2 space-y-1">
+                    <label asp-for="Input.Code" class="text-sm text-slate-300">Coupon Code (optional)</label>
+                    <input asp-for="Input.Code" maxlength="64" class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none" />
+                    <p class="text-xs text-slate-500">Allowed: letters, digits, '-' and '_'.</p>
+                    <span asp-validation-for="Input.Code" class="text-xs text-rose-300"></span>
+                </div>
+
+                <div class="space-y-1">
+                    <label asp-for="Input.DiscountPercent" class="text-sm text-slate-300">Discount %</label>
+                    <input asp-for="Input.DiscountPercent" type="number" min="1" max="99" class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none" />
+                    <span asp-validation-for="Input.DiscountPercent" class="text-xs text-rose-300"></span>
+                </div>
+
+                <div class="space-y-1">
+                    <label asp-for="Input.MaxUses" class="text-sm text-slate-300">Max Uses</label>
+                    <input asp-for="Input.MaxUses" type="number" min="1" class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none" />
+                    <span asp-validation-for="Input.MaxUses" class="text-xs text-rose-300"></span>
+                </div>
+
+                <div class="md:col-span-4 flex items-center gap-3">
+                    <button type="submit" class="rounded bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400">Create Coupon</button>
+                    <div asp-validation-summary="ModelOnly" class="text-xs text-rose-300"></div>
+                </div>
+            </form>
+        </section>
+
+        <div class="flex items-center justify-between text-sm text-slate-300">
+            <p>Total: <strong>@Model.TotalItems</strong></p>
+            <p>Active: <strong>@Model.ActiveItems</strong></p>
+            <p>Page @Model.PageNumber / @Model.TotalPages</p>
+        </div>
+
+        @if (Model.Items.Count == 0)
+        {
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">No coupons found.</div>
+        }
+        else
+        {
+            <div class="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-950/70 text-slate-300">
+                        <tr>
+                            <th class="text-left px-4 py-3">Code</th>
+                            <th class="text-left px-4 py-3">Discount</th>
+                            <th class="text-left px-4 py-3">Used / Max</th>
+                            <th class="text-left px-4 py-3">Remaining</th>
+                            <th class="text-left px-4 py-3">Status</th>
+                            <th class="text-left px-4 py-3">Created (UTC)</th>
+                            <th class="text-left px-4 py-3">Creator</th>
+                            <th class="text-left px-4 py-3">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var item in Model.Items)
+                    {
+                        <tr class="border-t border-slate-800">
+                            <td class="px-4 py-3">
+                                <div class="flex items-center gap-2">
+                                    <code class="font-mono text-xs text-cyan-300">@item.Code</code>
+                                    <button type="button" class="copy-discount-code rounded bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700" data-code="@item.Code">Copy</button>
+                                </div>
+                            </td>
+                            <td class="px-4 py-3">@item.DiscountPercent%</td>
+                            <td class="px-4 py-3">@item.TimesRedeemed / @item.MaxUses</td>
+                            <td class="px-4 py-3">@item.RemainingUses</td>
+                            <td class="px-4 py-3">
+                                @if (item.IsActive)
+                                {
+                                    <span class="rounded-full bg-emerald-500/20 px-2 py-1 text-xs text-emerald-300">active</span>
+                                }
+                                else
+                                {
+                                    <span class="rounded-full bg-slate-700 px-2 py-1 text-xs text-slate-300">disabled</span>
+                                }
+                            </td>
+                            <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>
+                            <td class="px-4 py-3">@(string.IsNullOrWhiteSpace(item.CreatorEmail) ? "n/a" : item.CreatorEmail)</td>
+                            <td class="px-4 py-3">
+                                @if (item.IsActive)
+                                {
+                                    <form method="post" asp-page-handler="Disable" class="inline">
+                                        <input type="hidden" name="id" value="@item.Id" />
+                                        <input type="hidden" name="PageNumber" value="@Model.PageNumber" />
+                                        <button type="submit" class="rounded border border-rose-400 px-2 py-1 text-xs text-rose-200 hover:bg-rose-950/40">
+                                            Disable
+                                        </button>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <span class="text-xs text-slate-500">n/a</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="flex items-center justify-between">
+                @if (Model.PageNumber > 1)
+                {
+                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/discounts?pageNumber=@(Model.PageNumber - 1)">Previous</a>
+                }
+                else
+                {
+                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">Previous</span>
+                }
+
+                @if (Model.PageNumber < Model.TotalPages)
+                {
+                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/discounts?pageNumber=@(Model.PageNumber + 1)">Next</a>
+                }
+                else
+                {
+                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">Next</span>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@section Scripts {
+    <script>
+        (function () {
+            document.querySelectorAll(".copy-discount-code").forEach(function (button) {
+                button.addEventListener("click", async function () {
+                    const code = button.getAttribute("data-code") || "";
+                    if (!code) return;
+                    try {
+                        await navigator.clipboard.writeText(code);
+                        const oldText = button.textContent;
+                        button.textContent = "Copied";
+                        setTimeout(function () {
+                            button.textContent = oldText || "Copy";
+                        }, 1000);
+                    } catch {
+                        button.textContent = "Failed";
+                        setTimeout(function () {
+                            button.textContent = "Copy";
+                        }, 1000);
+                    }
+                });
+            });
+        })();
+    </script>
+}

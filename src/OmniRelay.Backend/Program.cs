@@ -405,6 +405,22 @@ appApi.MapPost("/trial/request", async (
         : Results.BadRequest(result);
 });
 
+appApi.MapPost("/checkout/quote", async (
+    HttpContext httpContext,
+    ICommerceService commerceService,
+    CancellationToken cancellationToken) =>
+{
+    var userId = GetUserId(httpContext.User);
+    if (userId is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var request = await ReadCheckoutRequestAsync(httpContext, cancellationToken);
+    var result = await commerceService.QuoteCheckoutAsync(userId.Value, request?.CouponCode, cancellationToken);
+    return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+});
+
 appApi.MapPost("/checkout/create-intent", async (
     HttpContext httpContext,
     ICommerceService commerceService,
@@ -420,7 +436,8 @@ appApi.MapPost("/checkout/create-intent", async (
 
     try
     {
-        var result = await commerceService.CreateCheckoutIntentAsync(userId.Value, email, cancellationToken);
+        var request = await ReadCheckoutRequestAsync(httpContext, cancellationToken);
+        var result = await commerceService.CreateCheckoutIntentAsync(userId.Value, email, request?.CouponCode, cancellationToken);
         return Results.Ok(result);
     }
     catch (Exception ex)
@@ -1034,6 +1051,23 @@ static Guid? GetUserId(ClaimsPrincipal principal)
     return Guid.TryParse(value, out var parsed) ? parsed : null;
 }
 
+static async Task<CheckoutRequest?> ReadCheckoutRequestAsync(HttpContext httpContext, CancellationToken cancellationToken)
+{
+    if ((httpContext.Request.ContentLength ?? 0) <= 0)
+    {
+        return null;
+    }
+
+    try
+    {
+        return await httpContext.Request.ReadFromJsonAsync<CheckoutRequest>(cancellationToken: cancellationToken);
+    }
+    catch
+    {
+        return null;
+    }
+}
+
 static bool IsValidSemVer(string value)
 {
     return !string.IsNullOrWhiteSpace(value) && NuGetVersion.TryParse(value.Trim(), out _);
@@ -1235,5 +1269,7 @@ static void ValidateEmailDeliveryConfiguration(IServiceProvider serviceProvider)
 
     throw new InvalidOperationException("EmailDelivery:Provider must be one of: smtp, mail_service.");
 }
+
+public sealed record CheckoutRequest(string? CouponCode);
 
 public partial class Program;
