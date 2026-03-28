@@ -1,5 +1,7 @@
 using OmniRelay.Backend.Configuration;
+using OmniRelay.Backend.Localization;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 
 namespace OmniRelay.Backend.Pages;
@@ -7,10 +9,14 @@ namespace OmniRelay.Backend.Pages;
 public sealed class IndexModel : PageModel
 {
     private readonly IOptions<WebOptions> _webOptions;
+    private readonly IStringLocalizer<SharedResource> _localizer;
 
-    public IndexModel(IOptions<WebOptions> webOptions)
+    public IndexModel(
+        IOptions<WebOptions> webOptions,
+        IStringLocalizer<SharedResource> localizer)
     {
         _webOptions = webOptions;
+        _localizer = localizer;
     }
 
     public LandingContentOptions Landing { get; private set; } = new();
@@ -26,88 +32,88 @@ public sealed class IndexModel : PageModel
         var configured = options.LandingContent ?? new LandingContentOptions();
         var landing = new LandingContentOptions
         {
-            HeroHeadline = FirstNonEmpty(configured.HeroHeadline, "Secure Connectivity Across Stratified Internet"),
-            HeroSubheadline = FirstNonEmpty(configured.HeroSubheadline, "OmniRelay helps you maintain reliable, private internet routing across layered and restricted network environments."),
-            PrimaryCtaText = FirstNonEmpty(configured.PrimaryCtaText, "Start Free Trial"),
+            HeroHeadline = FirstNonEmpty(configured.HeroHeadline, _localizer["Index.Config.HeroHeadline"]),
+            HeroSubheadline = FirstNonEmpty(configured.HeroSubheadline, _localizer["Index.Config.HeroSubheadline"]),
+            PrimaryCtaText = FirstNonEmpty(configured.PrimaryCtaText, _localizer["Index.Config.PrimaryCtaText"]),
             PrimaryCtaUrl = FirstNonEmpty(configured.PrimaryCtaUrl, "/account/register"),
-            SecondaryCtaText = FirstNonEmpty(configured.SecondaryCtaText, "View Deployment Guide"),
+            SecondaryCtaText = FirstNonEmpty(configured.SecondaryCtaText, _localizer["Index.Config.SecondaryCtaText"]),
             SecondaryCtaUrl = FirstNonEmpty(configured.SecondaryCtaUrl, "#how-it-works"),
 
             BenefitBlocks = NonEmptyOrDefault(configured.BenefitBlocks, [
-                "Layered connectivity orchestration across segmented access environments.",
-                "Private relay control so you are not dependent on public VPN providers.",
-                "Policy-based operation for predictable behavior during network changes.",
-                "Fast recovery and resilience during outages and route disruptions.",
-                "Operational visibility for path health, readiness, and continuity decisions."
+                _localizer["Index.Config.Benefit1"],
+                _localizer["Index.Config.Benefit2"],
+                _localizer["Index.Config.Benefit3"],
+                _localizer["Index.Config.Benefit4"],
+                _localizer["Index.Config.Benefit5"]
             ]),
 
             ResultCards = NonEmptyResultCards(configured.ResultCards, [
-                new LandingResultCardOptions { Value = "38%", Label = "fewer access-related support tickets" },
-                new LandingResultCardOptions { Value = "2.7x", Label = "faster first-time deployment cycle" },
-                new LandingResultCardOptions { Value = "99.9%", Label = "gateway uptime during peak periods" }
+                new LandingResultCardOptions { Value = "38%", Label = _localizer["Index.Config.Result1"] },
+                new LandingResultCardOptions { Value = "2.7x", Label = _localizer["Index.Config.Result2"] },
+                new LandingResultCardOptions { Value = "99.9%", Label = _localizer["Index.Config.Result3"] }
             ]),
 
             Testimonials = NonEmptyTestimonials(configured.Testimonials, [
                 new LandingTestimonialOptions
                 {
-                    Quote = "Before OmniRelay, every network change became an incident. Now onboarding new locations is predictable and calm.",
+                    Quote = _localizer["Index.Config.Testimonial1.Quote"],
                     Author = "S. Rahimi",
-                    Role = "Infrastructure Lead"
+                    Role = _localizer["Index.Config.Testimonial1.Role"]
                 },
                 new LandingTestimonialOptions
                 {
-                    Quote = "Our team stopped debating routing workarounds and started shipping. Reliability improved in the first week.",
+                    Quote = _localizer["Index.Config.Testimonial2.Quote"],
                     Author = "M. Daryan",
-                    Role = "DevOps Manager"
+                    Role = _localizer["Index.Config.Testimonial2.Role"]
                 }
             ]),
 
-            TrustBarText = FirstNonEmpty(configured.TrustBarText, "Used by operations and infrastructure teams managing restricted network environments."),
+            TrustBarText = FirstNonEmpty(configured.TrustBarText, _localizer["Index.Config.TrustBarText"]),
 
             HowItWorksSteps = NonEmptyOrDefault(configured.HowItWorksSteps, [
-                "Define the available network links in your environment.",
-                "Apply your routing policy and let OmniRelay establish secure relay paths.",
-                "Monitor health, validate access, and maintain continuity as conditions change."
+                _localizer["Index.Config.How1"],
+                _localizer["Index.Config.How2"],
+                _localizer["Index.Config.How3"]
             ]),
 
-            OfferTitle = FirstNonEmpty(configured.OfferTitle, "One-Time License"),
-            OfferSummary = FirstNonEmpty(configured.OfferSummary, "Get full OmniRelay capabilities with a single purchase and predictable ownership cost."),
-            OfferPriceAnchor = FirstNonEmpty(configured.OfferPriceAnchor, "$299 one-time license"),
-            OfferRiskReducer = FirstNonEmpty(configured.OfferRiskReducer, "Start with a 2-day free trial before purchase."),
-            MidCtaText = FirstNonEmpty(configured.MidCtaText, "Start Free Trial"),
+            OfferTitle = FirstNonEmpty(configured.OfferTitle, _localizer["Index.Config.OfferTitle"]),
+            OfferSummary = FirstNonEmpty(configured.OfferSummary, _localizer["Index.Config.OfferSummary"]),
+            OfferPriceAnchor = FirstNonEmpty(configured.OfferPriceAnchor, _localizer["Index.Config.OfferPriceAnchor"]),
+            OfferRiskReducer = FirstNonEmpty(configured.OfferRiskReducer, _localizer["Index.Config.OfferRiskReducer"]),
+            MidCtaText = FirstNonEmpty(configured.MidCtaText, _localizer["Index.Config.MidCtaText"]),
             MidCtaUrl = FirstNonEmpty(configured.MidCtaUrl, "/account/register"),
 
             Faqs = NonEmptyFaqs(configured.Faqs, [
                 new LandingFaqOptions
                 {
-                    Question = "How long does setup take?",
-                    Answer = "Most teams complete initial setup in one session and validate access the same day."
+                    Question = _localizer["Index.Config.Faq1.Q"],
+                    Answer = _localizer["Index.Config.Faq1.A"]
                 },
                 new LandingFaqOptions
                 {
-                    Question = "Do we need to redesign our network?",
-                    Answer = "No. OmniRelay is designed to fit existing environments and improve control without major topology changes."
+                    Question = _localizer["Index.Config.Faq2.Q"],
+                    Answer = _localizer["Index.Config.Faq2.A"]
                 },
                 new LandingFaqOptions
                 {
-                    Question = "Can we trial before paying?",
-                    Answer = "Yes. You can start with a 2-day trial to validate fit and performance before purchase."
+                    Question = _localizer["Index.Config.Faq3.Q"],
+                    Answer = _localizer["Index.Config.Faq3.A"]
                 },
                 new LandingFaqOptions
                 {
-                    Question = "Is support available during rollout?",
-                    Answer = "Yes. Documentation and operational guidance are included, with a clear runbook for common issues."
+                    Question = _localizer["Index.Config.Faq4.Q"],
+                    Answer = _localizer["Index.Config.Faq4.A"]
                 },
                 new LandingFaqOptions
                 {
-                    Question = "Will this work for browser and app traffic?",
-                    Answer = "Yes. The platform is built to handle real-world application patterns with operational controls for reliability."
+                    Question = _localizer["Index.Config.Faq5.Q"],
+                    Answer = _localizer["Index.Config.Faq5.A"]
                 }
             ]),
 
-            ClosingHeadline = FirstNonEmpty(configured.ClosingHeadline, "Build your own anti-censorship connectivity layer."),
-            ClosingBody = FirstNonEmpty(configured.ClosingBody, "Start your free trial, validate OmniRelay in your environment, and move to controlled private routing with a one-time license."),
-            FinalCtaText = FirstNonEmpty(configured.FinalCtaText, "Start Free Trial"),
+            ClosingHeadline = FirstNonEmpty(configured.ClosingHeadline, _localizer["Index.Config.ClosingHeadline"]),
+            ClosingBody = FirstNonEmpty(configured.ClosingBody, _localizer["Index.Config.ClosingBody"]),
+            FinalCtaText = FirstNonEmpty(configured.FinalCtaText, _localizer["Index.Config.FinalCtaText"]),
             FinalCtaUrl = FirstNonEmpty(configured.FinalCtaUrl, "/account/register")
         };
 

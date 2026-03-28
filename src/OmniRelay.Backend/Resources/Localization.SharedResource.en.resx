@@ -1,0 +1,1533 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="Billing.Table.CreatedAt" xml:space="preserve">
+    <value>Created at (UTC)</value>
+  </data>
+  <data name="Docs.Monitoring.Row6.Expected" xml:space="preserve">
+    <value>Healthy</value>
+  </data>
+  <data name="Docs.Requirements.3" xml:space="preserve">
+    <value>Network adapters: at least two active adapters visible in Windows when using split-network scenarios.</value>
+  </data>
+  <data name="Docs.Requirements.2" xml:space="preserve">
+    <value>User permissions: local Administrator access is recommended for install/start/stop operations.</value>
+  </data>
+  <data name="Contact.Msg.ValidationFailed" xml:space="preserve">
+    <value>Please fix the highlighted fields and try again.</value>
+  </data>
+  <data name="Docs.Requirements.4" xml:space="preserve">
+    <value>Internet expectations: at least one path with outbound access for setup, validation, and license checks.</value>
+  </data>
+  <data name="Admin.Billing.Table.ProviderMessage" xml:space="preserve">
+    <value>Provider message</value>
+  </data>
+  <data name="Account.AccessDenied.Body" xml:space="preserve">
+    <value>You do not have permission to access this page.</value>
+  </data>
+  <data name="Common.Total" xml:space="preserve">
+    <value>Total:</value>
+  </data>
+  <data name="ConfirmEmail.Msg.InvalidLink" xml:space="preserve">
+    <value>Invalid confirmation link.</value>
+  </data>
+  <data name="Dashboard.Metric.LatestBuild" xml:space="preserve">
+    <value>Latest build</value>
+  </data>
+  <data name="Docs.Update.4" xml:space="preserve">
+    <value>Run the installer and complete upgrade.</value>
+  </data>
+  <data name="Index.Config.OfferRiskReducer" xml:space="preserve">
+    <value>Start with a 2-day free trial before purchase.</value>
+  </data>
+  <data name="Docs.Monitoring.Row1.Meaning" xml:space="preserve">
+    <value>Shows whether the local relay service is running.</value>
+  </data>
+  <data name="Dashboard.Metric.Trial" xml:space="preserve">
+    <value>Trial</value>
+  </data>
+  <data name="Contact.Form.Email" xml:space="preserve">
+    <value>Email</value>
+  </data>
+  <data name="Admin.Billing.Table.Updated" xml:space="preserve">
+    <value>Updated (UTC)</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row5.Action" xml:space="preserve">
+    <value>Use Refresh, then rerun Test Tunnel and Start operations to re-establish session.</value>
+  </data>
+  <data name="Index.HowItWorks.Step" xml:space="preserve">
+    <value>Step</value>
+  </data>
+  <data name="Download.QuickInstall.Title" xml:space="preserve">
+    <value>Quick install checklist</value>
+  </data>
+  <data name="Licenses.Table.Transfers" xml:space="preserve">
+    <value>Transfers</value>
+  </data>
+  <data name="Layout.Nav.Contact" xml:space="preserve">
+    <value>Contact</value>
+  </data>
+  <data name="Docs.RelayConfig.Row3.Field" xml:space="preserve">
+    <value>Outgoing Network (IC2)</value>
+  </data>
+  <data name="Js.Coupon.None" xml:space="preserve">
+    <value>No coupon applied.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row5.Confirm" xml:space="preserve">
+    <value>Tunnel Connected returns to True.</value>
+  </data>
+  <data name="Licenses.Title" xml:space="preserve">
+    <value>Licenses</value>
+  </data>
+  <data name="Docs.FirstLaunch.3" xml:space="preserve">
+    <value>Use the status bar and action logs at the bottom of operation panels to track each command outcome.</value>
+  </data>
+  <data name="Index.Pricing.Title" xml:space="preserve">
+    <value>Pricing</value>
+  </data>
+  <data name="Dashboard.Metric.Licenses" xml:space="preserve">
+    <value>Licenses</value>
+  </data>
+  <data name="Index.UseCases.Card5.Title" xml:space="preserve">
+    <value>Controlled expansion</value>
+  </data>
+  <data name="Download.Eyebrow" xml:space="preserve">
+    <value>Installer distribution</value>
+  </data>
+  <data name="Common.Yes" xml:space="preserve">
+    <value>Yes</value>
+  </data>
+  <data name="Download.Minimum.Item4" xml:space="preserve">
+    <value>Stable internet connectivity for activation</value>
+  </data>
+  <data name="Dashboard.QuickActions" xml:space="preserve">
+    <value>Quick actions</value>
+  </data>
+  <data name="Common.PageXofY" xml:space="preserve">
+    <value>Page {0} of {1}</value>
+  </data>
+  <data name="Account.Register.HaveAccount" xml:space="preserve">
+    <value>Already have an account?</value>
+  </data>
+  <data name="Docs.RelayConfig.Row1.Valid" xml:space="preserve">
+    <value>1-65535</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row5.Problem" xml:space="preserve">
+    <value>Connected earlier but not after outage</value>
+  </data>
+  <data name="Js.Coupon.Applied" xml:space="preserve">
+    <value>Coupon applied: {code} ({percent}% off).</value>
+  </data>
+  <data name="Download.Title" xml:space="preserve">
+    <value>Download</value>
+  </data>
+  <data name="Account.Register.Title" xml:space="preserve">
+    <value>Register</value>
+  </data>
+  <data name="Layout.Nav.Documentation" xml:space="preserve">
+    <value>Documentation</value>
+  </data>
+  <data name="Js.Copy.Copy" xml:space="preserve">
+    <value>Copy</value>
+  </data>
+  <data name="Js.Trial.RequestFailed" xml:space="preserve">
+    <value>Trial request failed.</value>
+  </data>
+  <data name="Trial.Subtitle" xml:space="preserve">
+    <value>Try OmniRelay before purchasing a perpetual license.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row2.Problem" xml:space="preserve">
+    <value>No adapters shown in dropdowns</value>
+  </data>
+  <data name="Docs.Installation.2" xml:space="preserve">
+    <value>Run the installer as Administrator.</value>
+  </data>
+  <data name="Account.Register.Heading" xml:space="preserve">
+    <value>Create your account</value>
+  </data>
+  <data name="Common.Msg.ValidationFailed" xml:space="preserve">
+    <value>Validation failed.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Table.Confirm" xml:space="preserve">
+    <value>How to confirm</value>
+  </data>
+  <data name="Register.Msg.ConfirmUrlGenerationFailed" xml:space="preserve">
+    <value>Could not generate confirmation link.</value>
+  </data>
+  <data name="Docs.Monitoring.Table.Indicator" xml:space="preserve">
+    <value>Indicator</value>
+  </data>
+  <data name="Admin.Table.UpdatesUntilUtc" xml:space="preserve">
+    <value>Updates until (UTC)</value>
+  </data>
+  <data name="Index.Config.Result1" xml:space="preserve">
+    <value>fewer access-related support tickets</value>
+  </data>
+  <data name="Common.Disabled" xml:space="preserve">
+    <value>disabled</value>
+  </data>
+  <data name="Licenses.Policy.Title" xml:space="preserve">
+    <value>Usage policy</value>
+  </data>
+  <data name="Common.Expires" xml:space="preserve">
+    <value>Expires</value>
+  </data>
+  <data name="Docs.Monitoring.Row4.Indicator" xml:space="preserve">
+    <value>Tunnel Connected</value>
+  </data>
+  <data name="Admin.Discounts.CreateButton" xml:space="preserve">
+    <value>Create coupon</value>
+  </data>
+  <data name="Index.Problem.Card1.Title" xml:space="preserve">
+    <value>Fragmented access paths</value>
+  </data>
+  <data name="Docs.RelayConfig.Row4.Valid" xml:space="preserve">
+    <value>Button action</value>
+  </data>
+  <data name="Index.Problem.Card2.Title" xml:space="preserve">
+    <value>Unstable routes</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row6.Confirm" xml:space="preserve">
+    <value>Action log receives new lines with result.</value>
+  </data>
+  <data name="Admin.Card.DiscountCoupons" xml:space="preserve">
+    <value>Discount coupons</value>
+  </data>
+  <data name="Index.Config.Testimonial2.Role" xml:space="preserve">
+    <value>DevOps Manager</value>
+  </data>
+  <data name="Register.Msg.AccountCreated" xml:space="preserve">
+    <value>Account created. Check your email for confirmation.</value>
+  </data>
+  <data name="Index.Config.HeroSubheadline" xml:space="preserve">
+    <value>OmniRelay helps you maintain reliable, private internet routing across layered and restricted network environments.</value>
+  </data>
+  <data name="Index.Security.Body" xml:space="preserve">
+    <value>Built with practical controls for production operations.</value>
+  </data>
+  <data name="Admin.Table.Status" xml:space="preserve">
+    <value>Status</value>
+  </data>
+  <data name="Admin.Discounts.CodeAllowed" xml:space="preserve">
+    <value>Allowed: letters, numbers, -, _</value>
+  </data>
+  <data name="Index.Config.ClosingBody" xml:space="preserve">
+    <value>Start your free trial, validate OmniRelay in your environment, and move to controlled private routing with a one-time license.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row4.Problem" xml:space="preserve">
+    <value>Health check shows Unhealthy</value>
+  </data>
+  <data name="Docs.Monitoring.Row5.Expected" xml:space="preserve">
+    <value>Healthy/Active states</value>
+  </data>
+  <data name="Js.Order.Refreshing" xml:space="preserve">
+    <value>Refreshing order...</value>
+  </data>
+  <data name="Common.Created" xml:space="preserve">
+    <value>Created</value>
+  </data>
+  <data name="Index.Footer.Body" xml:space="preserve">
+    <value>Need help evaluating fit for your environment? Contact us.</value>
+  </data>
+  <data name="Admin.Discounts.Msg.GenerateFailed" xml:space="preserve">
+    <value>Could not generate coupon code.</value>
+  </data>
+  <data name="Common.Apply" xml:space="preserve">
+    <value>Apply</value>
+  </data>
+  <data name="Layout.Language" xml:space="preserve">
+    <value>Language</value>
+  </data>
+  <data name="Docs.Sections" xml:space="preserve">
+    <value>Sections</value>
+  </data>
+  <data name="Download.Windows.Sha" xml:space="preserve">
+    <value>SHA-256:</value>
+  </data>
+  <data name="Layout.Nav.Home" xml:space="preserve">
+    <value>Home</value>
+  </data>
+  <data name="Billing.Table.Final" xml:space="preserve">
+    <value>Final</value>
+  </data>
+  <data name="Docs.RelayConfig.Row4.Description" xml:space="preserve">
+    <value>Saves current relay field values.</value>
+  </data>
+  <data name="Dashboard.State.Active" xml:space="preserve">
+    <value>active</value>
+  </data>
+  <data name="Contact.Msg.SendFailed" xml:space="preserve">
+    <value>Could not send your message.</value>
+  </data>
+  <data name="Account.Login.NeedAccount" xml:space="preserve">
+    <value>Need an account?</value>
+  </data>
+  <data name="Billing.Table.AttemptId" xml:space="preserve">
+    <value>Attempt ID</value>
+  </data>
+  <data name="Docs.StartRelay.2" xml:space="preserve">
+    <value>Set Proxy Listen Port, VPS Network (IC1), and Outgoing Network (IC2).</value>
+  </data>
+  <data name="Admin.Table.Plan" xml:space="preserve">
+    <value>Plan</value>
+  </data>
+  <data name="Admin.Discounts.Table.Creator" xml:space="preserve">
+    <value>Creator</value>
+  </data>
+  <data name="Docs.RelayConfig.Row1.Notes" xml:space="preserve">
+    <value>Use an unused port. Keep consistent with your client settings.</value>
+  </data>
+  <data name="Common.Close" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="Download.Linux.Button" xml:space="preserve">
+    <value>Coming soon</value>
+  </data>
+  <data name="Index.Config.HeroHeadline" xml:space="preserve">
+    <value>Secure Connectivity Across Stratified Internet</value>
+  </data>
+  <data name="Account.ConfirmEmail.Heading" xml:space="preserve">
+    <value>Confirm your email</value>
+  </data>
+  <data name="Docs.Monitoring.Row3.Indicator" xml:space="preserve">
+    <value>Proxy Listen Port</value>
+  </data>
+  <data name="Docs.Monitoring.Row7.Indicator" xml:space="preserve">
+    <value>Last Error</value>
+  </data>
+  <data name="Docs.RelayConfig.Row4.Field" xml:space="preserve">
+    <value>Apply Relay Config</value>
+  </data>
+  <data name="AppDownloads.NoRelease" xml:space="preserve">
+    <value>No release available for this channel.</value>
+  </data>
+  <data name="Download.QuickInstall.Item3" xml:space="preserve">
+    <value>Complete wizard with default options.</value>
+  </data>
+  <data name="Download.QuickInstall.Item2" xml:space="preserve">
+    <value>Run setup as Administrator.</value>
+  </data>
+  <data name="Download.QuickInstall.Item1" xml:space="preserve">
+    <value>Download the latest installer.</value>
+  </data>
+  <data name="Admin.Discounts.CreateCoupon" xml:space="preserve">
+    <value>Create coupon</value>
+  </data>
+  <data name="Contact.Form.Name" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="Docs.RelayConfig.Row3.Valid" xml:space="preserve">
+    <value>Any detected adapter</value>
+  </data>
+  <data name="Index.Config.How1" xml:space="preserve">
+    <value>Define the available network links in your environment.</value>
+  </data>
+  <data name="Docs.Requirements.1" xml:space="preserve">
+    <value>Operating system: Windows 10 or Windows 11 (64-bit).</value>
+  </data>
+  <data name="Billing.Modal.RedirectSuffix" xml:space="preserve">
+    <value>seconds.</value>
+  </data>
+  <data name="Contact.Title" xml:space="preserve">
+    <value>Contact</value>
+  </data>
+  <data name="Docs.Section2" xml:space="preserve">
+    <value>2. System Requirements</value>
+  </data>
+  <data name="Download.Minimum.Item2" xml:space="preserve">
+    <value>At least 2 GB RAM</value>
+  </data>
+  <data name="Billing.BasePrice" xml:space="preserve">
+    <value>Base price</value>
+  </data>
+  <data name="Admin.Discounts.Msg.CodeInvalidChars" xml:space="preserve">
+    <value>Coupon code contains unsupported characters.</value>
+  </data>
+  <data name="Download.Linux.ComingSoon" xml:space="preserve">
+    <value>coming soon</value>
+  </data>
+  <data name="Common.Show" xml:space="preserve">
+    <value>Show</value>
+  </data>
+  <data name="Contact.Msg.SupportUnavailable" xml:space="preserve">
+    <value>Support channel is currently unavailable. Please try again later.</value>
+  </data>
+  <data name="Docs.Section8" xml:space="preserve">
+    <value>8. Monitoring and Health</value>
+  </data>
+  <data name="Docs.Section5" xml:space="preserve">
+    <value>5. License Activation</value>
+  </data>
+  <data name="Docs.Section4" xml:space="preserve">
+    <value>4. First Launch</value>
+  </data>
+  <data name="Docs.Section7" xml:space="preserve">
+    <value>7. Starting Relay</value>
+  </data>
+  <data name="Docs.Section6" xml:space="preserve">
+    <value>6. Relay Configuration</value>
+  </data>
+  <data name="Admin.Discounts.Msg.Disabled" xml:space="preserve">
+    <value>Coupon disabled.</value>
+  </data>
+  <data name="Admin.Table.UserEmail" xml:space="preserve">
+    <value>User email</value>
+  </data>
+  <data name="Docs.Section3" xml:space="preserve">
+    <value>3. Installation</value>
+  </data>
+  <data name="Admin.Discounts.Table.UsedMax" xml:space="preserve">
+    <value>Used / Max</value>
+  </data>
+  <data name="Admin.Title" xml:space="preserve">
+    <value>Admin Panel</value>
+  </data>
+  <data name="Docs.Section9" xml:space="preserve">
+    <value>9. Troubleshooting</value>
+  </data>
+  <data name="AppDownloads.Version" xml:space="preserve">
+    <value>Version</value>
+  </data>
+  <data name="Index.ReadDocumentation" xml:space="preserve">
+    <value>Read documentation</value>
+  </data>
+  <data name="Admin.Billing.Table.UserEmail" xml:space="preserve">
+    <value>User email</value>
+  </data>
+  <data name="Index.Config.Faq5.Q" xml:space="preserve">
+    <value>Will this work for browser and app traffic?</value>
+  </data>
+  <data name="Admin.Discounts.Subtitle" xml:space="preserve">
+    <value>Create and manage reusable discount coupons.</value>
+  </data>
+  <data name="Index.Config.How2" xml:space="preserve">
+    <value>Apply your routing policy and let OmniRelay establish secure relay paths.</value>
+  </data>
+  <data name="Dashboard.State.None" xml:space="preserve">
+    <value>none</value>
+  </data>
+  <data name="Billing.Table.IssuedLicense" xml:space="preserve">
+    <value>Issued license</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row6.Problem" xml:space="preserve">
+    <value>Button click seems to do nothing</value>
+  </data>
+  <data name="Index.Config.Testimonial1.Quote" xml:space="preserve">
+    <value>Before OmniRelay, every network change became an incident. Now onboarding new locations is predictable and calm.</value>
+  </data>
+  <data name="Account.ConfirmEmail.GoToLogin" xml:space="preserve">
+    <value>Go to login</value>
+  </data>
+  <data name="Admin.Discounts.Table.Status" xml:space="preserve">
+    <value>Status</value>
+  </data>
+  <data name="Docs.Placeholder.Monitoring" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row2.Valid" xml:space="preserve">
+    <value>Any detected adapter</value>
+  </data>
+  <data name="Docs.Monitoring.Table.Meaning" xml:space="preserve">
+    <value>Meaning</value>
+  </data>
+  <data name="Admin.Table.LicenseKey" xml:space="preserve">
+    <value>License key</value>
+  </data>
+  <data name="Docs.Placeholder.FirstLaunch" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Docs.Update.2" xml:space="preserve">
+    <value>From OmniRelay, stop active relay operations.</value>
+  </data>
+  <data name="Billing.Table.ProviderMessage" xml:space="preserve">
+    <value>Provider message</value>
+  </data>
+  <data name="Docs.FirstLaunch.4" xml:space="preserve">
+    <value>Recommended first action: open Relay Management and confirm your network adapters are detected.</value>
+  </data>
+  <data name="Download.Linux.Title" xml:space="preserve">
+    <value>Linux (planned)</value>
+  </data>
+  <data name="Common.Unknown" xml:space="preserve">
+    <value>unknown</value>
+  </data>
+  <data name="Admin.Discounts.Msg.AlreadyDisabled" xml:space="preserve">
+    <value>Coupon is already disabled.</value>
+  </data>
+  <data name="Index.UseCases.Card1.Title" xml:space="preserve">
+    <value>Branch office onboarding</value>
+  </data>
+  <data name="Admin.Card.PaidLicenses" xml:space="preserve">
+    <value>Paid licenses</value>
+  </data>
+  <data name="Admin.Paid.Empty" xml:space="preserve">
+    <value>No paid licenses found.</value>
+  </data>
+  <data name="Docs.Monitoring.Row2.Indicator" xml:space="preserve">
+    <value>Proxy Running</value>
+  </data>
+  <data name="Index.Config.Faq4.A" xml:space="preserve">
+    <value>Yes. Documentation and operational guidance are included, with a clear runbook for common issues.</value>
+  </data>
+  <data name="Admin.Billing.Table.Created" xml:space="preserve">
+    <value>Created (UTC)</value>
+  </data>
+  <data name="Download.Windows.Title" xml:space="preserve">
+    <value>Windows</value>
+  </data>
+  <data name="Contact.Form.Website" xml:space="preserve">
+    <value>Website</value>
+  </data>
+  <data name="Download.QuickInstall.Item5" xml:space="preserve">
+    <value>If needed, review &lt;a href='/docs' class='text-cyan-300 underline'&gt;deployment documentation&lt;/a&gt;.</value>
+  </data>
+  <data name="Index.UseCases.Card3.Body" xml:space="preserve">
+    <value>Recover quickly when routes degrade.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row2.Confirm" xml:space="preserve">
+    <value>Adapters appear in IC1/IC2 lists.</value>
+  </data>
+  <data name="Js.Copy.Copied" xml:space="preserve">
+    <value>Copied</value>
+  </data>
+  <data name="AppDownloads.UpdatesUntil" xml:space="preserve">
+    <value>Updates until</value>
+  </data>
+  <data name="Index.Config.Testimonial2.Quote" xml:space="preserve">
+    <value>Our team stopped debating routing workarounds and started shipping. Reliability improved in the first week.</value>
+  </data>
+  <data name="Admin.Table.UserId" xml:space="preserve">
+    <value>User ID</value>
+  </data>
+  <data name="Docs.RelayConfig.Row2.Description" xml:space="preserve">
+    <value>Network adapter used for relay-side connectivity.</value>
+  </data>
+  <data name="Licenses.Modal.LicenseId" xml:space="preserve">
+    <value>License ID</value>
+  </data>
+  <data name="Docs.RelayConfig.Table.Field" xml:space="preserve">
+    <value>Field</value>
+  </data>
+  <data name="Common.Previous" xml:space="preserve">
+    <value>Previous</value>
+  </data>
+  <data name="ConfirmEmail.Msg.UserNotFound" xml:space="preserve">
+    <value>User not found.</value>
+  </data>
+  <data name="Licenses.Table.Status" xml:space="preserve">
+    <value>Status</value>
+  </data>
+  <data name="Index.Config.Faq5.A" xml:space="preserve">
+    <value>Yes. The platform is built to handle real-world application patterns with operational controls for reliability.</value>
+  </data>
+  <data name="Docs.Heading" xml:space="preserve">
+    <value>Deployment Documentation</value>
+  </data>
+  <data name="Download.Minimum.Title" xml:space="preserve">
+    <value>Minimum requirements</value>
+  </data>
+  <data name="Billing.Summary.Base" xml:space="preserve">
+    <value>Base</value>
+  </data>
+  <data name="Docs.RelayConfig.Row2.Field" xml:space="preserve">
+    <value>VPS Network (IC1)</value>
+  </data>
+  <data name="Licenses.Table.Plan" xml:space="preserve">
+    <value>Plan</value>
+  </data>
+  <data name="Docs.RelayConfig.Row5.Description" xml:space="preserve">
+    <value>Reloads current status and adapter information.</value>
+  </data>
+  <data name="Billing.Modal.AmountToPay" xml:space="preserve">
+    <value>Amount to pay:</value>
+  </data>
+  <data name="Admin.Discounts.Table.Created" xml:space="preserve">
+    <value>Created (UTC)</value>
+  </data>
+  <data name="ConfirmEmail.Msg.Success" xml:space="preserve">
+    <value>Your email has been confirmed.</value>
+  </data>
+  <data name="Index.Config.Benefit3" xml:space="preserve">
+    <value>Policy-based operation for predictable behavior during network changes.</value>
+  </data>
+  <data name="Billing.OneTimeLicense" xml:space="preserve">
+    <value>One-Time License</value>
+  </data>
+  <data name="Dashboard.Sidebar.Trial" xml:space="preserve">
+    <value>Free trial</value>
+  </data>
+  <data name="Docs.Monitoring.Row6.Meaning" xml:space="preserve">
+    <value>Overall health summary from latest check.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row6.Action" xml:space="preserve">
+    <value>Hard refresh browser/UI view and retry; check operation log and bottom status message.</value>
+  </data>
+  <data name="Index.Config.Benefit5" xml:space="preserve">
+    <value>Operational visibility for path health, readiness, and continuity decisions.</value>
+  </data>
+  <data name="Index.Config.Benefit1" xml:space="preserve">
+    <value>Layered connectivity orchestration across segmented access environments.</value>
+  </data>
+  <data name="Index.Config.Benefit2" xml:space="preserve">
+    <value>Private relay control so you are not dependent on public VPN providers.</value>
+  </data>
+  <data name="Admin.Table.Source" xml:space="preserve">
+    <value>Source</value>
+  </data>
+  <data name="Index.Config.Faq4.Q" xml:space="preserve">
+    <value>Is support available during rollout?</value>
+  </data>
+  <data name="Licenses.Table.Term" xml:space="preserve">
+    <value>Term</value>
+  </data>
+  <data name="Docs.Placeholder.Activation" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Login.Msg.EmailConfirmRequired" xml:space="preserve">
+    <value>Please confirm your email before signing in.</value>
+  </data>
+  <data name="Index.Config.How3" xml:space="preserve">
+    <value>Monitor health, validate access, and maintain continuity as conditions change.</value>
+  </data>
+  <data name="Docs.RelayConfig.Table.ValidValues" xml:space="preserve">
+    <value>Valid values</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row1.Problem" xml:space="preserve">
+    <value>Start button completes but status stays stopped</value>
+  </data>
+  <data name="Admin.Billing.Empty" xml:space="preserve">
+    <value>No orders found.</value>
+  </data>
+  <data name="Common.Refresh" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="Account.AccessDenied.Title" xml:space="preserve">
+    <value>Access denied</value>
+  </data>
+  <data name="Docs.Placeholder.Troubleshooting" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Licenses.Term.Perpetual" xml:space="preserve">
+    <value>Perpetual</value>
+  </data>
+  <data name="ConfirmEmail.Msg.Failed" xml:space="preserve">
+    <value>Email confirmation failed.</value>
+  </data>
+  <data name="Index.Config.Testimonial1.Role" xml:space="preserve">
+    <value>Infrastructure Lead</value>
+  </data>
+  <data name="Docs.RelayConfig.Intro" xml:space="preserve">
+    <value>Configure these fields before starting relay operations:</value>
+  </data>
+  <data name="Admin.Billing.Subtitle" xml:space="preserve">
+    <value>Order-centric view with latest payment intent status.</value>
+  </data>
+  <data name="Common.No" xml:space="preserve">
+    <value>No</value>
+  </data>
+  <data name="Docs.Title" xml:space="preserve">
+    <value>Documentation</value>
+  </data>
+  <data name="Js.Trial.Requesting" xml:space="preserve">
+    <value>Requesting trial...</value>
+  </data>
+  <data name="Dashboard.Sidebar.Account" xml:space="preserve">
+    <value>Account</value>
+  </data>
+  <data name="Billing.Table.Base" xml:space="preserve">
+    <value>Base</value>
+  </data>
+  <data name="Docs.RelayConfig.Table.OperatorNotes" xml:space="preserve">
+    <value>Operator notes</value>
+  </data>
+  <data name="Docs.Troubleshooting.Table.Problem" xml:space="preserve">
+    <value>Problem</value>
+  </data>
+  <data name="Docs.FirstLaunch.1" xml:space="preserve">
+    <value>On first launch, OmniRelay opens to the onboarding flow and prompts for license activation.</value>
+  </data>
+  <data name="AppAccount.PaidLicenses" xml:space="preserve">
+    <value>Paid licenses</value>
+  </data>
+  <data name="Billing.Table.State" xml:space="preserve">
+    <value>State</value>
+  </data>
+  <data name="Admin.Discounts.Table.Action" xml:space="preserve">
+    <value>Action</value>
+  </data>
+  <data name="Docs.Introduction.2" xml:space="preserve">
+    <value>You configure it through a guided interface, start relay operations from the UI, and monitor live health indicators from built-in status panels.</value>
+  </data>
+  <data name="Trial.Title" xml:space="preserve">
+    <value>Free trial</value>
+  </data>
+  <data name="Index.UseCases.Title" xml:space="preserve">
+    <value>Use cases</value>
+  </data>
+  <data name="Download.QuickInstall.Item4" xml:space="preserve">
+    <value>Launch OmniRelay and sign in.</value>
+  </data>
+  <data name="Index.Security.Title" xml:space="preserve">
+    <value>Security posture</value>
+  </data>
+  <data name="Index.Config.Faq1.A" xml:space="preserve">
+    <value>Most teams complete initial setup in one session and validate access the same day.</value>
+  </data>
+  <data name="Download.Recommended.Title" xml:space="preserve">
+    <value>Recommended before install</value>
+  </data>
+  <data name="Billing.CreatePaymentIntent" xml:space="preserve">
+    <value>Create Payment Intent</value>
+  </data>
+  <data name="Docs.Monitoring.Row1.Expected" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="Billing.Modal.GoNow" xml:space="preserve">
+    <value>Go now</value>
+  </data>
+  <data name="Js.Trial.Started" xml:space="preserve">
+    <value>Trial started. License: {licenseKey} (expires {expiresAt}).</value>
+  </data>
+  <data name="Common.Pending" xml:space="preserve">
+    <value>pending</value>
+  </data>
+  <data name="Licenses.Policy.Body" xml:space="preserve">
+    <value>License usage and transfers follow your purchased plan limits.</value>
+  </data>
+  <data name="Index.UseCases.Card2.Title" xml:space="preserve">
+    <value>Remote operator access</value>
+  </data>
+  <data name="Index.Config.Benefit4" xml:space="preserve">
+    <value>Fast recovery and resilience during outages and route disruptions.</value>
+  </data>
+  <data name="Index.Features.Title" xml:space="preserve">
+    <value>What you get</value>
+  </data>
+  <data name="Index.Config.Faq3.A" xml:space="preserve">
+    <value>Yes. You can start with a 2-day trial to validate fit and performance before purchase.</value>
+  </data>
+  <data name="Index.Config.OfferSummary" xml:space="preserve">
+    <value>Get full OmniRelay capabilities with a single purchase and predictable ownership cost.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row4.Action" xml:space="preserve">
+    <value>Run action sequence: Test Tunnel -&gt; Bootstrap Check -&gt; Health Check, then review operation log lines.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row7.Problem" xml:space="preserve">
+    <value>Panel unreachable</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row3.Action" xml:space="preserve">
+    <value>Check internet access, system date/time, and key formatting (no extra spaces).</value>
+  </data>
+  <data name="Download.Recommended.Item2" xml:space="preserve">
+    <value>Confirm outbound internet access is available.</value>
+  </data>
+  <data name="Docs.Monitoring.Row5.Indicator" xml:space="preserve">
+    <value>Gateway Service State</value>
+  </data>
+  <data name="Dashboard.Metric.PaidLicense" xml:space="preserve">
+    <value>Paid license</value>
+  </data>
+  <data name="Docs.Monitoring.Row7.Meaning" xml:space="preserve">
+    <value>Latest user-facing error summary.</value>
+  </data>
+  <data name="Admin.Billing.Table.Currency" xml:space="preserve">
+    <value>Currency</value>
+  </data>
+  <data name="Admin.Sidebar.Billing" xml:space="preserve">
+    <value>Billing</value>
+  </data>
+  <data name="Billing.Modal.Title" xml:space="preserve">
+    <value>Redirecting to payment gateway</value>
+  </data>
+  <data name="Index.Config.Faq2.A" xml:space="preserve">
+    <value>No. OmniRelay is designed to fit existing environments and improve control without major topology changes.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row4.Notes" xml:space="preserve">
+    <value>Always apply after editing ports or adapter selections.</value>
+  </data>
+  <data name="Admin.Card.TrialLicenses" xml:space="preserve">
+    <value>Trial licenses</value>
+  </data>
+  <data name="Index.Solution.Body" xml:space="preserve">
+    <value>OmniRelay provides policy-based routing, operational controls, and health visibility.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row7.Confirm" xml:space="preserve">
+    <value>Panel opens and health checks pass.</value>
+  </data>
+  <data name="Common.Msg.VerificationFailed" xml:space="preserve">
+    <value>Verification failed.</value>
+  </data>
+  <data name="Billing.NoPaymentAttempts" xml:space="preserve">
+    <value>No payment attempts yet.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row5.Valid" xml:space="preserve">
+    <value>Button action</value>
+  </data>
+  <data name="Index.Problem.Card3.Body" xml:space="preserve">
+    <value>Manual workarounds are hard to maintain at scale.</value>
+  </data>
+  <data name="Admin.Billing.Table.OrderId" xml:space="preserve">
+    <value>Order ID</value>
+  </data>
+  <data name="Common.Active" xml:space="preserve">
+    <value>active</value>
+  </data>
+  <data name="Dashboard.Action.BuyLicense" xml:space="preserve">
+    <value>Buy license</value>
+  </data>
+  <data name="Licenses.Table.LastSeen" xml:space="preserve">
+    <value>Last seen (UTC)</value>
+  </data>
+  <data name="Docs.RelayConfig.Row5.Field" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="Docs.Update.7" xml:space="preserve">
+    <value>If needed, re-apply relay and gateway config from the UI and validate again.</value>
+  </data>
+  <data name="Docs.Update.6" xml:space="preserve">
+    <value>Start relay operations and run a full status refresh and health check.</value>
+  </data>
+  <data name="Billing.Table.OrderId" xml:space="preserve">
+    <value>Order ID</value>
+  </data>
+  <data name="Billing.Modal.Coupon" xml:space="preserve">
+    <value>Coupon:</value>
+  </data>
+  <data name="Docs.Update.3" xml:space="preserve">
+    <value>Download the latest installer package from the official download page.</value>
+  </data>
+  <data name="Billing.Summary.Coupon" xml:space="preserve">
+    <value>Coupon</value>
+  </data>
+  <data name="Docs.Update.1" xml:space="preserve">
+    <value>Plan a short maintenance window.</value>
+  </data>
+  <data name="Download.Recommended.Item3" xml:space="preserve">
+    <value>Run installer with Administrator privileges.</value>
+  </data>
+  <data name="Docs.Requirements.6" xml:space="preserve">
+    <value>Time sync: Windows system clock should be accurate for stable status checks and activation flows.</value>
+  </data>
+  <data name="Index.UseCases.Card5.Body" xml:space="preserve">
+    <value>Add new locations with repeatable workflows.</value>
+  </data>
+  <data name="Js.Checkout.IntentMissing" xml:space="preserve">
+    <value>Create intent succeeded but intent id is missing.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row1.Confirm" xml:space="preserve">
+    <value>Confirm Service State changes to Running after Refresh.</value>
+  </data>
+  <data name="Docs.Placeholder.Updating" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Admin.Discounts.Empty" xml:space="preserve">
+    <value>No coupons found.</value>
+  </data>
+  <data name="Docs.Monitoring.Row7.Expected" xml:space="preserve">
+    <value>Empty or informational only</value>
+  </data>
+  <data name="Dashboard.Sidebar.Dashboard" xml:space="preserve">
+    <value>Dashboard</value>
+  </data>
+  <data name="Trial.Policy" xml:space="preserve">
+    <value>Trial is available once per account and includes a limited usage period.</value>
+  </data>
+  <data name="Index.Security.Bullet2" xml:space="preserve">
+    <value>Deterministic path checks</value>
+  </data>
+  <data name="Admin.Discounts.Msg.PercentRange" xml:space="preserve">
+    <value>Discount percent must be between 1 and 99.</value>
+  </data>
+  <data name="Billing.Summary.Final" xml:space="preserve">
+    <value>Final</value>
+  </data>
+  <data name="Common.None" xml:space="preserve">
+    <value>none</value>
+  </data>
+  <data name="Account.Login.Heading" xml:space="preserve">
+    <value>Welcome back</value>
+  </data>
+  <data name="Billing.PaymentAttempts" xml:space="preserve">
+    <value>Payment Attempts</value>
+  </data>
+  <data name="Docs.RelayConfig.Row3.Notes" xml:space="preserve">
+    <value>Choose the adapter that provides your preferred outbound path.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row3.Problem" xml:space="preserve">
+    <value>Activation fails with valid key</value>
+  </data>
+  <data name="Contact.Form.Submit" xml:space="preserve">
+    <value>Send message</value>
+  </data>
+  <data name="Index.Security.Bullet3" xml:space="preserve">
+    <value>Operational audit visibility</value>
+  </data>
+  <data name="Admin.Billing.Table.IntentId" xml:space="preserve">
+    <value>Intent ID</value>
+  </data>
+  <data name="Licenses.Table.CreatedAt" xml:space="preserve">
+    <value>Created (UTC)</value>
+  </data>
+  <data name="Billing.OneTimeLicenseBody" xml:space="preserve">
+    <value>Perpetual usage + 1 year software updates.</value>
+  </data>
+  <data name="Account.Register.ConfirmPassword" xml:space="preserve">
+    <value>Confirm password</value>
+  </data>
+  <data name="Docs.Introduction.3" xml:space="preserve">
+    <value>This guide focuses on what you see and do in the product so you can operate OmniRelay confidently without learning internal implementation details.</value>
+  </data>
+  <data name="Docs.Introduction.1" xml:space="preserve">
+    <value>OmniRelay is a desktop application for managing secure and reliable internet access in restricted or unstable environments.</value>
+  </data>
+  <data name="Billing.Subtitle" xml:space="preserve">
+    <value>Track payment attempts and license issuance status.</value>
+  </data>
+  <data name="AppAccount.Title" xml:space="preserve">
+    <value>Account</value>
+  </data>
+  <data name="Common.Password" xml:space="preserve">
+    <value>Password</value>
+  </data>
+  <data name="Register.Msg.EmailDeliveryFailed" xml:space="preserve">
+    <value>Could not send confirmation email. Contact support.</value>
+  </data>
+  <data name="Admin.Sidebar.PaidLicenses" xml:space="preserve">
+    <value>Paid licenses</value>
+  </data>
+  <data name="Layout.Brand" xml:space="preserve">
+    <value>OmniRelay</value>
+  </data>
+  <data name="Contact.Subtitle" xml:space="preserve">
+    <value>Tell us about your deployment context, operating constraints, and support needs.</value>
+  </data>
+  <data name="Contact.Form.Message" xml:space="preserve">
+    <value>Message</value>
+  </data>
+  <data name="Billing.Table.Coupon" xml:space="preserve">
+    <value>Coupon</value>
+  </data>
+  <data name="Index.Config.Faq2.Q" xml:space="preserve">
+    <value>Do we need to redesign our network?</value>
+  </data>
+  <data name="Download.Linux.Body" xml:space="preserve">
+    <value>Linux distribution is planned for a future release.</value>
+  </data>
+  <data name="Docs.Monitoring.Row2.Meaning" xml:space="preserve">
+    <value>Shows whether the listening endpoint is active.</value>
+  </data>
+  <data name="Contact.Msg.Sent" xml:space="preserve">
+    <value>Message sent successfully.</value>
+  </data>
+  <data name="AppDownloads.Title" xml:space="preserve">
+    <value>Downloads</value>
+  </data>
+  <data name="Docs.Placeholder.Requirements" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Docs.Monitoring.Row1.Indicator" xml:space="preserve">
+    <value>Service State</value>
+  </data>
+  <data name="Admin.Billing.Table.Base" xml:space="preserve">
+    <value>Base</value>
+  </data>
+  <data name="AppDownloads.NoEntitlements" xml:space="preserve">
+    <value>No download entitlements available.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row5.Notes" xml:space="preserve">
+    <value>Use after plugging/unplugging adapters or changing routes.</value>
+  </data>
+  <data name="Index.UseCases.Card4.Body" xml:space="preserve">
+    <value>Coordinate layered links with explicit policy.</value>
+  </data>
+  <data name="Dashboard.Sidebar.Licenses" xml:space="preserve">
+    <value>Licenses</value>
+  </data>
+  <data name="Common.Remove" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="Register.Email.Body" xml:space="preserve">
+    <value>Please confirm your account by visiting: {0}</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row3.Confirm" xml:space="preserve">
+    <value>Activation success message appears.</value>
+  </data>
+  <data name="Admin.Discounts.Title" xml:space="preserve">
+    <value>Discount coupons</value>
+  </data>
+  <data name="Billing.CouponCode" xml:space="preserve">
+    <value>Coupon code</value>
+  </data>
+  <data name="Js.Coupon.Invalid" xml:space="preserve">
+    <value>Coupon is invalid.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row2.Notes" xml:space="preserve">
+    <value>Choose the adapter connected to the relay-side network.</value>
+  </data>
+  <data name="Admin.Table.ExpiresUtc" xml:space="preserve">
+    <value>Expires (UTC)</value>
+  </data>
+  <data name="Download.Minimum.Item1" xml:space="preserve">
+    <value>Windows 10/11 (64-bit)</value>
+  </data>
+  <data name="Index.Config.TrustBarText" xml:space="preserve">
+    <value>Used by operations and infrastructure teams managing restricted network environments.</value>
+  </data>
+  <data name="Admin.Billing.Table.OrderStatus" xml:space="preserve">
+    <value>Order status</value>
+  </data>
+  <data name="Index.Config.OfferPriceAnchor" xml:space="preserve">
+    <value>$299 one-time license</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row4.Confirm" xml:space="preserve">
+    <value>Health moves to Healthy or shows clear actionable error.</value>
+  </data>
+  <data name="Index.HowItWorks.Title" xml:space="preserve">
+    <value>How it works</value>
+  </data>
+  <data name="Licenses.Table.Remaining" xml:space="preserve">
+    <value>Remaining</value>
+  </data>
+  <data name="Download.HeroTitle" xml:space="preserve">
+    <value>Get OmniRelay for your environment</value>
+  </data>
+  <data name="Js.Checkout.CreateIntentFailed" xml:space="preserve">
+    <value>Create intent failed.</value>
+  </data>
+  <data name="Index.Config.OfferTitle" xml:space="preserve">
+    <value>One-Time License</value>
+  </data>
+  <data name="Index.Config.MidCtaText" xml:space="preserve">
+    <value>Start Free Trial</value>
+  </data>
+  <data name="Js.Coupon.Unavailable" xml:space="preserve">
+    <value>Unable to validate coupon right now.</value>
+  </data>
+  <data name="Js.Order.RefreshFailed" xml:space="preserve">
+    <value>Refresh failed.</value>
+  </data>
+  <data name="Admin.Billing.Table.IntentExpires" xml:space="preserve">
+    <value>Intent expires (UTC)</value>
+  </data>
+  <data name="Js.Server.Failed" xml:space="preserve">
+    <value>Failed to contact server.</value>
+  </data>
+  <data name="Billing.Table.UpdatedAt" xml:space="preserve">
+    <value>Updated at (UTC)</value>
+  </data>
+  <data name="Admin.Table.CreatedUtc" xml:space="preserve">
+    <value>Created (UTC)</value>
+  </data>
+  <data name="Admin.Sidebar.Overview" xml:space="preserve">
+    <value>Overview</value>
+  </data>
+  <data name="Layout.Nav.Dashboard" xml:space="preserve">
+    <value>Dashboard</value>
+  </data>
+  <data name="Login.Msg.LockedOut" xml:space="preserve">
+    <value>Your account is locked. Try again later.</value>
+  </data>
+  <data name="Trial.Access.Title" xml:space="preserve">
+    <value>Trial access</value>
+  </data>
+  <data name="Docs.FirstLaunch.2" xml:space="preserve">
+    <value>After activation, the main navigation becomes available: Relay Management, Gateway Management, Whitelists, Dashboard, and Settings.</value>
+  </data>
+  <data name="Index.Config.Faq3.Q" xml:space="preserve">
+    <value>Can we trial before paying?</value>
+  </data>
+  <data name="Docs.Requirements.5" xml:space="preserve">
+    <value>Remote endpoint access: a reachable gateway server with a user account that can run operational commands.</value>
+  </data>
+  <data name="Download.Windows.Stable" xml:space="preserve">
+    <value>stable</value>
+  </data>
+  <data name="Download.HeroBody" xml:space="preserve">
+    <value>Use the latest stable Windows installer and validate connectivity with the built-in deployment workflow.</value>
+  </data>
+  <data name="Docs.Monitoring.Row4.Expected" xml:space="preserve">
+    <value>True for active sessions</value>
+  </data>
+  <data name="Licenses.Table.LicenseKey" xml:space="preserve">
+    <value>License key</value>
+  </data>
+  <data name="Dashboard.Sidebar.Billing" xml:space="preserve">
+    <value>Billing</value>
+  </data>
+  <data name="Admin.Trials.Title" xml:space="preserve">
+    <value>Trial licenses</value>
+  </data>
+  <data name="Index.UseCases.Card1.Body" xml:space="preserve">
+    <value>Standardize rollout and reduce setup variance.</value>
+  </data>
+  <data name="Docs.Monitoring.Row2.Expected" xml:space="preserve">
+    <value>True</value>
+  </data>
+  <data name="Download.Windows.Button" xml:space="preserve">
+    <value>Download for Windows</value>
+  </data>
+  <data name="ConfirmEmail.Msg.InvalidToken" xml:space="preserve">
+    <value>Invalid or expired confirmation token.</value>
+  </data>
+  <data name="Docs.StartRelay.6" xml:space="preserve">
+    <value>If you changed configuration after start, click Apply Relay Config again and refresh status.</value>
+  </data>
+  <data name="Admin.Trials.Source" xml:space="preserve">
+    <value>Source filter:</value>
+  </data>
+  <data name="Docs.Section10" xml:space="preserve">
+    <value>10. Updating</value>
+  </data>
+  <data name="Admin.Discounts.Msg.Created" xml:space="preserve">
+    <value>Coupon created successfully.</value>
+  </data>
+  <data name="Account.ConfirmEmail.Title" xml:space="preserve">
+    <value>Email confirmation</value>
+  </data>
+  <data name="Dashboard.Title" xml:space="preserve">
+    <value>Dashboard</value>
+  </data>
+  <data name="Admin.Sidebar.Trials" xml:space="preserve">
+    <value>Trial licenses</value>
+  </data>
+  <data name="Admin.Billing.Table.Coupon" xml:space="preserve">
+    <value>Coupon</value>
+  </data>
+  <data name="Dashboard.Action.Download" xml:space="preserve">
+    <value>Download builds</value>
+  </data>
+  <data name="Admin.Discounts.DiscountPercent" xml:space="preserve">
+    <value>Discount percent</value>
+  </data>
+  <data name="Admin.Discounts.CouponCodeOptional" xml:space="preserve">
+    <value>Coupon code (optional)</value>
+  </data>
+  <data name="Docs.Monitoring.Row3.Meaning" xml:space="preserve">
+    <value>Displays the active listening port.</value>
+  </data>
+  <data name="Admin.Discounts.Table.Remaining" xml:space="preserve">
+    <value>Remaining</value>
+  </data>
+  <data name="Js.Order.StatusTemplate" xml:space="preserve">
+    <value>Order status: {orderStatus}, intent: {intentStatus}</value>
+  </data>
+  <data name="Docs.LastUpdated" xml:space="preserve">
+    <value>Last updated:</value>
+  </data>
+  <data name="Dashboard.Action.ManageTrial" xml:space="preserve">
+    <value>Manage trial</value>
+  </data>
+  <data name="Download.Recommended.Item1" xml:space="preserve">
+    <value>Verify your machine time is correct.</value>
+  </data>
+  <data name="Admin.Table.LicenseId" xml:space="preserve">
+    <value>License ID</value>
+  </data>
+  <data name="Docs.RelayConfig.Row1.Field" xml:space="preserve">
+    <value>Proxy Listen Port</value>
+  </data>
+  <data name="Trial.IssuedKey" xml:space="preserve">
+    <value>Issued trial key</value>
+  </data>
+  <data name="Admin.Billing.Title" xml:space="preserve">
+    <value>Billing orders</value>
+  </data>
+  <data name="Docs.Placeholder.Introduction" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Layout.Mobile.OpenMenu" xml:space="preserve">
+    <value>Open menu</value>
+  </data>
+  <data name="Download.Minimum.Item3" xml:space="preserve">
+    <value>Administrative user access</value>
+  </data>
+  <data name="Admin.Sidebar.Administrator" xml:space="preserve">
+    <value>Administrator</value>
+  </data>
+  <data name="Index.Security.Bullet4" xml:space="preserve">
+    <value>Policy-driven behavior</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row1.Action" xml:space="preserve">
+    <value>Open OmniRelay as Administrator and run Install/Start Relay again.</value>
+  </data>
+  <data name="Account.Login.RememberMe" xml:space="preserve">
+    <value>Remember me</value>
+  </data>
+  <data name="Admin.Card.Active" xml:space="preserve">
+    <value>active</value>
+  </data>
+  <data name="Dashboard.State.Issued" xml:space="preserve">
+    <value>issued</value>
+  </data>
+  <data name="Admin.Sidebar.Discounts" xml:space="preserve">
+    <value>Discounts</value>
+  </data>
+  <data name="Billing.CouponPlaceholder" xml:space="preserve">
+    <value>Enter coupon code</value>
+  </data>
+  <data name="Admin.Discounts.Msg.NotFound" xml:space="preserve">
+    <value>Coupon not found.</value>
+  </data>
+  <data name="Download.Windows.Version" xml:space="preserve">
+    <value>Version:</value>
+  </data>
+  <data name="Index.Footer.License" xml:space="preserve">
+    <value>One-time license.</value>
+  </data>
+  <data name="Dashboard.State.NotUsed" xml:space="preserve">
+    <value>not used</value>
+  </data>
+  <data name="Index.Config.Result2" xml:space="preserve">
+    <value>faster first-time deployment cycle</value>
+  </data>
+  <data name="Index.UseCases.Card4.Title" xml:space="preserve">
+    <value>Multi-network environments</value>
+  </data>
+  <data name="AppDownloads.Entitlements" xml:space="preserve">
+    <value>Entitlements</value>
+  </data>
+  <data name="Docs.Monitoring.Row5.Meaning" xml:space="preserve">
+    <value>Shows remote service readiness from gateway checks.</value>
+  </data>
+  <data name="Account.Login.Title" xml:space="preserve">
+    <value>Login</value>
+  </data>
+  <data name="AppDownloads.Published" xml:space="preserve">
+    <value>Published</value>
+  </data>
+  <data name="Licenses.Table.LicenseId" xml:space="preserve">
+    <value>License ID</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row7.Action" xml:space="preserve">
+    <value>Verify correct address/port in UI and allow the port in host and provider firewall rules.</value>
+  </data>
+  <data name="Js.Order.LoadFailed" xml:space="preserve">
+    <value>Unable to load order status.</value>
+  </data>
+  <data name="Admin.Billing.Table.IntentStatus" xml:space="preserve">
+    <value>Intent status</value>
+  </data>
+  <data name="Docs.Troubleshooting.Table.Action" xml:space="preserve">
+    <value>Action</value>
+  </data>
+  <data name="Layout.Nav.Register" xml:space="preserve">
+    <value>Register</value>
+  </data>
+  <data name="Download.Windows.Published" xml:space="preserve">
+    <value>Published:</value>
+  </data>
+  <data name="Layout.Nav.Admin" xml:space="preserve">
+    <value>Admin</value>
+  </data>
+  <data name="Licenses.Subtitle" xml:space="preserve">
+    <value>Track license keys, status, and device assignment history.</value>
+  </data>
+  <data name="Admin.Subtitle" xml:space="preserve">
+    <value>Operational oversight for licenses, billing, and discounts.</value>
+  </data>
+  <data name="Admin.Paid.Title" xml:space="preserve">
+    <value>Paid licenses</value>
+  </data>
+  <data name="Docs.Section1" xml:space="preserve">
+    <value>1. Introduction</value>
+  </data>
+  <data name="Index.Problem.Card2.Body" xml:space="preserve">
+    <value>Route quality can degrade quickly during peak events.</value>
+  </data>
+  <data name="Licenses.Table.DeviceId" xml:space="preserve">
+    <value>Device ID</value>
+  </data>
+  <data name="Docs.Monitoring.Row3.Expected" xml:space="preserve">
+    <value>Matches configured value</value>
+  </data>
+  <data name="Docs.Placeholder.RelayConfig" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Licenses.Modal.Title" xml:space="preserve">
+    <value>License details</value>
+  </data>
+  <data name="Common.Email" xml:space="preserve">
+    <value>Email</value>
+  </data>
+  <data name="Layout.Nav.Download" xml:space="preserve">
+    <value>Download</value>
+  </data>
+  <data name="Billing.Table.Action" xml:space="preserve">
+    <value>Action</value>
+  </data>
+  <data name="Billing.Modal.RedirectPrefix" xml:space="preserve">
+    <value>You are being redirected to the Crypto Payment Gateway in</value>
+  </data>
+  <data name="Docs.Placeholder.Installation" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Docs.LastUpdatedDate" xml:space="preserve">
+    <value>2026-03-07</value>
+  </data>
+  <data name="AppDownloads.Subtitle" xml:space="preserve">
+    <value>Available release channels based on your entitlements.</value>
+  </data>
+  <data name="Index.Problem.Card1.Body" xml:space="preserve">
+    <value>Different networks expose different reachable services.</value>
+  </data>
+  <data name="Index.Config.PrimaryCtaText" xml:space="preserve">
+    <value>Start Free Trial</value>
+  </data>
+  <data name="Billing.Title" xml:space="preserve">
+    <value>Billing</value>
+  </data>
+  <data name="AppAccount.TrialUsed" xml:space="preserve">
+    <value>Trial used</value>
+  </data>
+  <data name="Licenses.Term.Until" xml:space="preserve">
+    <value>Until {0}</value>
+  </data>
+  <data name="Js.Order.PaidIssued" xml:space="preserve">
+    <value>Paid. License issued: {licenseKey}</value>
+  </data>
+  <data name="Billing.CheckoutSummary" xml:space="preserve">
+    <value>Checkout summary</value>
+  </data>
+  <data name="Admin.Discounts.Table.Code" xml:space="preserve">
+    <value>Code</value>
+  </data>
+  <data name="Index.Security.Bullet1" xml:space="preserve">
+    <value>Self-hosted relay control plane</value>
+  </data>
+  <data name="Billing.Table.Discount" xml:space="preserve">
+    <value>Discount</value>
+  </data>
+  <data name="Docs.RelayConfig.Table.WhatSet" xml:space="preserve">
+    <value>What you set</value>
+  </data>
+  <data name="Index.Problem.Body" xml:space="preserve">
+    <value>Modern network restrictions require controlled, resilient connectivity orchestration.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row3.Description" xml:space="preserve">
+    <value>Network adapter used for outbound internet path.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row1.Description" xml:space="preserve">
+    <value>Main local listening port used by client applications.</value>
+  </data>
+  <data name="Download.Windows.None" xml:space="preserve">
+    <value>No Windows release is currently published.</value>
+  </data>
+  <data name="Admin.Trials.Empty" xml:space="preserve">
+    <value>No trial licenses found.</value>
+  </data>
+  <data name="Index.Config.FinalCtaText" xml:space="preserve">
+    <value>Start Free Trial</value>
+  </data>
+  <data name="Index.Solution.Title" xml:space="preserve">
+    <value>A controlled private relay workflow</value>
+  </data>
+  <data name="Register.Email.Subject" xml:space="preserve">
+    <value>Confirm your OmniRelay account</value>
+  </data>
+  <data name="Common.Disable" xml:space="preserve">
+    <value>Disable</value>
+  </data>
+  <data name="Index.Problem.Card3.Title" xml:space="preserve">
+    <value>Operational overhead</value>
+  </data>
+  <data name="Docs.StartRelay.1" xml:space="preserve">
+    <value>Go to Relay Management.</value>
+  </data>
+  <data name="Docs.Subtitle" xml:space="preserve">
+    <value>Operational guide for installing, activating, and running OmniRelay in restricted network environments.</value>
+  </data>
+  <data name="Docs.Update.5" xml:space="preserve">
+    <value>Open OmniRelay and verify your saved configuration values.</value>
+  </data>
+  <data name="Download.Recommended.Item4" xml:space="preserve">
+    <value>Keep your license key ready.</value>
+  </data>
+  <data name="Index.Config.ClosingHeadline" xml:space="preserve">
+    <value>Build your own anti-censorship connectivity layer.</value>
+  </data>
+  <data name="Admin.Discounts.CreateHelp" xml:space="preserve">
+    <value>Percent must be 1..99. Max uses must be greater than zero.</value>
+  </data>
+  <data name="Common.NotAvailable" xml:space="preserve">
+    <value>n/a</value>
+  </data>
+  <data name="Licenses.Empty" xml:space="preserve">
+    <value>No licenses found.</value>
+  </data>
+  <data name="Js.Checkout.CreatingIntent" xml:space="preserve">
+    <value>Creating payment intent...</value>
+  </data>
+  <data name="Login.Msg.InvalidCredentials" xml:space="preserve">
+    <value>Invalid email or password.</value>
+  </data>
+  <data name="Docs.Placeholder.StartRelay" xml:space="preserve">
+    <value>Operational note: adapt these steps to your environment policy.</value>
+  </data>
+  <data name="Admin.Discounts.MaxUses" xml:space="preserve">
+    <value>Max uses</value>
+  </data>
+  <data name="Common.Next" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="Js.Copy.Failed" xml:space="preserve">
+    <value>Copy failed</value>
+  </data>
+  <data name="Index.Title" xml:space="preserve">
+    <value>OmniRelay - Secure Connectivity</value>
+  </data>
+  <data name="Index.Config.Faq1.Q" xml:space="preserve">
+    <value>How long does setup take?</value>
+  </data>
+  <data name="Admin.Discounts.Table.Discount" xml:space="preserve">
+    <value>Discount</value>
+  </data>
+  <data name="Docs.StartRelay.3" xml:space="preserve">
+    <value>Click Apply Relay Config.</value>
+  </data>
+  <data name="Docs.Installation.3" xml:space="preserve">
+    <value>Follow the setup wizard and complete installation with default options unless your policy requires custom paths.</value>
+  </data>
+  <data name="Dashboard.Welcome" xml:space="preserve">
+    <value>Welcome to your OmniRelay workspace.</value>
+  </data>
+  <data name="Docs.Installation.1" xml:space="preserve">
+    <value>Download the latest Windows installer from the official OmniRelay download page.</value>
+  </data>
+  <data name="Docs.StartRelay.4" xml:space="preserve">
+    <value>Click Install/Start Relay.</value>
+  </data>
+  <data name="Docs.StartRelay.5" xml:space="preserve">
+    <value>Use Refresh and verify that Service State is Running and Proxy Running is True.</value>
+  </data>
+  <data name="Docs.Installation.5" xml:space="preserve">
+    <value>If Windows prompts for permissions, allow access so the app can manage relay operations.</value>
+  </data>
+  <data name="Docs.Installation.4" xml:space="preserve">
+    <value>Launch OmniRelay from the Start Menu after setup completes.</value>
+  </data>
+  <data name="Index.UseCases.Card3.Title" xml:space="preserve">
+    <value>Incident response</value>
+  </data>
+  <data name="Admin.Paid.Source" xml:space="preserve">
+    <value>Source filter:</value>
+  </data>
+  <data name="Index.Problem.Title" xml:space="preserve">
+    <value>Why teams choose OmniRelay</value>
+  </data>
+  <data name="Account.AccessDenied.BackToDashboard" xml:space="preserve">
+    <value>Back to dashboard</value>
+  </data>
+  <data name="Admin.Card.BillingOrders" xml:space="preserve">
+    <value>Billing orders</value>
+  </data>
+  <data name="Admin.Billing.Table.IssuedLicense" xml:space="preserve">
+    <value>Issued license key</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row2.Action" xml:space="preserve">
+    <value>Click Refresh, then verify adapters are enabled in Windows Network Settings.</value>
+  </data>
+  <data name="Contact.Form.Subject" xml:space="preserve">
+    <value>Subject</value>
+  </data>
+  <data name="AppAccount.CreatedAtUtc" xml:space="preserve">
+    <value>Created (UTC)</value>
+  </data>
+  <data name="Admin.Billing.Table.Discount" xml:space="preserve">
+    <value>Discount</value>
+  </data>
+  <data name="Docs.Activation.5" xml:space="preserve">
+    <value>If activation fails, verify key accuracy, system time, and internet connectivity, then retry.</value>
+  </data>
+  <data name="Docs.Activation.4" xml:space="preserve">
+    <value>Wait for the confirmation message and automatic navigation to operational pages.</value>
+  </data>
+  <data name="Docs.Activation.3" xml:space="preserve">
+    <value>Click Activate License.</value>
+  </data>
+  <data name="Docs.Activation.2" xml:space="preserve">
+    <value>Paste your license key into the activation field.</value>
+  </data>
+  <data name="Docs.Activation.1" xml:space="preserve">
+    <value>Open the License page.</value>
+  </data>
+  <data name="Docs.Monitoring.Row6.Indicator" xml:space="preserve">
+    <value>Health</value>
+  </data>
+  <data name="Layout.Nav.Logout" xml:space="preserve">
+    <value>Logout</value>
+  </data>
+  <data name="Docs.Monitoring.Table.Expected" xml:space="preserve">
+    <value>Expected</value>
+  </data>
+  <data name="Js.Checkout.Summary.None" xml:space="preserve">
+    <value>none</value>
+  </data>
+  <data name="Billing.Modal.CancelAria" xml:space="preserve">
+    <value>Cancel redirect</value>
+  </data>
+  <data name="AppDownloads.Sha" xml:space="preserve">
+    <value>SHA-256</value>
+  </data>
+  <data name="Admin.Billing.Table.Final" xml:space="preserve">
+    <value>Final</value>
+  </data>
+  <data name="Admin.Discounts.Msg.MaxUsesPositive" xml:space="preserve">
+    <value>Max uses must be greater than zero.</value>
+  </data>
+  <data name="Layout.Nav.Login" xml:space="preserve">
+    <value>Login</value>
+  </data>
+  <data name="Index.Config.Result3" xml:space="preserve">
+    <value>gateway uptime during peak periods</value>
+  </data>
+  <data name="Admin.Card.OpenList" xml:space="preserve">
+    <value>Open list</value>
+  </data>
+  <data name="Docs.Monitoring.Intro" xml:space="preserve">
+    <value>Use these indicators to validate healthy operation:</value>
+  </data>
+  <data name="Index.UseCases.Card2.Body" xml:space="preserve">
+    <value>Maintain stable paths for daily operations.</value>
+  </data>
+  <data name="Billing.Summary.Discount" xml:space="preserve">
+    <value>Discount</value>
+  </data>
+  <data name="Admin.Discounts.Msg.CodeTooLong" xml:space="preserve">
+    <value>Coupon code is too long.</value>
+  </data>
+  <data name="Docs.Monitoring.Row4.Meaning" xml:space="preserve">
+    <value>Shows whether remote connectivity path is currently established.</value>
+  </data>
+  <data name="Admin.Discounts.Msg.CodeExists" xml:space="preserve">
+    <value>Coupon code already exists.</value>
+  </data>
+  <data name="Index.Config.SecondaryCtaText" xml:space="preserve">
+    <value>View Deployment Guide</value>
+  </data>
+  <data name="Trial.StartButton" xml:space="preserve">
+    <value>Start trial</value>
+  </data>
+  <data name="Dashboard.Action.ViewLicenses" xml:space="preserve">
+    <value>View licenses</value>
+  </data>
+  <data name="Layout.Language.English" xml:space="preserve">
+    <value>English</value>
+  </data>
+  <data name="Contact.Msg.VerificationFailed" xml:space="preserve">
+    <value>Verification failed. Please retry.</value>
+  </data>
+  <data name="Layout.Language.Russian" xml:space="preserve">
+    <value>Russian</value>
+  </data>
+</root>

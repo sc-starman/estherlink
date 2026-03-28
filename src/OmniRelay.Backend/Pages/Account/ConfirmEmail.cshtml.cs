@@ -1,19 +1,25 @@
 using System.Text;
+using OmniRelay.Backend.Localization;
 using OmniRelay.Backend.Models;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Localization;
 
 namespace OmniRelay.Backend.Pages.Account;
 
 public sealed class ConfirmEmailModel : PageModel
 {
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly IStringLocalizer<SharedResource> _localizer;
 
-    public ConfirmEmailModel(UserManager<ApplicationUser> userManager)
+    public ConfirmEmailModel(
+        UserManager<ApplicationUser> userManager,
+        IStringLocalizer<SharedResource> localizer)
     {
         _userManager = userManager;
+        _localizer = localizer;
     }
 
     public bool Confirmed { get; private set; }
@@ -23,14 +29,14 @@ public sealed class ConfirmEmailModel : PageModel
     {
         if (userId is null || string.IsNullOrWhiteSpace(code))
         {
-            Message = "Invalid confirmation link.";
+            Message = _localizer["ConfirmEmail.Msg.InvalidLink"];
             return Page();
         }
 
         var user = await _userManager.FindByIdAsync(userId.Value.ToString());
         if (user is null)
         {
-            Message = "User not found.";
+            Message = _localizer["ConfirmEmail.Msg.UserNotFound"];
             return Page();
         }
 
@@ -42,7 +48,7 @@ public sealed class ConfirmEmailModel : PageModel
         }
         catch
         {
-            Message = "Invalid confirmation token.";
+            Message = _localizer["ConfirmEmail.Msg.InvalidToken"];
             return Page();
         }
 
@@ -50,11 +56,11 @@ public sealed class ConfirmEmailModel : PageModel
         if (result.Succeeded)
         {
             Confirmed = true;
-            Message = "Your email has been confirmed. You can now log in.";
+            Message = _localizer["ConfirmEmail.Msg.Success"];
             return Page();
         }
 
-        Message = "Email confirmation failed. The link may be expired or already used.";
+        Message = _localizer["ConfirmEmail.Msg.Failed"];
         return Page();
     }
 }

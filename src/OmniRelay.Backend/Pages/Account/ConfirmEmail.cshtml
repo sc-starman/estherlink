@@ -1,11 +1,11 @@
 @page "/account/confirm-email"
 @model OmniRelay.Backend.Pages.Account.ConfirmEmailModel
 @{
-    ViewData["Title"] = "Confirm Email";
+    ViewData["Title"] = S["Account.ConfirmEmail.Title"];
 }
 
 <div class="max-w-md mx-auto px-4 py-16">
-    <h1 class="text-3xl font-bold mb-6">Email Confirmation</h1>
+    <h1 class="text-3xl font-bold mb-6">@S["Account.ConfirmEmail.Heading"]</h1>
 
     @if (Model.Confirmed)
     {
@@ -16,5 +16,5 @@
         <div class="mb-4 rounded border border-red-500/50 bg-red-500/10 p-3 text-red-200">@Model.Message</div>
     }
 
-    <a href="/account/login" class="inline-block rounded bg-cyan-500 text-slate-900 font-semibold px-4 py-2 hover:bg-cyan-400">Go to Login</a>
+    <a href="/account/login" class="inline-block rounded bg-cyan-500 text-slate-900 font-semibold px-4 py-2 hover:bg-cyan-400">@S["Account.ConfirmEmail.GoToLogin"]</a>
 </div>

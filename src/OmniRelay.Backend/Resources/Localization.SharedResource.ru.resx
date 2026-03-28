@@ -1,0 +1,1533 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="Billing.Table.CreatedAt" xml:space="preserve">
+    <value>Создано в (UTC)</value>
+  </data>
+  <data name="Docs.Monitoring.Row6.Expected" xml:space="preserve">
+    <value>Здоровый</value>
+  </data>
+  <data name="Docs.Requirements.3" xml:space="preserve">
+    <value>Сетевые адаптеры: как минимум два активных адаптера видны в Windows при использовании сценариев разделения сети.</value>
+  </data>
+  <data name="Docs.Requirements.2" xml:space="preserve">
+    <value>Разрешения пользователя: для операций установки, запуска и остановки рекомендуется доступ локального администратора.</value>
+  </data>
+  <data name="Contact.Msg.ValidationFailed" xml:space="preserve">
+    <value>Пожалуйста, исправьте выделенные поля и повторите попытку.</value>
+  </data>
+  <data name="Docs.Requirements.4" xml:space="preserve">
+    <value>Ожидания от Интернета: как минимум один путь с исходящим доступом для настройки, проверки и проверки лицензий.</value>
+  </data>
+  <data name="Admin.Billing.Table.ProviderMessage" xml:space="preserve">
+    <value>Сообщение поставщика</value>
+  </data>
+  <data name="Account.AccessDenied.Body" xml:space="preserve">
+    <value>У вас нет разрешения на доступ к этой странице.</value>
+  </data>
+  <data name="Common.Total" xml:space="preserve">
+    <value>Общий:</value>
+  </data>
+  <data name="ConfirmEmail.Msg.InvalidLink" xml:space="preserve">
+    <value>Неверная ссылка для подтверждения.</value>
+  </data>
+  <data name="Dashboard.Metric.LatestBuild" xml:space="preserve">
+    <value>Последняя сборка</value>
+  </data>
+  <data name="Docs.Update.4" xml:space="preserve">
+    <value>Запустите установщик и завершите обновление.</value>
+  </data>
+  <data name="Index.Config.OfferRiskReducer" xml:space="preserve">
+    <value>Начните с двухдневной бесплатной пробной версии перед покупкой.</value>
+  </data>
+  <data name="Docs.Monitoring.Row1.Meaning" xml:space="preserve">
+    <value>Показывает, работает ли локальная служба ретрансляции.</value>
+  </data>
+  <data name="Dashboard.Metric.Trial" xml:space="preserve">
+    <value>Пробный</value>
+  </data>
+  <data name="Contact.Form.Email" xml:space="preserve">
+    <value>Электронная почта</value>
+  </data>
+  <data name="Admin.Billing.Table.Updated" xml:space="preserve">
+    <value>Обновлено (UTC)</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row5.Action" xml:space="preserve">
+    <value>Используйте «Обновить», затем повторно запустите операции «Тестовый туннель» и «Запуск», чтобы восстановить сеанс.</value>
+  </data>
+  <data name="Index.HowItWorks.Step" xml:space="preserve">
+    <value>Шаг</value>
+  </data>
+  <data name="Download.QuickInstall.Title" xml:space="preserve">
+    <value>Контрольный список быстрой установки</value>
+  </data>
+  <data name="Licenses.Table.Transfers" xml:space="preserve">
+    <value>Трансферы</value>
+  </data>
+  <data name="Layout.Nav.Contact" xml:space="preserve">
+    <value>Контакт</value>
+  </data>
+  <data name="Docs.RelayConfig.Row3.Field" xml:space="preserve">
+    <value>Исходящая сеть (IC2)</value>
+  </data>
+  <data name="Js.Coupon.None" xml:space="preserve">
+    <value>Купон не применяется.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row5.Confirm" xml:space="preserve">
+    <value>Tunnel Connected возвращается к True.</value>
+  </data>
+  <data name="Licenses.Title" xml:space="preserve">
+    <value>Лицензии</value>
+  </data>
+  <data name="Docs.FirstLaunch.3" xml:space="preserve">
+    <value>Используйте строку состояния и журналы действий в нижней части панелей управления, чтобы отслеживать результат каждой команды.</value>
+  </data>
+  <data name="Index.Pricing.Title" xml:space="preserve">
+    <value>Цены</value>
+  </data>
+  <data name="Dashboard.Metric.Licenses" xml:space="preserve">
+    <value>Лицензии</value>
+  </data>
+  <data name="Index.UseCases.Card5.Title" xml:space="preserve">
+    <value>Контролируемое расширение</value>
+  </data>
+  <data name="Download.Eyebrow" xml:space="preserve">
+    <value>Дистрибутив установщика</value>
+  </data>
+  <data name="Common.Yes" xml:space="preserve">
+    <value>Да</value>
+  </data>
+  <data name="Download.Minimum.Item4" xml:space="preserve">
+    <value>Стабильное подключение к Интернету для активации</value>
+  </data>
+  <data name="Dashboard.QuickActions" xml:space="preserve">
+    <value>Быстрые действия</value>
+  </data>
+  <data name="Common.PageXofY" xml:space="preserve">
+    <value>Страница {0} из {1}</value>
+  </data>
+  <data name="Account.Register.HaveAccount" xml:space="preserve">
+    <value>У вас уже есть аккаунт?</value>
+  </data>
+  <data name="Docs.RelayConfig.Row1.Valid" xml:space="preserve">
+    <value>1-65535</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row5.Problem" xml:space="preserve">
+    <value>Подключено раньше, но не после сбоя</value>
+  </data>
+  <data name="Js.Coupon.Applied" xml:space="preserve">
+    <value>Купон применен: {code} ({percent}% скидка).</value>
+  </data>
+  <data name="Download.Title" xml:space="preserve">
+    <value>Скачать</value>
+  </data>
+  <data name="Account.Register.Title" xml:space="preserve">
+    <value>Зарегистрироваться</value>
+  </data>
+  <data name="Layout.Nav.Documentation" xml:space="preserve">
+    <value>Документация</value>
+  </data>
+  <data name="Js.Copy.Copy" xml:space="preserve">
+    <value>Копировать</value>
+  </data>
+  <data name="Js.Trial.RequestFailed" xml:space="preserve">
+    <value>Пробный запрос не выполнен.</value>
+  </data>
+  <data name="Trial.Subtitle" xml:space="preserve">
+    <value>Попробуйте OmniRelay перед покупкой бессрочной лицензии.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row2.Problem" xml:space="preserve">
+    <value>В раскрывающихся списках адаптеры не показаны.</value>
+  </data>
+  <data name="Docs.Installation.2" xml:space="preserve">
+    <value>Запустите установщик от имени администратора.</value>
+  </data>
+  <data name="Account.Register.Heading" xml:space="preserve">
+    <value>Создайте свою учетную запись</value>
+  </data>
+  <data name="Common.Msg.ValidationFailed" xml:space="preserve">
+    <value>Проверка не удалась.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Table.Confirm" xml:space="preserve">
+    <value>Как подтвердить</value>
+  </data>
+  <data name="Register.Msg.ConfirmUrlGenerationFailed" xml:space="preserve">
+    <value>Не удалось создать ссылку для подтверждения.</value>
+  </data>
+  <data name="Docs.Monitoring.Table.Indicator" xml:space="preserve">
+    <value>Индикатор</value>
+  </data>
+  <data name="Admin.Table.UpdatesUntilUtc" xml:space="preserve">
+    <value>Обновления до (UTC)</value>
+  </data>
+  <data name="Index.Config.Result1" xml:space="preserve">
+    <value>меньше обращений в службу поддержки, связанных с доступом</value>
+  </data>
+  <data name="Common.Disabled" xml:space="preserve">
+    <value>неполноценный</value>
+  </data>
+  <data name="Licenses.Policy.Title" xml:space="preserve">
+    <value>Политика использования</value>
+  </data>
+  <data name="Common.Expires" xml:space="preserve">
+    <value>Срок действия истекает</value>
+  </data>
+  <data name="Docs.Monitoring.Row4.Indicator" xml:space="preserve">
+    <value>Туннель подключен</value>
+  </data>
+  <data name="Admin.Discounts.CreateButton" xml:space="preserve">
+    <value>Создать купон</value>
+  </data>
+  <data name="Index.Problem.Card1.Title" xml:space="preserve">
+    <value>Фрагментированные пути доступа</value>
+  </data>
+  <data name="Docs.RelayConfig.Row4.Valid" xml:space="preserve">
+    <value>Действие кнопки</value>
+  </data>
+  <data name="Index.Problem.Card2.Title" xml:space="preserve">
+    <value>Нестабильные маршруты</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row6.Confirm" xml:space="preserve">
+    <value>Журнал действий получает новые строки с результатом.</value>
+  </data>
+  <data name="Admin.Card.DiscountCoupons" xml:space="preserve">
+    <value>Купоны на скидку</value>
+  </data>
+  <data name="Index.Config.Testimonial2.Role" xml:space="preserve">
+    <value>DevOps-менеджер</value>
+  </data>
+  <data name="Register.Msg.AccountCreated" xml:space="preserve">
+    <value>Аккаунт создан. Проверьте свою электронную почту для подтверждения.</value>
+  </data>
+  <data name="Index.Config.HeroSubheadline" xml:space="preserve">
+    <value>OmniRelay помогает вам поддерживать надежную частную интернет-маршрутизацию в многоуровневых и ограниченных сетевых средах.</value>
+  </data>
+  <data name="Index.Security.Body" xml:space="preserve">
+    <value>Создан с практичными элементами управления для производственных операций.</value>
+  </data>
+  <data name="Admin.Table.Status" xml:space="preserve">
+    <value>Статус</value>
+  </data>
+  <data name="Admin.Discounts.CodeAllowed" xml:space="preserve">
+    <value>Разрешено: буквы, цифры, -, _</value>
+  </data>
+  <data name="Index.Config.ClosingBody" xml:space="preserve">
+    <value>Начните бесплатную пробную версию, проверьте OmniRelay в своей среде и перейдите к контролируемой частной маршрутизации с помощью одноразовой лицензии.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row4.Problem" xml:space="preserve">
+    <value>Проверка здоровья показывает: нездоров</value>
+  </data>
+  <data name="Docs.Monitoring.Row5.Expected" xml:space="preserve">
+    <value>Здоровые/активные состояния</value>
+  </data>
+  <data name="Js.Order.Refreshing" xml:space="preserve">
+    <value>Обновление заказа...</value>
+  </data>
+  <data name="Common.Created" xml:space="preserve">
+    <value>Созданный</value>
+  </data>
+  <data name="Index.Footer.Body" xml:space="preserve">
+    <value>Нужна помощь в оценке соответствия вашей среде? Связаться с нами.</value>
+  </data>
+  <data name="Admin.Discounts.Msg.GenerateFailed" xml:space="preserve">
+    <value>Не удалось сгенерировать код купона.</value>
+  </data>
+  <data name="Common.Apply" xml:space="preserve">
+    <value>Применять</value>
+  </data>
+  <data name="Layout.Language" xml:space="preserve">
+    <value>Язык</value>
+  </data>
+  <data name="Docs.Sections" xml:space="preserve">
+    <value>Разделы</value>
+  </data>
+  <data name="Download.Windows.Sha" xml:space="preserve">
+    <value>ША-256:</value>
+  </data>
+  <data name="Layout.Nav.Home" xml:space="preserve">
+    <value>Дом</value>
+  </data>
+  <data name="Billing.Table.Final" xml:space="preserve">
+    <value>Финал</value>
+  </data>
+  <data name="Docs.RelayConfig.Row4.Description" xml:space="preserve">
+    <value>Сохраняет текущие значения полей реле.</value>
+  </data>
+  <data name="Dashboard.State.Active" xml:space="preserve">
+    <value>активный</value>
+  </data>
+  <data name="Contact.Msg.SendFailed" xml:space="preserve">
+    <value>Не удалось отправить ваше сообщение.</value>
+  </data>
+  <data name="Account.Login.NeedAccount" xml:space="preserve">
+    <value>Нужен аккаунт?</value>
+  </data>
+  <data name="Billing.Table.AttemptId" xml:space="preserve">
+    <value>Идентификатор попытки</value>
+  </data>
+  <data name="Docs.StartRelay.2" xml:space="preserve">
+    <value>Установите порт прослушивания прокси, сеть VPS (IC1) и исходящую сеть (IC2).</value>
+  </data>
+  <data name="Admin.Table.Plan" xml:space="preserve">
+    <value>План</value>
+  </data>
+  <data name="Admin.Discounts.Table.Creator" xml:space="preserve">
+    <value>Создатель</value>
+  </data>
+  <data name="Docs.RelayConfig.Row1.Notes" xml:space="preserve">
+    <value>Используйте неиспользуемый порт. Следите за настройками вашего клиента.</value>
+  </data>
+  <data name="Common.Close" xml:space="preserve">
+    <value>Закрывать</value>
+  </data>
+  <data name="Download.Linux.Button" xml:space="preserve">
+    <value>Вскоре</value>
+  </data>
+  <data name="Index.Config.HeroHeadline" xml:space="preserve">
+    <value>Безопасное подключение через многоуровневый Интернет</value>
+  </data>
+  <data name="Account.ConfirmEmail.Heading" xml:space="preserve">
+    <value>Подтвердите свой адрес электронной почты</value>
+  </data>
+  <data name="Docs.Monitoring.Row3.Indicator" xml:space="preserve">
+    <value>Порт прослушивания прокси</value>
+  </data>
+  <data name="Docs.Monitoring.Row7.Indicator" xml:space="preserve">
+    <value>Последняя ошибка</value>
+  </data>
+  <data name="Docs.RelayConfig.Row4.Field" xml:space="preserve">
+    <value>Применить конфигурацию реле</value>
+  </data>
+  <data name="AppDownloads.NoRelease" xml:space="preserve">
+    <value>Для этого канала нет выпуска.</value>
+  </data>
+  <data name="Download.QuickInstall.Item3" xml:space="preserve">
+    <value>Полный мастер с параметрами по умолчанию.</value>
+  </data>
+  <data name="Download.QuickInstall.Item2" xml:space="preserve">
+    <value>Запустите установку от имени администратора.</value>
+  </data>
+  <data name="Download.QuickInstall.Item1" xml:space="preserve">
+    <value>Загрузите последнюю версию установщика.</value>
+  </data>
+  <data name="Admin.Discounts.CreateCoupon" xml:space="preserve">
+    <value>Создать купон</value>
+  </data>
+  <data name="Contact.Form.Name" xml:space="preserve">
+    <value>Имя</value>
+  </data>
+  <data name="Docs.RelayConfig.Row3.Valid" xml:space="preserve">
+    <value>Любой обнаруженный адаптер</value>
+  </data>
+  <data name="Index.Config.How1" xml:space="preserve">
+    <value>Определите доступные сетевые каналы в вашей среде.</value>
+  </data>
+  <data name="Docs.Requirements.1" xml:space="preserve">
+    <value>Операционная система: Windows 10 или Windows 11 (64-разрядная версия).</value>
+  </data>
+  <data name="Billing.Modal.RedirectSuffix" xml:space="preserve">
+    <value>секунды.</value>
+  </data>
+  <data name="Contact.Title" xml:space="preserve">
+    <value>Контакт</value>
+  </data>
+  <data name="Docs.Section2" xml:space="preserve">
+    <value>2. Системные требования</value>
+  </data>
+  <data name="Download.Minimum.Item2" xml:space="preserve">
+    <value>Не менее 2 ГБ ОЗУ</value>
+  </data>
+  <data name="Billing.BasePrice" xml:space="preserve">
+    <value>Базовая цена</value>
+  </data>
+  <data name="Admin.Discounts.Msg.CodeInvalidChars" xml:space="preserve">
+    <value>Код купона содержит неподдерживаемые символы.</value>
+  </data>
+  <data name="Download.Linux.ComingSoon" xml:space="preserve">
+    <value>вскоре</value>
+  </data>
+  <data name="Common.Show" xml:space="preserve">
+    <value>Показывать</value>
+  </data>
+  <data name="Contact.Msg.SupportUnavailable" xml:space="preserve">
+    <value>Канал поддержки в настоящее время недоступен. Пожалуйста, повторите попытку позже.</value>
+  </data>
+  <data name="Docs.Section8" xml:space="preserve">
+    <value>8. Мониторинг и здоровье</value>
+  </data>
+  <data name="Docs.Section5" xml:space="preserve">
+    <value>5. Активация лицензии</value>
+  </data>
+  <data name="Docs.Section4" xml:space="preserve">
+    <value>4. Первый запуск</value>
+  </data>
+  <data name="Docs.Section7" xml:space="preserve">
+    <value>7. Пусковое реле</value>
+  </data>
+  <data name="Docs.Section6" xml:space="preserve">
+    <value>6. Конфигурация реле</value>
+  </data>
+  <data name="Admin.Discounts.Msg.Disabled" xml:space="preserve">
+    <value>Купон отключен.</value>
+  </data>
+  <data name="Admin.Table.UserEmail" xml:space="preserve">
+    <value>Электронная почта пользователя</value>
+  </data>
+  <data name="Docs.Section3" xml:space="preserve">
+    <value>3. Установка</value>
+  </data>
+  <data name="Admin.Discounts.Table.UsedMax" xml:space="preserve">
+    <value>Б/у/Макс.</value>
+  </data>
+  <data name="Admin.Title" xml:space="preserve">
+    <value>Панель администратора</value>
+  </data>
+  <data name="Docs.Section9" xml:space="preserve">
+    <value>9. Устранение неполадок</value>
+  </data>
+  <data name="AppDownloads.Version" xml:space="preserve">
+    <value>Версия</value>
+  </data>
+  <data name="Index.ReadDocumentation" xml:space="preserve">
+    <value>Читать документацию</value>
+  </data>
+  <data name="Admin.Billing.Table.UserEmail" xml:space="preserve">
+    <value>Электронная почта пользователя</value>
+  </data>
+  <data name="Index.Config.Faq5.Q" xml:space="preserve">
+    <value>Будет ли это работать для трафика браузера и приложений?</value>
+  </data>
+  <data name="Admin.Discounts.Subtitle" xml:space="preserve">
+    <value>Создавайте и управляйте многоразовыми купонами на скидку.</value>
+  </data>
+  <data name="Index.Config.How2" xml:space="preserve">
+    <value>Примените свою политику маршрутизации и позвольте OmniRelay устанавливать безопасные пути ретрансляции.</value>
+  </data>
+  <data name="Dashboard.State.None" xml:space="preserve">
+    <value>никто</value>
+  </data>
+  <data name="Billing.Table.IssuedLicense" xml:space="preserve">
+    <value>Выданная лицензия</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row6.Problem" xml:space="preserve">
+    <value>Нажатие кнопки, кажется, ничего не делает</value>
+  </data>
+  <data name="Index.Config.Testimonial1.Quote" xml:space="preserve">
+    <value>До появления OmniRelay каждое изменение сети становилось инцидентом. Теперь освоение новых локаций предсказуемо и спокойно.</value>
+  </data>
+  <data name="Account.ConfirmEmail.GoToLogin" xml:space="preserve">
+    <value>Перейти к входу</value>
+  </data>
+  <data name="Admin.Discounts.Table.Status" xml:space="preserve">
+    <value>Статус</value>
+  </data>
+  <data name="Docs.Placeholder.Monitoring" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row2.Valid" xml:space="preserve">
+    <value>Любой обнаруженный адаптер</value>
+  </data>
+  <data name="Docs.Monitoring.Table.Meaning" xml:space="preserve">
+    <value>Значение</value>
+  </data>
+  <data name="Admin.Table.LicenseKey" xml:space="preserve">
+    <value>Лицензионный ключ</value>
+  </data>
+  <data name="Docs.Placeholder.FirstLaunch" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Docs.Update.2" xml:space="preserve">
+    <value>Из OmniRelay остановите активные операции реле.</value>
+  </data>
+  <data name="Billing.Table.ProviderMessage" xml:space="preserve">
+    <value>Сообщение поставщика</value>
+  </data>
+  <data name="Docs.FirstLaunch.4" xml:space="preserve">
+    <value>Рекомендуемое первое действие: откройте «Управление реле» и убедитесь, что ваши сетевые адаптеры обнаружены.</value>
+  </data>
+  <data name="Download.Linux.Title" xml:space="preserve">
+    <value>Linux (планируется)</value>
+  </data>
+  <data name="Common.Unknown" xml:space="preserve">
+    <value>неизвестный</value>
+  </data>
+  <data name="Admin.Discounts.Msg.AlreadyDisabled" xml:space="preserve">
+    <value>Купон уже отключен.</value>
+  </data>
+  <data name="Index.UseCases.Card1.Title" xml:space="preserve">
+    <value>Регистрация филиала</value>
+  </data>
+  <data name="Admin.Card.PaidLicenses" xml:space="preserve">
+    <value>Платные лицензии</value>
+  </data>
+  <data name="Admin.Paid.Empty" xml:space="preserve">
+    <value>Платных лицензий не обнаружено.</value>
+  </data>
+  <data name="Docs.Monitoring.Row2.Indicator" xml:space="preserve">
+    <value>Прокси работает</value>
+  </data>
+  <data name="Index.Config.Faq4.A" xml:space="preserve">
+    <value>Да. В комплект входят документация и оперативное руководство, а также четкий справочник по общим вопросам.</value>
+  </data>
+  <data name="Admin.Billing.Table.Created" xml:space="preserve">
+    <value>Создано (UTC)</value>
+  </data>
+  <data name="Download.Windows.Title" xml:space="preserve">
+    <value>Окна</value>
+  </data>
+  <data name="Contact.Form.Website" xml:space="preserve">
+    <value>Веб-сайт</value>
+  </data>
+  <data name="Download.QuickInstall.Item5" xml:space="preserve">
+    <value>При необходимости просмотрите &lt;a href='/docs' class='text-cyan-300 underline'&gt;документацию по развертыванию&lt;/a&gt;.</value>
+  </data>
+  <data name="Index.UseCases.Card3.Body" xml:space="preserve">
+    <value>Быстрое восстановление при ухудшении маршрутов.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row2.Confirm" xml:space="preserve">
+    <value>Адаптеры появляются в списках IC1/IC2.</value>
+  </data>
+  <data name="Js.Copy.Copied" xml:space="preserve">
+    <value>Скопировано</value>
+  </data>
+  <data name="AppDownloads.UpdatesUntil" xml:space="preserve">
+    <value>Обновления до</value>
+  </data>
+  <data name="Index.Config.Testimonial2.Quote" xml:space="preserve">
+    <value>Наша команда прекратила обсуждение обходных путей маршрутизации и приступила к отправке. Надежность улучшилась в первую неделю.</value>
+  </data>
+  <data name="Admin.Table.UserId" xml:space="preserve">
+    <value>ID пользователя</value>
+  </data>
+  <data name="Docs.RelayConfig.Row2.Description" xml:space="preserve">
+    <value>Сетевой адаптер, используемый для подключения на стороне реле.</value>
+  </data>
+  <data name="Licenses.Modal.LicenseId" xml:space="preserve">
+    <value>Идентификатор лицензии</value>
+  </data>
+  <data name="Docs.RelayConfig.Table.Field" xml:space="preserve">
+    <value>Поле</value>
+  </data>
+  <data name="Common.Previous" xml:space="preserve">
+    <value>Предыдущий</value>
+  </data>
+  <data name="ConfirmEmail.Msg.UserNotFound" xml:space="preserve">
+    <value>Пользователь не найден.</value>
+  </data>
+  <data name="Licenses.Table.Status" xml:space="preserve">
+    <value>Статус</value>
+  </data>
+  <data name="Index.Config.Faq5.A" xml:space="preserve">
+    <value>Да. Платформа создана для обработки реальных шаблонов приложений с оперативным контролем надежности.</value>
+  </data>
+  <data name="Docs.Heading" xml:space="preserve">
+    <value>Документация по развертыванию</value>
+  </data>
+  <data name="Download.Minimum.Title" xml:space="preserve">
+    <value>Минимальные требования</value>
+  </data>
+  <data name="Billing.Summary.Base" xml:space="preserve">
+    <value>База</value>
+  </data>
+  <data name="Docs.RelayConfig.Row2.Field" xml:space="preserve">
+    <value>Сеть VPS (IC1)</value>
+  </data>
+  <data name="Licenses.Table.Plan" xml:space="preserve">
+    <value>План</value>
+  </data>
+  <data name="Docs.RelayConfig.Row5.Description" xml:space="preserve">
+    <value>Перезагружает текущий статус и информацию об адаптере.</value>
+  </data>
+  <data name="Billing.Modal.AmountToPay" xml:space="preserve">
+    <value>Сумма к оплате:</value>
+  </data>
+  <data name="Admin.Discounts.Table.Created" xml:space="preserve">
+    <value>Создано (UTC)</value>
+  </data>
+  <data name="ConfirmEmail.Msg.Success" xml:space="preserve">
+    <value>Ваш адрес электронной почты подтвержден.</value>
+  </data>
+  <data name="Index.Config.Benefit3" xml:space="preserve">
+    <value>Работа на основе политик для предсказуемого поведения при изменениях в сети.</value>
+  </data>
+  <data name="Billing.OneTimeLicense" xml:space="preserve">
+    <value>Одноразовая лицензия</value>
+  </data>
+  <data name="Dashboard.Sidebar.Trial" xml:space="preserve">
+    <value>Бесплатная пробная версия</value>
+  </data>
+  <data name="Docs.Monitoring.Row6.Meaning" xml:space="preserve">
+    <value>Общее заключение о состоянии здоровья по результатам последней проверки.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row6.Action" xml:space="preserve">
+    <value>Принудительное обновление браузера/представления пользовательского интерфейса и повторная попытка; проверьте журнал операций и нижнее сообщение о состоянии.</value>
+  </data>
+  <data name="Index.Config.Benefit5" xml:space="preserve">
+    <value>Оперативная прозрачность для принятия решений о состоянии пути, готовности и непрерывности.</value>
+  </data>
+  <data name="Index.Config.Benefit1" xml:space="preserve">
+    <value>Многоуровневая оркестровка подключений в средах сегментированного доступа.</value>
+  </data>
+  <data name="Index.Config.Benefit2" xml:space="preserve">
+    <value>Частное управление ретрансляцией, чтобы вы не зависели от общедоступных провайдеров VPN.</value>
+  </data>
+  <data name="Admin.Table.Source" xml:space="preserve">
+    <value>Источник</value>
+  </data>
+  <data name="Index.Config.Faq4.Q" xml:space="preserve">
+    <value>Доступна ли поддержка во время развертывания?</value>
+  </data>
+  <data name="Licenses.Table.Term" xml:space="preserve">
+    <value>Срок</value>
+  </data>
+  <data name="Docs.Placeholder.Activation" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Login.Msg.EmailConfirmRequired" xml:space="preserve">
+    <value>Пожалуйста, подтвердите свой адрес электронной почты перед входом в систему.</value>
+  </data>
+  <data name="Index.Config.How3" xml:space="preserve">
+    <value>Отслеживайте работоспособность, проверяйте доступ и поддерживайте непрерывность работы при изменении условий.</value>
+  </data>
+  <data name="Docs.RelayConfig.Table.ValidValues" xml:space="preserve">
+    <value>Допустимые значения</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row1.Problem" xml:space="preserve">
+    <value>Кнопка «Пуск» завершает работу, но статус остается остановленным</value>
+  </data>
+  <data name="Admin.Billing.Empty" xml:space="preserve">
+    <value>Заказов не найдено.</value>
+  </data>
+  <data name="Common.Refresh" xml:space="preserve">
+    <value>Обновить</value>
+  </data>
+  <data name="Account.AccessDenied.Title" xml:space="preserve">
+    <value>Доступ запрещен</value>
+  </data>
+  <data name="Docs.Placeholder.Troubleshooting" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Licenses.Term.Perpetual" xml:space="preserve">
+    <value>Вечный</value>
+  </data>
+  <data name="ConfirmEmail.Msg.Failed" xml:space="preserve">
+    <value>Подтверждение по электронной почте не удалось.</value>
+  </data>
+  <data name="Index.Config.Testimonial1.Role" xml:space="preserve">
+    <value>Руководитель инфраструктуры</value>
+  </data>
+  <data name="Docs.RelayConfig.Intro" xml:space="preserve">
+    <value>Настройте эти поля перед началом операций ретрансляции:</value>
+  </data>
+  <data name="Admin.Billing.Subtitle" xml:space="preserve">
+    <value>Ориентированный на заказ просмотр с последним статусом платежа.</value>
+  </data>
+  <data name="Common.No" xml:space="preserve">
+    <value>Нет</value>
+  </data>
+  <data name="Docs.Title" xml:space="preserve">
+    <value>Документация</value>
+  </data>
+  <data name="Js.Trial.Requesting" xml:space="preserve">
+    <value>Запрос на пробную версию...</value>
+  </data>
+  <data name="Dashboard.Sidebar.Account" xml:space="preserve">
+    <value>Счет</value>
+  </data>
+  <data name="Billing.Table.Base" xml:space="preserve">
+    <value>База</value>
+  </data>
+  <data name="Docs.RelayConfig.Table.OperatorNotes" xml:space="preserve">
+    <value>Примечания оператора</value>
+  </data>
+  <data name="Docs.Troubleshooting.Table.Problem" xml:space="preserve">
+    <value>Проблема</value>
+  </data>
+  <data name="Docs.FirstLaunch.1" xml:space="preserve">
+    <value>При первом запуске OmniRelay открывает процесс регистрации и предлагает активировать лицензию.</value>
+  </data>
+  <data name="AppAccount.PaidLicenses" xml:space="preserve">
+    <value>Платные лицензии</value>
+  </data>
+  <data name="Billing.Table.State" xml:space="preserve">
+    <value>Состояние</value>
+  </data>
+  <data name="Admin.Discounts.Table.Action" xml:space="preserve">
+    <value>Действие</value>
+  </data>
+  <data name="Docs.Introduction.2" xml:space="preserve">
+    <value>Вы настраиваете его через управляемый интерфейс, запускаете операции ретрансляции из пользовательского интерфейса и контролируете текущие показатели работоспособности с помощью встроенных панелей состояния.</value>
+  </data>
+  <data name="Trial.Title" xml:space="preserve">
+    <value>Бесплатная пробная версия</value>
+  </data>
+  <data name="Index.UseCases.Title" xml:space="preserve">
+    <value>Варианты использования</value>
+  </data>
+  <data name="Download.QuickInstall.Item4" xml:space="preserve">
+    <value>Запустите OmniRelay и войдите в систему.</value>
+  </data>
+  <data name="Index.Security.Title" xml:space="preserve">
+    <value>Положение безопасности</value>
+  </data>
+  <data name="Index.Config.Faq1.A" xml:space="preserve">
+    <value>Большинство команд выполняют первоначальную настройку за один сеанс и подтверждают доступ в тот же день.</value>
+  </data>
+  <data name="Download.Recommended.Title" xml:space="preserve">
+    <value>Рекомендуется перед установкой</value>
+  </data>
+  <data name="Billing.CreatePaymentIntent" xml:space="preserve">
+    <value>Создать намерение платежа</value>
+  </data>
+  <data name="Docs.Monitoring.Row1.Expected" xml:space="preserve">
+    <value>Бег</value>
+  </data>
+  <data name="Billing.Modal.GoNow" xml:space="preserve">
+    <value>Иди сейчас</value>
+  </data>
+  <data name="Js.Trial.Started" xml:space="preserve">
+    <value>Пробный период начат. Лицензия: {licenseKey} (истекает {expiresAt}).</value>
+  </data>
+  <data name="Common.Pending" xml:space="preserve">
+    <value>в ожидании</value>
+  </data>
+  <data name="Licenses.Policy.Body" xml:space="preserve">
+    <value>Использование и передача лицензий соответствуют ограничениям приобретенного вами плана.</value>
+  </data>
+  <data name="Index.UseCases.Card2.Title" xml:space="preserve">
+    <value>Удаленный доступ оператора</value>
+  </data>
+  <data name="Index.Config.Benefit4" xml:space="preserve">
+    <value>Быстрое восстановление и отказоустойчивость во время сбоев и сбоев маршрутов.</value>
+  </data>
+  <data name="Index.Features.Title" xml:space="preserve">
+    <value>Что вы получаете</value>
+  </data>
+  <data name="Index.Config.Faq3.A" xml:space="preserve">
+    <value>Да. Вы можете начать с двухдневной пробной версии, чтобы проверить пригодность и производительность перед покупкой.</value>
+  </data>
+  <data name="Index.Config.OfferSummary" xml:space="preserve">
+    <value>Получите все возможности OmniRelay за одну покупку и с предсказуемой стоимостью владения.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row4.Action" xml:space="preserve">
+    <value>Выполните последовательность действий: Тестовый туннель -&gt; Проверка начальной загрузки -&gt; Проверка работоспособности, затем просмотрите строки журнала работы.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row7.Problem" xml:space="preserve">
+    <value>Панель недоступна</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row3.Action" xml:space="preserve">
+    <value>Проверьте доступ в Интернет, системную дату/время и форматирование ключа (без лишних пробелов).</value>
+  </data>
+  <data name="Download.Recommended.Item2" xml:space="preserve">
+    <value>Убедитесь, что исходящий доступ в Интернет доступен.</value>
+  </data>
+  <data name="Docs.Monitoring.Row5.Indicator" xml:space="preserve">
+    <value>Состояние службы шлюза</value>
+  </data>
+  <data name="Dashboard.Metric.PaidLicense" xml:space="preserve">
+    <value>Платная лицензия</value>
+  </data>
+  <data name="Docs.Monitoring.Row7.Meaning" xml:space="preserve">
+    <value>Последняя сводка ошибок, с которыми столкнулся пользователь.</value>
+  </data>
+  <data name="Admin.Billing.Table.Currency" xml:space="preserve">
+    <value>Валюта</value>
+  </data>
+  <data name="Admin.Sidebar.Billing" xml:space="preserve">
+    <value>Биллинг</value>
+  </data>
+  <data name="Billing.Modal.Title" xml:space="preserve">
+    <value>Перенаправление на платежный шлюз</value>
+  </data>
+  <data name="Index.Config.Faq2.A" xml:space="preserve">
+    <value>Нет. OmniRelay разработан так, чтобы соответствовать существующим средам и улучшать управление без серьезных изменений топологии.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row4.Notes" xml:space="preserve">
+    <value>Всегда применяйте после редактирования портов или выбора адаптера.</value>
+  </data>
+  <data name="Admin.Card.TrialLicenses" xml:space="preserve">
+    <value>Пробные лицензии</value>
+  </data>
+  <data name="Index.Solution.Body" xml:space="preserve">
+    <value>OmniRelay обеспечивает маршрутизацию на основе политик, операционный контроль и прозрачность состояния.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row7.Confirm" xml:space="preserve">
+    <value>Панель открывается, и проверки работоспособности проходят.</value>
+  </data>
+  <data name="Common.Msg.VerificationFailed" xml:space="preserve">
+    <value>Проверка не удалась.</value>
+  </data>
+  <data name="Billing.NoPaymentAttempts" xml:space="preserve">
+    <value>Попыток оплаты пока нет.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row5.Valid" xml:space="preserve">
+    <value>Действие кнопки</value>
+  </data>
+  <data name="Index.Problem.Card3.Body" xml:space="preserve">
+    <value>Ручные обходные пути трудно поддерживать в масштабе.</value>
+  </data>
+  <data name="Admin.Billing.Table.OrderId" xml:space="preserve">
+    <value>Идентификатор заказа</value>
+  </data>
+  <data name="Common.Active" xml:space="preserve">
+    <value>активный</value>
+  </data>
+  <data name="Dashboard.Action.BuyLicense" xml:space="preserve">
+    <value>Купить лицензию</value>
+  </data>
+  <data name="Licenses.Table.LastSeen" xml:space="preserve">
+    <value>Последний раз был в сети (UTC)</value>
+  </data>
+  <data name="Docs.RelayConfig.Row5.Field" xml:space="preserve">
+    <value>Обновить</value>
+  </data>
+  <data name="Docs.Update.7" xml:space="preserve">
+    <value>При необходимости повторно примените конфигурацию ретранслятора и шлюза из пользовательского интерфейса и повторите проверку.</value>
+  </data>
+  <data name="Docs.Update.6" xml:space="preserve">
+    <value>Запустите операции ретрансляции и запустите полное обновление состояния и проверку работоспособности.</value>
+  </data>
+  <data name="Billing.Table.OrderId" xml:space="preserve">
+    <value>Идентификатор заказа</value>
+  </data>
+  <data name="Billing.Modal.Coupon" xml:space="preserve">
+    <value>Купон:</value>
+  </data>
+  <data name="Docs.Update.3" xml:space="preserve">
+    <value>Загрузите последнюю версию установочного пакета с официальной страницы загрузки.</value>
+  </data>
+  <data name="Billing.Summary.Coupon" xml:space="preserve">
+    <value>Купон</value>
+  </data>
+  <data name="Docs.Update.1" xml:space="preserve">
+    <value>Запланируйте короткое окно обслуживания.</value>
+  </data>
+  <data name="Download.Recommended.Item3" xml:space="preserve">
+    <value>Запустите установщик с правами администратора.</value>
+  </data>
+  <data name="Docs.Requirements.6" xml:space="preserve">
+    <value>Синхронизация времени: системные часы Windows должны быть точными для стабильной проверки состояния и процессов активации.</value>
+  </data>
+  <data name="Index.UseCases.Card5.Body" xml:space="preserve">
+    <value>Добавляйте новые местоположения с помощью повторяемых рабочих процессов.</value>
+  </data>
+  <data name="Js.Checkout.IntentMissing" xml:space="preserve">
+    <value>Создать намерение удалось, но идентификатор намерения отсутствует.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row1.Confirm" xml:space="preserve">
+    <value>Подтвердите, что состояние службы изменилось на «Выполняется после обновления».</value>
+  </data>
+  <data name="Docs.Placeholder.Updating" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Admin.Discounts.Empty" xml:space="preserve">
+    <value>Купоны не найдены.</value>
+  </data>
+  <data name="Docs.Monitoring.Row7.Expected" xml:space="preserve">
+    <value>Пустой или только информационный</value>
+  </data>
+  <data name="Dashboard.Sidebar.Dashboard" xml:space="preserve">
+    <value>Панель управления</value>
+  </data>
+  <data name="Trial.Policy" xml:space="preserve">
+    <value>Пробная версия доступна один раз для каждой учетной записи и включает ограниченный период использования.</value>
+  </data>
+  <data name="Index.Security.Bullet2" xml:space="preserve">
+    <value>Детерминированные проверки пути</value>
+  </data>
+  <data name="Admin.Discounts.Msg.PercentRange" xml:space="preserve">
+    <value>Процент скидки должен находиться в диапазоне от 1 до 99.</value>
+  </data>
+  <data name="Billing.Summary.Final" xml:space="preserve">
+    <value>Финал</value>
+  </data>
+  <data name="Common.None" xml:space="preserve">
+    <value>никто</value>
+  </data>
+  <data name="Account.Login.Heading" xml:space="preserve">
+    <value>Добро пожаловать</value>
+  </data>
+  <data name="Billing.PaymentAttempts" xml:space="preserve">
+    <value>Попытки оплаты</value>
+  </data>
+  <data name="Docs.RelayConfig.Row3.Notes" xml:space="preserve">
+    <value>Выберите адаптер, который обеспечивает предпочтительный исходящий путь.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row3.Problem" xml:space="preserve">
+    <value>Активация не удалась с действительным ключом</value>
+  </data>
+  <data name="Contact.Form.Submit" xml:space="preserve">
+    <value>Отправить сообщение</value>
+  </data>
+  <data name="Index.Security.Bullet3" xml:space="preserve">
+    <value>Видимость оперативного аудита</value>
+  </data>
+  <data name="Admin.Billing.Table.IntentId" xml:space="preserve">
+    <value>Идентификатор намерения</value>
+  </data>
+  <data name="Licenses.Table.CreatedAt" xml:space="preserve">
+    <value>Создано (UTC)</value>
+  </data>
+  <data name="Billing.OneTimeLicenseBody" xml:space="preserve">
+    <value>Бессрочное использование + обновления программного обеспечения на 1 год.</value>
+  </data>
+  <data name="Account.Register.ConfirmPassword" xml:space="preserve">
+    <value>Подтвердите пароль</value>
+  </data>
+  <data name="Docs.Introduction.3" xml:space="preserve">
+    <value>В этом руководстве основное внимание уделяется тому, что вы видите и делаете в продукте, чтобы вы могли уверенно работать с OmniRelay, не изучая детали внутренней реализации.</value>
+  </data>
+  <data name="Docs.Introduction.1" xml:space="preserve">
+    <value>OmniRelay — это настольное приложение для управления безопасным и надежным доступом в Интернет в ограниченных или нестабильных средах.</value>
+  </data>
+  <data name="Billing.Subtitle" xml:space="preserve">
+    <value>Отслеживайте попытки оплаты и статус выдачи лицензии.</value>
+  </data>
+  <data name="AppAccount.Title" xml:space="preserve">
+    <value>Счет</value>
+  </data>
+  <data name="Common.Password" xml:space="preserve">
+    <value>Пароль</value>
+  </data>
+  <data name="Register.Msg.EmailDeliveryFailed" xml:space="preserve">
+    <value>Не удалось отправить письмо с подтверждением. Свяжитесь со службой поддержки.</value>
+  </data>
+  <data name="Admin.Sidebar.PaidLicenses" xml:space="preserve">
+    <value>Платные лицензии</value>
+  </data>
+  <data name="Layout.Brand" xml:space="preserve">
+    <value>Омниреле</value>
+  </data>
+  <data name="Contact.Subtitle" xml:space="preserve">
+    <value>Расскажите нам о вашем контексте развертывания, эксплуатационных ограничениях и потребностях в поддержке.</value>
+  </data>
+  <data name="Contact.Form.Message" xml:space="preserve">
+    <value>Сообщение</value>
+  </data>
+  <data name="Billing.Table.Coupon" xml:space="preserve">
+    <value>Купон</value>
+  </data>
+  <data name="Index.Config.Faq2.Q" xml:space="preserve">
+    <value>Нужно ли нам перепроектировать нашу сеть?</value>
+  </data>
+  <data name="Download.Linux.Body" xml:space="preserve">
+    <value>Дистрибутив Linux запланирован на будущий выпуск.</value>
+  </data>
+  <data name="Docs.Monitoring.Row2.Meaning" xml:space="preserve">
+    <value>Показывает, активна ли конечная точка прослушивания.</value>
+  </data>
+  <data name="Contact.Msg.Sent" xml:space="preserve">
+    <value>Сообщение успешно отправлено.</value>
+  </data>
+  <data name="AppDownloads.Title" xml:space="preserve">
+    <value>Загрузки</value>
+  </data>
+  <data name="Docs.Placeholder.Requirements" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Docs.Monitoring.Row1.Indicator" xml:space="preserve">
+    <value>Состояние службы</value>
+  </data>
+  <data name="Admin.Billing.Table.Base" xml:space="preserve">
+    <value>База</value>
+  </data>
+  <data name="AppDownloads.NoEntitlements" xml:space="preserve">
+    <value>Нет прав на загрузку.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row5.Notes" xml:space="preserve">
+    <value>Используйте после подключения/отключения адаптеров или изменения маршрутов.</value>
+  </data>
+  <data name="Index.UseCases.Card4.Body" xml:space="preserve">
+    <value>Координируйте многоуровневые связи с помощью четкой политики.</value>
+  </data>
+  <data name="Dashboard.Sidebar.Licenses" xml:space="preserve">
+    <value>Лицензии</value>
+  </data>
+  <data name="Common.Remove" xml:space="preserve">
+    <value>Удалять</value>
+  </data>
+  <data name="Register.Email.Body" xml:space="preserve">
+    <value>Пожалуйста, подтвердите свою учетную запись, посетив: {0}.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row3.Confirm" xml:space="preserve">
+    <value>Появится сообщение об успешной активации.</value>
+  </data>
+  <data name="Admin.Discounts.Title" xml:space="preserve">
+    <value>Купоны на скидку</value>
+  </data>
+  <data name="Billing.CouponCode" xml:space="preserve">
+    <value>Код купона</value>
+  </data>
+  <data name="Js.Coupon.Invalid" xml:space="preserve">
+    <value>Купон недействителен.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row2.Notes" xml:space="preserve">
+    <value>Выберите адаптер, подключенный к сети на стороне реле.</value>
+  </data>
+  <data name="Admin.Table.ExpiresUtc" xml:space="preserve">
+    <value>Срок действия истекает (UTC)</value>
+  </data>
+  <data name="Download.Minimum.Item1" xml:space="preserve">
+    <value>Windows 10/11 (64-разрядная версия)</value>
+  </data>
+  <data name="Index.Config.TrustBarText" xml:space="preserve">
+    <value>Используется операционными и инфраструктурными группами, управляющими сетевыми средами с ограниченным доступом.</value>
+  </data>
+  <data name="Admin.Billing.Table.OrderStatus" xml:space="preserve">
+    <value>Статус заказа</value>
+  </data>
+  <data name="Index.Config.OfferPriceAnchor" xml:space="preserve">
+    <value>Одноразовая лицензия стоимостью 299 долларов США.</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row4.Confirm" xml:space="preserve">
+    <value>Состояние здоровья переходит в состояние «Здорово» или отображается явная ошибка, требующая принятия мер.</value>
+  </data>
+  <data name="Index.HowItWorks.Title" xml:space="preserve">
+    <value>Как это работает</value>
+  </data>
+  <data name="Licenses.Table.Remaining" xml:space="preserve">
+    <value>Оставшийся</value>
+  </data>
+  <data name="Download.HeroTitle" xml:space="preserve">
+    <value>Получите OmniRelay для своей среды</value>
+  </data>
+  <data name="Js.Checkout.CreateIntentFailed" xml:space="preserve">
+    <value>Создать намерение не удалось.</value>
+  </data>
+  <data name="Index.Config.OfferTitle" xml:space="preserve">
+    <value>Одноразовая лицензия</value>
+  </data>
+  <data name="Index.Config.MidCtaText" xml:space="preserve">
+    <value>Начать бесплатную пробную версию</value>
+  </data>
+  <data name="Js.Coupon.Unavailable" xml:space="preserve">
+    <value>Невозможно проверить купон прямо сейчас.</value>
+  </data>
+  <data name="Js.Order.RefreshFailed" xml:space="preserve">
+    <value>Обновить не удалось.</value>
+  </data>
+  <data name="Admin.Billing.Table.IntentExpires" xml:space="preserve">
+    <value>Срок действия намерения истекает (UTC)</value>
+  </data>
+  <data name="Js.Server.Failed" xml:space="preserve">
+    <value>Не удалось связаться с сервером.</value>
+  </data>
+  <data name="Billing.Table.UpdatedAt" xml:space="preserve">
+    <value>Обновлено в (UTC)</value>
+  </data>
+  <data name="Admin.Table.CreatedUtc" xml:space="preserve">
+    <value>Создано (UTC)</value>
+  </data>
+  <data name="Admin.Sidebar.Overview" xml:space="preserve">
+    <value>Обзор</value>
+  </data>
+  <data name="Layout.Nav.Dashboard" xml:space="preserve">
+    <value>Панель управления</value>
+  </data>
+  <data name="Login.Msg.LockedOut" xml:space="preserve">
+    <value>Ваш аккаунт заблокирован. Повторите попытку позже.</value>
+  </data>
+  <data name="Trial.Access.Title" xml:space="preserve">
+    <value>Пробный доступ</value>
+  </data>
+  <data name="Docs.FirstLaunch.2" xml:space="preserve">
+    <value>После активации становится доступна основная навигация: Управление реле, Управление шлюзом, Белые списки, Панель управления и Настройки.</value>
+  </data>
+  <data name="Index.Config.Faq3.Q" xml:space="preserve">
+    <value>Можем ли мы попробовать перед оплатой?</value>
+  </data>
+  <data name="Docs.Requirements.5" xml:space="preserve">
+    <value>Удаленный доступ к конечной точке: доступный сервер шлюза с учетной записью пользователя, который может выполнять рабочие команды.</value>
+  </data>
+  <data name="Download.Windows.Stable" xml:space="preserve">
+    <value>стабильный</value>
+  </data>
+  <data name="Download.HeroBody" xml:space="preserve">
+    <value>Используйте последнюю стабильную версию установщика Windows и проверьте подключение с помощью встроенного рабочего процесса развертывания.</value>
+  </data>
+  <data name="Docs.Monitoring.Row4.Expected" xml:space="preserve">
+    <value>Верно для активных сеансов</value>
+  </data>
+  <data name="Licenses.Table.LicenseKey" xml:space="preserve">
+    <value>Лицензионный ключ</value>
+  </data>
+  <data name="Dashboard.Sidebar.Billing" xml:space="preserve">
+    <value>Биллинг</value>
+  </data>
+  <data name="Admin.Trials.Title" xml:space="preserve">
+    <value>Пробные лицензии</value>
+  </data>
+  <data name="Index.UseCases.Card1.Body" xml:space="preserve">
+    <value>Стандартизируйте развертывание и уменьшите вариативность настройки.</value>
+  </data>
+  <data name="Docs.Monitoring.Row2.Expected" xml:space="preserve">
+    <value>Истинный</value>
+  </data>
+  <data name="Download.Windows.Button" xml:space="preserve">
+    <value>Скачать для Windows</value>
+  </data>
+  <data name="ConfirmEmail.Msg.InvalidToken" xml:space="preserve">
+    <value>Недействительный или просроченный токен подтверждения.</value>
+  </data>
+  <data name="Docs.StartRelay.6" xml:space="preserve">
+    <value>Если вы изменили конфигурацию после запуска, снова нажмите «Применить конфигурацию реле» и обновите статус.</value>
+  </data>
+  <data name="Admin.Trials.Source" xml:space="preserve">
+    <value>Исходный фильтр:</value>
+  </data>
+  <data name="Docs.Section10" xml:space="preserve">
+    <value>10. Обновление</value>
+  </data>
+  <data name="Admin.Discounts.Msg.Created" xml:space="preserve">
+    <value>Купон успешно создан.</value>
+  </data>
+  <data name="Account.ConfirmEmail.Title" xml:space="preserve">
+    <value>Подтверждение по электронной почте</value>
+  </data>
+  <data name="Dashboard.Title" xml:space="preserve">
+    <value>Панель управления</value>
+  </data>
+  <data name="Admin.Sidebar.Trials" xml:space="preserve">
+    <value>Пробные лицензии</value>
+  </data>
+  <data name="Admin.Billing.Table.Coupon" xml:space="preserve">
+    <value>Купон</value>
+  </data>
+  <data name="Dashboard.Action.Download" xml:space="preserve">
+    <value>Скачать сборки</value>
+  </data>
+  <data name="Admin.Discounts.DiscountPercent" xml:space="preserve">
+    <value>Процент скидки</value>
+  </data>
+  <data name="Admin.Discounts.CouponCodeOptional" xml:space="preserve">
+    <value>Код купона (необязательно)</value>
+  </data>
+  <data name="Docs.Monitoring.Row3.Meaning" xml:space="preserve">
+    <value>Отображает активный порт прослушивания.</value>
+  </data>
+  <data name="Admin.Discounts.Table.Remaining" xml:space="preserve">
+    <value>Оставшийся</value>
+  </data>
+  <data name="Js.Order.StatusTemplate" xml:space="preserve">
+    <value>Статус заказа: {orderStatus}, intent: {intentStatus}</value>
+  </data>
+  <data name="Docs.LastUpdated" xml:space="preserve">
+    <value>Последнее обновление:</value>
+  </data>
+  <data name="Dashboard.Action.ManageTrial" xml:space="preserve">
+    <value>Управление пробной версией</value>
+  </data>
+  <data name="Download.Recommended.Item1" xml:space="preserve">
+    <value>Убедитесь, что время на вашем компьютере указано правильно.</value>
+  </data>
+  <data name="Admin.Table.LicenseId" xml:space="preserve">
+    <value>Идентификатор лицензии</value>
+  </data>
+  <data name="Docs.RelayConfig.Row1.Field" xml:space="preserve">
+    <value>Порт прослушивания прокси</value>
+  </data>
+  <data name="Trial.IssuedKey" xml:space="preserve">
+    <value>Выдан пробный ключ</value>
+  </data>
+  <data name="Admin.Billing.Title" xml:space="preserve">
+    <value>Платежные поручения</value>
+  </data>
+  <data name="Docs.Placeholder.Introduction" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Layout.Mobile.OpenMenu" xml:space="preserve">
+    <value>Открыть меню</value>
+  </data>
+  <data name="Download.Minimum.Item3" xml:space="preserve">
+    <value>Доступ администратора пользователя</value>
+  </data>
+  <data name="Admin.Sidebar.Administrator" xml:space="preserve">
+    <value>Администратор</value>
+  </data>
+  <data name="Index.Security.Bullet4" xml:space="preserve">
+    <value>Поведение, определяемое политикой</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row1.Action" xml:space="preserve">
+    <value>Откройте OmniRelay от имени администратора и снова запустите Install/Start Relay.</value>
+  </data>
+  <data name="Account.Login.RememberMe" xml:space="preserve">
+    <value>Запомнить меня</value>
+  </data>
+  <data name="Admin.Card.Active" xml:space="preserve">
+    <value>активный</value>
+  </data>
+  <data name="Dashboard.State.Issued" xml:space="preserve">
+    <value>изданный</value>
+  </data>
+  <data name="Admin.Sidebar.Discounts" xml:space="preserve">
+    <value>Скидки</value>
+  </data>
+  <data name="Billing.CouponPlaceholder" xml:space="preserve">
+    <value>Введите код купона</value>
+  </data>
+  <data name="Admin.Discounts.Msg.NotFound" xml:space="preserve">
+    <value>Купон не найден.</value>
+  </data>
+  <data name="Download.Windows.Version" xml:space="preserve">
+    <value>Версия:</value>
+  </data>
+  <data name="Index.Footer.License" xml:space="preserve">
+    <value>Одноразовая лицензия.</value>
+  </data>
+  <data name="Dashboard.State.NotUsed" xml:space="preserve">
+    <value>не используется</value>
+  </data>
+  <data name="Index.Config.Result2" xml:space="preserve">
+    <value>более быстрый цикл первого развертывания</value>
+  </data>
+  <data name="Index.UseCases.Card4.Title" xml:space="preserve">
+    <value>Мультисетевые среды</value>
+  </data>
+  <data name="AppDownloads.Entitlements" xml:space="preserve">
+    <value>Права</value>
+  </data>
+  <data name="Docs.Monitoring.Row5.Meaning" xml:space="preserve">
+    <value>Показывает готовность удаленного обслуживания на основе проверок шлюза.</value>
+  </data>
+  <data name="Account.Login.Title" xml:space="preserve">
+    <value>Авторизоваться</value>
+  </data>
+  <data name="AppDownloads.Published" xml:space="preserve">
+    <value>Опубликовано</value>
+  </data>
+  <data name="Licenses.Table.LicenseId" xml:space="preserve">
+    <value>Идентификатор лицензии</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row7.Action" xml:space="preserve">
+    <value>Проверьте правильный адрес/порт в пользовательском интерфейсе и разрешите порт в правилах брандмауэра хоста и провайдера.</value>
+  </data>
+  <data name="Js.Order.LoadFailed" xml:space="preserve">
+    <value>Не удалось загрузить статус заказа.</value>
+  </data>
+  <data name="Admin.Billing.Table.IntentStatus" xml:space="preserve">
+    <value>Статус намерения</value>
+  </data>
+  <data name="Docs.Troubleshooting.Table.Action" xml:space="preserve">
+    <value>Действие</value>
+  </data>
+  <data name="Layout.Nav.Register" xml:space="preserve">
+    <value>Зарегистрироваться</value>
+  </data>
+  <data name="Download.Windows.Published" xml:space="preserve">
+    <value>Опубликовано:</value>
+  </data>
+  <data name="Layout.Nav.Admin" xml:space="preserve">
+    <value>Админ</value>
+  </data>
+  <data name="Licenses.Subtitle" xml:space="preserve">
+    <value>Отслеживайте лицензионные ключи, статус и историю назначения устройств.</value>
+  </data>
+  <data name="Admin.Subtitle" xml:space="preserve">
+    <value>Оперативный контроль за лицензиями, выставлением счетов и скидками.</value>
+  </data>
+  <data name="Admin.Paid.Title" xml:space="preserve">
+    <value>Платные лицензии</value>
+  </data>
+  <data name="Docs.Section1" xml:space="preserve">
+    <value>1. Введение</value>
+  </data>
+  <data name="Index.Problem.Card2.Body" xml:space="preserve">
+    <value>Качество маршрута может быстро ухудшаться во время пиковых нагрузок.</value>
+  </data>
+  <data name="Licenses.Table.DeviceId" xml:space="preserve">
+    <value>Идентификатор устройства</value>
+  </data>
+  <data name="Docs.Monitoring.Row3.Expected" xml:space="preserve">
+    <value>Соответствует настроенному значению</value>
+  </data>
+  <data name="Docs.Placeholder.RelayConfig" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Licenses.Modal.Title" xml:space="preserve">
+    <value>Детали лицензии</value>
+  </data>
+  <data name="Common.Email" xml:space="preserve">
+    <value>Электронная почта</value>
+  </data>
+  <data name="Layout.Nav.Download" xml:space="preserve">
+    <value>Скачать</value>
+  </data>
+  <data name="Billing.Table.Action" xml:space="preserve">
+    <value>Действие</value>
+  </data>
+  <data name="Billing.Modal.RedirectPrefix" xml:space="preserve">
+    <value>Вы будете перенаправлены на криптоплатежный шлюз в</value>
+  </data>
+  <data name="Docs.Placeholder.Installation" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Docs.LastUpdatedDate" xml:space="preserve">
+    <value>2026-03-07</value>
+  </data>
+  <data name="AppDownloads.Subtitle" xml:space="preserve">
+    <value>Доступные каналы выпуска в зависимости от ваших прав.</value>
+  </data>
+  <data name="Index.Problem.Card1.Body" xml:space="preserve">
+    <value>Разные сети предоставляют разные доступные услуги.</value>
+  </data>
+  <data name="Index.Config.PrimaryCtaText" xml:space="preserve">
+    <value>Начать бесплатную пробную версию</value>
+  </data>
+  <data name="Billing.Title" xml:space="preserve">
+    <value>Биллинг</value>
+  </data>
+  <data name="AppAccount.TrialUsed" xml:space="preserve">
+    <value>Использована пробная версия</value>
+  </data>
+  <data name="Licenses.Term.Until" xml:space="preserve">
+    <value>До {0}</value>
+  </data>
+  <data name="Js.Order.PaidIssued" xml:space="preserve">
+    <value>Оплаченный. Лицензия выдана: {licenseKey}</value>
+  </data>
+  <data name="Billing.CheckoutSummary" xml:space="preserve">
+    <value>Сводка оформления заказа</value>
+  </data>
+  <data name="Admin.Discounts.Table.Code" xml:space="preserve">
+    <value>Код</value>
+  </data>
+  <data name="Index.Security.Bullet1" xml:space="preserve">
+    <value>Самостоятельная плоскость управления реле</value>
+  </data>
+  <data name="Billing.Table.Discount" xml:space="preserve">
+    <value>Скидка</value>
+  </data>
+  <data name="Docs.RelayConfig.Table.WhatSet" xml:space="preserve">
+    <value>Что вы установили</value>
+  </data>
+  <data name="Index.Problem.Body" xml:space="preserve">
+    <value>Современные сетевые ограничения требуют контролируемой и устойчивой оркестровки подключений.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row3.Description" xml:space="preserve">
+    <value>Сетевой адаптер, используемый для исходящего интернет-пути.</value>
+  </data>
+  <data name="Docs.RelayConfig.Row1.Description" xml:space="preserve">
+    <value>Основной локальный порт прослушивания, используемый клиентскими приложениями.</value>
+  </data>
+  <data name="Download.Windows.None" xml:space="preserve">
+    <value>Ни одна версия Windows в настоящее время не опубликована.</value>
+  </data>
+  <data name="Admin.Trials.Empty" xml:space="preserve">
+    <value>Пробные лицензии не найдены.</value>
+  </data>
+  <data name="Index.Config.FinalCtaText" xml:space="preserve">
+    <value>Начать бесплатную пробную версию</value>
+  </data>
+  <data name="Index.Solution.Title" xml:space="preserve">
+    <value>Контролируемый рабочий процесс частной ретрансляции</value>
+  </data>
+  <data name="Register.Email.Subject" xml:space="preserve">
+    <value>Подтвердите свою учетную запись OmniRelay</value>
+  </data>
+  <data name="Common.Disable" xml:space="preserve">
+    <value>Запрещать</value>
+  </data>
+  <data name="Index.Problem.Card3.Title" xml:space="preserve">
+    <value>Операционные накладные расходы</value>
+  </data>
+  <data name="Docs.StartRelay.1" xml:space="preserve">
+    <value>Зайдите в Управление реле.</value>
+  </data>
+  <data name="Docs.Subtitle" xml:space="preserve">
+    <value>Практическое руководство по установке, активации и использованию OmniRelay в сетевых средах с ограниченным доступом.</value>
+  </data>
+  <data name="Docs.Update.5" xml:space="preserve">
+    <value>Откройте OmniRelay и проверьте сохраненные значения конфигурации.</value>
+  </data>
+  <data name="Download.Recommended.Item4" xml:space="preserve">
+    <value>Держите лицензионный ключ наготове.</value>
+  </data>
+  <data name="Index.Config.ClosingHeadline" xml:space="preserve">
+    <value>Создайте свой собственный уровень подключения к цензуре.</value>
+  </data>
+  <data name="Admin.Discounts.CreateHelp" xml:space="preserve">
+    <value>Процент должен быть 1..99. Максимальное использование должно быть больше нуля.</value>
+  </data>
+  <data name="Common.NotAvailable" xml:space="preserve">
+    <value>н/д</value>
+  </data>
+  <data name="Licenses.Empty" xml:space="preserve">
+    <value>Лицензии не найдены.</value>
+  </data>
+  <data name="Js.Checkout.CreatingIntent" xml:space="preserve">
+    <value>Создание платежного намерения...</value>
+  </data>
+  <data name="Login.Msg.InvalidCredentials" xml:space="preserve">
+    <value>Неверный адрес электронной почты или пароль.</value>
+  </data>
+  <data name="Docs.Placeholder.StartRelay" xml:space="preserve">
+    <value>Примечание по эксплуатации: адаптируйте эти шаги к вашей экологической политике.</value>
+  </data>
+  <data name="Admin.Discounts.MaxUses" xml:space="preserve">
+    <value>Макс использует</value>
+  </data>
+  <data name="Common.Next" xml:space="preserve">
+    <value>Следующий</value>
+  </data>
+  <data name="Js.Copy.Failed" xml:space="preserve">
+    <value>Не удалось скопировать</value>
+  </data>
+  <data name="Index.Title" xml:space="preserve">
+    <value>OmniRelay — безопасное соединение</value>
+  </data>
+  <data name="Index.Config.Faq1.Q" xml:space="preserve">
+    <value>Сколько времени занимает установка?</value>
+  </data>
+  <data name="Admin.Discounts.Table.Discount" xml:space="preserve">
+    <value>Скидка</value>
+  </data>
+  <data name="Docs.StartRelay.3" xml:space="preserve">
+    <value>Нажмите «Применить конфигурацию реле».</value>
+  </data>
+  <data name="Docs.Installation.3" xml:space="preserve">
+    <value>Следуйте инструкциям мастера установки и завершите установку с параметрами по умолчанию, если ваша политика не требует специальных путей.</value>
+  </data>
+  <data name="Dashboard.Welcome" xml:space="preserve">
+    <value>Добро пожаловать в ваше рабочее пространство OmniRelay.</value>
+  </data>
+  <data name="Docs.Installation.1" xml:space="preserve">
+    <value>Загрузите последнюю версию установщика Windows с официальной страницы загрузки OmniRelay.</value>
+  </data>
+  <data name="Docs.StartRelay.4" xml:space="preserve">
+    <value>Нажмите «Установить/запустить реле».</value>
+  </data>
+  <data name="Docs.StartRelay.5" xml:space="preserve">
+    <value>Используйте «Обновить» и убедитесь, что состояние службы «Выполняется», а «Прокси-сервер работает» имеет значение «Истина».</value>
+  </data>
+  <data name="Docs.Installation.5" xml:space="preserve">
+    <value>Если Windows запрашивает разрешения, разрешите доступ, чтобы приложение могло управлять операциями ретрансляции.</value>
+  </data>
+  <data name="Docs.Installation.4" xml:space="preserve">
+    <value>Запустите OmniRelay из меню «Пуск» после завершения установки.</value>
+  </data>
+  <data name="Index.UseCases.Card3.Title" xml:space="preserve">
+    <value>Реагирование на инцидент</value>
+  </data>
+  <data name="Admin.Paid.Source" xml:space="preserve">
+    <value>Исходный фильтр:</value>
+  </data>
+  <data name="Index.Problem.Title" xml:space="preserve">
+    <value>Почему команды выбирают OmniRelay</value>
+  </data>
+  <data name="Account.AccessDenied.BackToDashboard" xml:space="preserve">
+    <value>Вернуться к панели управления</value>
+  </data>
+  <data name="Admin.Card.BillingOrders" xml:space="preserve">
+    <value>Платежные поручения</value>
+  </data>
+  <data name="Admin.Billing.Table.IssuedLicense" xml:space="preserve">
+    <value>Выдан лицензионный ключ</value>
+  </data>
+  <data name="Docs.Troubleshooting.Row2.Action" xml:space="preserve">
+    <value>Нажмите «Обновить», затем убедитесь, что адаптеры включены в настройках сети Windows.</value>
+  </data>
+  <data name="Contact.Form.Subject" xml:space="preserve">
+    <value>Предмет</value>
+  </data>
+  <data name="AppAccount.CreatedAtUtc" xml:space="preserve">
+    <value>Создано (UTC)</value>
+  </data>
+  <data name="Admin.Billing.Table.Discount" xml:space="preserve">
+    <value>Скидка</value>
+  </data>
+  <data name="Docs.Activation.5" xml:space="preserve">
+    <value>Если активация не удалась, проверьте точность ключа, системное время и подключение к Интернету, а затем повторите попытку.</value>
+  </data>
+  <data name="Docs.Activation.4" xml:space="preserve">
+    <value>Дождитесь подтверждающего сообщения и автоматического перехода на рабочие страницы.</value>
+  </data>
+  <data name="Docs.Activation.3" xml:space="preserve">
+    <value>Нажмите Активировать лицензию.</value>
+  </data>
+  <data name="Docs.Activation.2" xml:space="preserve">
+    <value>Вставьте лицензионный ключ в поле активации.</value>
+  </data>
+  <data name="Docs.Activation.1" xml:space="preserve">
+    <value>Откройте страницу лицензии.</value>
+  </data>
+  <data name="Docs.Monitoring.Row6.Indicator" xml:space="preserve">
+    <value>Здоровье</value>
+  </data>
+  <data name="Layout.Nav.Logout" xml:space="preserve">
+    <value>Выход из системы</value>
+  </data>
+  <data name="Docs.Monitoring.Table.Expected" xml:space="preserve">
+    <value>Ожидал</value>
+  </data>
+  <data name="Js.Checkout.Summary.None" xml:space="preserve">
+    <value>никто</value>
+  </data>
+  <data name="Billing.Modal.CancelAria" xml:space="preserve">
+    <value>Отменить перенаправление</value>
+  </data>
+  <data name="AppDownloads.Sha" xml:space="preserve">
+    <value>ША-256</value>
+  </data>
+  <data name="Admin.Billing.Table.Final" xml:space="preserve">
+    <value>Финал</value>
+  </data>
+  <data name="Admin.Discounts.Msg.MaxUsesPositive" xml:space="preserve">
+    <value>Максимальное использование должно быть больше нуля.</value>
+  </data>
+  <data name="Layout.Nav.Login" xml:space="preserve">
+    <value>Авторизоваться</value>
+  </data>
+  <data name="Index.Config.Result3" xml:space="preserve">
+    <value>время безотказной работы шлюза в периоды пиковой нагрузки</value>
+  </data>
+  <data name="Admin.Card.OpenList" xml:space="preserve">
+    <value>Открыть список</value>
+  </data>
+  <data name="Docs.Monitoring.Intro" xml:space="preserve">
+    <value>Используйте эти индикаторы для проверки работоспособности:</value>
+  </data>
+  <data name="Index.UseCases.Card2.Body" xml:space="preserve">
+    <value>Поддерживайте стабильные маршруты для ежедневных операций.</value>
+  </data>
+  <data name="Billing.Summary.Discount" xml:space="preserve">
+    <value>Скидка</value>
+  </data>
+  <data name="Admin.Discounts.Msg.CodeTooLong" xml:space="preserve">
+    <value>Код купона слишком длинный.</value>
+  </data>
+  <data name="Docs.Monitoring.Row4.Meaning" xml:space="preserve">
+    <value>Показывает, установлен ли в данный момент путь удаленного подключения.</value>
+  </data>
+  <data name="Admin.Discounts.Msg.CodeExists" xml:space="preserve">
+    <value>Код купона уже существует.</value>
+  </data>
+  <data name="Index.Config.SecondaryCtaText" xml:space="preserve">
+    <value>Посмотреть руководство по развертыванию</value>
+  </data>
+  <data name="Trial.StartButton" xml:space="preserve">
+    <value>Начать пробную версию</value>
+  </data>
+  <data name="Dashboard.Action.ViewLicenses" xml:space="preserve">
+    <value>Посмотреть лицензии</value>
+  </data>
+  <data name="Layout.Language.English" xml:space="preserve">
+    <value>Английский</value>
+  </data>
+  <data name="Contact.Msg.VerificationFailed" xml:space="preserve">
+    <value>Проверка не удалась. Пожалуйста, повторите попытку.</value>
+  </data>
+  <data name="Layout.Language.Russian" xml:space="preserve">
+    <value>Русский</value>
+  </data>
+</root>

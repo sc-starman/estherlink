@@ -1,10 +1,20 @@
 (() => {
+  const i18n = window.omniRelayI18n || {};
+  const t = (key, fallback) => (Object.prototype.hasOwnProperty.call(i18n, key) ? i18n[key] : fallback);
+  const formatTemplate = (template, values) => {
+    let output = template || '';
+    Object.entries(values || {}).forEach(([name, value]) => {
+      output = output.replaceAll(`{${name}}`, value ?? '');
+    });
+    return output;
+  };
+
   const trialButton = document.querySelector('[data-action="start-trial"]');
   const trialResult = document.getElementById('trial-result');
   if (trialButton && trialResult) {
     trialButton.addEventListener('click', async () => {
       trialButton.disabled = true;
-      trialResult.textContent = 'Requesting trial...';
+      trialResult.textContent = t('trial.requesting', 'Requesting trial...');
       try {
         const response = await fetch('/app/api/trial/request', {
           method: 'POST',
@@ -12,14 +22,17 @@
         });
         const payload = await response.json();
         if (!response.ok) {
-          trialResult.textContent = payload.message || 'Trial request failed.';
+          trialResult.textContent = payload.message || t('trial.requestFailed', 'Trial request failed.');
         } else {
           trialResult.textContent = payload.licenseKey
-            ? `Trial started. License: ${payload.licenseKey} (expires ${payload.expiresAt}).`
+            ? formatTemplate(
+                t('trial.started', 'Trial started. License: {licenseKey} (expires {expiresAt}).'),
+                { licenseKey: payload.licenseKey, expiresAt: payload.expiresAt || '-' }
+              )
             : payload.message;
         }
       } catch {
-        trialResult.textContent = 'Failed to contact server.';
+        trialResult.textContent = t('server.failed', 'Failed to contact server.');
       } finally {
         trialButton.disabled = false;
       }
@@ -87,7 +100,7 @@
     if (summaryCoupon) {
       summaryCoupon.textContent = couponCode
         ? `${couponCode}${discountPercent !== null ? ` (${discountPercent}%)` : ''}`
-        : 'none';
+        : t('checkout.summary.none', 'none');
     }
   };
 
@@ -111,7 +124,7 @@
       const payload = await response.json();
       if (!response.ok) {
         if (!quiet) {
-          setQuoteMessage(payload.message || 'Coupon is invalid.', true);
+          setQuoteMessage(payload.message || t('coupon.invalid', 'Coupon is invalid.'), true);
         }
         return { ok: false, payload };
       }
@@ -119,16 +132,25 @@
       applyQuoteToUi(payload);
       if (!quiet) {
         if (payload.appliedCouponCode) {
-          setQuoteMessage(`Coupon applied: ${payload.appliedCouponCode} (${payload.appliedDiscountPercent ?? 0}% off).`, false);
+          setQuoteMessage(
+            formatTemplate(
+              t('coupon.applied', 'Coupon applied: {code} ({percent}% off).'),
+              {
+                code: payload.appliedCouponCode,
+                percent: payload.appliedDiscountPercent ?? 0
+              }
+            ),
+            false
+          );
         } else {
-          setQuoteMessage('No coupon applied.', false);
+          setQuoteMessage(t('coupon.none', 'No coupon applied.'), false);
         }
       }
 
       return { ok: true, payload };
     } catch {
       if (!quiet) {
-        setQuoteMessage('Unable to validate coupon right now.', true);
+        setQuoteMessage(t('coupon.unavailable', 'Unable to validate coupon right now.'), true);
       }
       return { ok: false, payload: null };
     }
@@ -211,7 +233,7 @@
   if (createIntentButton && checkoutResult) {
     createIntentButton.addEventListener('click', async () => {
       createIntentButton.disabled = true;
-      checkoutResult.textContent = 'Creating payment intent...';
+      checkoutResult.textContent = t('checkout.creatingIntent', 'Creating payment intent...');
       try {
         const couponCode = appliedCouponCode || getCouponInputValue();
         const response = await fetch('/app/api/checkout/create-intent', {
@@ -221,7 +243,7 @@
         });
         const payload = await response.json();
         if (!response.ok) {
-          checkoutResult.textContent = payload.message || 'Create intent failed.';
+          checkoutResult.textContent = payload.message || t('checkout.createIntentFailed', 'Create intent failed.');
           return;
         }
 
@@ -229,7 +251,7 @@
 
         const intentId = payload.intentId;
         if (!intentId) {
-          checkoutResult.textContent = 'Create intent succeeded but intent id is missing.';
+          checkoutResult.textContent = t('checkout.intentMissing', 'Create intent succeeded but intent id is missing.');
           return;
         }
 
@@ -243,7 +265,7 @@
         if (redirectCoupon) {
           redirectCoupon.textContent = payload.appliedCouponCode
             ? `${payload.appliedCouponCode}${payload.appliedDiscountPercent !== null && payload.appliedDiscountPercent !== undefined ? ` (${payload.appliedDiscountPercent}%)` : ''}`
-            : 'none';
+            : t('checkout.summary.none', 'none');
         }
 
         if (redirectCountdown) {
@@ -268,7 +290,7 @@
           redirectNow();
         }, 10000);
       } catch {
-        checkoutResult.textContent = 'Failed to contact server.';
+        checkoutResult.textContent = t('server.failed', 'Failed to contact server.');
       } finally {
         createIntentButton.disabled = false;
       }
@@ -288,20 +310,29 @@
       }
 
       button.disabled = true;
-      target.textContent = 'Refreshing order...';
+      target.textContent = t('order.refreshing', 'Refreshing order...');
       try {
         const response = await fetch(`/app/api/checkout/${orderId}/status?refresh=true`);
         if (!response.ok) {
-          target.textContent = 'Unable to load order status.';
+          target.textContent = t('order.loadFailed', 'Unable to load order status.');
           return;
         }
 
         const payload = await response.json();
         target.textContent = payload.licenseKey
-          ? `Paid. License issued: ${payload.licenseKey}`
-          : `Order status: ${payload.orderStatus}, intent: ${payload.intentStatus}`;
+          ? formatTemplate(
+              t('order.paidIssued', 'Paid. License issued: {licenseKey}'),
+              { licenseKey: payload.licenseKey }
+            )
+          : formatTemplate(
+              t('order.statusTemplate', 'Order status: {orderStatus}, intent: {intentStatus}'),
+              {
+                orderStatus: payload.orderStatus ?? '-',
+                intentStatus: payload.intentStatus ?? '-'
+              }
+            );
       } catch {
-        target.textContent = 'Refresh failed.';
+        target.textContent = t('order.refreshFailed', 'Refresh failed.');
       } finally {
         button.disabled = false;
       }
@@ -316,9 +347,9 @@
       }
 
       await navigator.clipboard.writeText(value);
-      button.textContent = 'Copied';
+      button.textContent = t('copy.copied', 'Copied');
       setTimeout(() => {
-        button.textContent = 'Copy';
+        button.textContent = t('copy.copy', 'Copy');
       }, 1200);
     });
   });

@@ -1,11 +1,11 @@
 @page "/account/login"
 @model OmniRelay.Backend.Pages.Account.LoginModel
 @{
-    ViewData["Title"] = "Login";
+    ViewData["Title"] = S["Account.Login.Title"];
 }
 
 <div class="max-w-md mx-auto px-4 py-16">
-    <h1 class="text-3xl font-bold mb-6">Sign in to OmniRelay</h1>
+    <h1 class="text-3xl font-bold mb-6">@S["Account.Login.Heading"]</h1>
 
     @if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
     {
@@ -22,24 +22,24 @@
         <input type="hidden" id="loginRecaptchaToken" name="Input.RecaptchaToken" value="" />
 
         <div>
-            <label asp-for="Input.Email" class="block text-sm mb-1">Email</label>
+            <label asp-for="Input.Email" class="block text-sm mb-1">@S["Common.Email"]</label>
             <input asp-for="Input.Email" class="w-full rounded bg-slate-800 border border-slate-700 px-3 py-2" />
             <span asp-validation-for="Input.Email" class="text-red-300 text-xs"></span>
         </div>
         <div>
-            <label asp-for="Input.Password" class="block text-sm mb-1">Password</label>
+            <label asp-for="Input.Password" class="block text-sm mb-1">@S["Common.Password"]</label>
             <input asp-for="Input.Password" class="w-full rounded bg-slate-800 border border-slate-700 px-3 py-2" />
             <span asp-validation-for="Input.Password" class="text-red-300 text-xs"></span>
         </div>
         <div class="flex items-center gap-2">
             <input asp-for="Input.RememberMe" />
-            <label asp-for="Input.RememberMe">Remember me</label>
+            <label asp-for="Input.RememberMe">@S["Account.Login.RememberMe"]</label>
         </div>
 
-        <button type="submit" class="w-full rounded bg-cyan-500 text-slate-900 font-semibold px-4 py-2 hover:bg-cyan-400">Login</button>
+        <button type="submit" class="w-full rounded bg-cyan-500 text-slate-900 font-semibold px-4 py-2 hover:bg-cyan-400">@S["Layout.Nav.Login"]</button>
     </form>
 
-    <p class="mt-4 text-sm text-slate-400">Need an account? <a href="/account/register" class="text-cyan-300">Register</a></p>
+    <p class="mt-4 text-sm text-slate-400">@S["Account.Login.NeedAccount"] <a href="/account/register" class="text-cyan-300">@S["Layout.Nav.Register"]</a></p>
 </div>
 
 @section Scripts {

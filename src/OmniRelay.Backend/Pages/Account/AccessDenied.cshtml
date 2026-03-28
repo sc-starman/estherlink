@@ -1,18 +1,18 @@
 @page "/account/access-denied"
 @model OmniRelay.Backend.Pages.Account.AccessDeniedModel
 @{
-    ViewData["Title"] = "Access Denied";
+    ViewData["Title"] = S["Account.AccessDenied.Title"];
 }
 
 <div class="max-w-3xl mx-auto px-4 py-16">
     <article class="rounded-xl border border-red-500/40 bg-red-500/10 p-8">
-        <h1 class="text-3xl font-bold text-red-200">Access Denied</h1>
+        <h1 class="text-3xl font-bold text-red-200">@S["Account.AccessDenied.Title"]</h1>
         <p class="mt-3 text-slate-200">
-            You do not have permission to access this resource.
+            @S["Account.AccessDenied.Body"]
         </p>
         <div class="mt-6">
             <a href="/dashboard" class="inline-flex rounded bg-slate-800 px-4 py-2 text-sm font-semibold hover:bg-slate-700">
-                Back To Dashboard
+                @S["Account.AccessDenied.BackToDashboard"]
             </a>
         </div>
     </article>

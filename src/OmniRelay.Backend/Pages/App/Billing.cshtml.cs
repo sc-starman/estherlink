@@ -58,7 +58,7 @@ public sealed class BillingModel : PageModel
                     {
                         new PaymentAttemptItem
                         {
-                            AttemptId = "n/a",
+                            AttemptId = string.Empty,
                             OrderId = order.Id,
                             BaseAmount = order.BaseFiatAmount,
                             DiscountAmount = order.DiscountAmount,

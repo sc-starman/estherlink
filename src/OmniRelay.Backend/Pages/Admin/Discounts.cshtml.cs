@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using OmniRelay.Backend.Data;
+using OmniRelay.Backend.Localization;
 using OmniRelay.Backend.Utilities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Localization;
 
 namespace OmniRelay.Backend.Pages.Admin;
 
@@ -11,10 +13,14 @@ public sealed class DiscountsModel : PageModel
 {
     private const int DefaultPageSize = 50;
     private readonly AppDbContext _dbContext;
+    private readonly IStringLocalizer<SharedResource> _localizer;
 
-    public DiscountsModel(AppDbContext dbContext)
+    public DiscountsModel(
+        AppDbContext dbContext,
+        IStringLocalizer<SharedResource> localizer)
     {
         _dbContext = dbContext;
+        _localizer = localizer;
     }
 
     [BindProperty(SupportsGet = true)]
@@ -44,12 +50,12 @@ public sealed class DiscountsModel : PageModel
     {
         if (Input.DiscountPercent is < 1 or > 99)
         {
-            ModelState.AddModelError($"{nameof(Input)}.{nameof(Input.DiscountPercent)}", "Discount percent must be between 1 and 99.");
+            ModelState.AddModelError($"{nameof(Input)}.{nameof(Input.DiscountPercent)}", _localizer["Admin.Discounts.Msg.PercentRange"]);
         }
 
         if (Input.MaxUses <= 0)
         {
-            ModelState.AddModelError($"{nameof(Input)}.{nameof(Input.MaxUses)}", "Max uses must be greater than 0.");
+            ModelState.AddModelError($"{nameof(Input)}.{nameof(Input.MaxUses)}", _localizer["Admin.Discounts.Msg.MaxUsesPositive"]);
         }
 
         var normalizedCode = NormalizeCode(Input.Code, out var codeError);
@@ -79,7 +85,7 @@ public sealed class DiscountsModel : PageModel
 
             if (exists)
             {
-                ModelState.AddModelError($"{nameof(Input)}.{nameof(Input.Code)}", "Coupon code already exists.");
+                ModelState.AddModelError($"{nameof(Input)}.{nameof(Input.Code)}", _localizer["Admin.Discounts.Msg.CodeExists"]);
                 await LoadAsync(cancellationToken);
                 return Page();
             }
@@ -91,7 +97,7 @@ public sealed class DiscountsModel : PageModel
             var generated = await GenerateUniqueCodeAsync(cancellationToken);
             if (generated is null)
             {
-                ModelState.AddModelError($"{nameof(Input)}.{nameof(Input.Code)}", "Failed to generate a unique coupon code. Please try again.");
+                ModelState.AddModelError($"{nameof(Input)}.{nameof(Input.Code)}", _localizer["Admin.Discounts.Msg.GenerateFailed"]);
                 await LoadAsync(cancellationToken);
                 return Page();
             }
@@ -114,7 +120,7 @@ public sealed class DiscountsModel : PageModel
         });
 
         await _dbContext.SaveChangesAsync(cancellationToken);
-        NoticeMessage = $"Coupon {code} created.";
+        NoticeMessage = _localizer["Admin.Discounts.Msg.Created", code];
 
         return RedirectToPage(new { pageNumber = 1 });
     }
@@ -124,7 +130,7 @@ public sealed class DiscountsModel : PageModel
         var coupon = await _dbContext.DiscountCoupons.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (coupon is null)
         {
-            ErrorMessage = "Coupon not found.";
+            ErrorMessage = _localizer["Admin.Discounts.Msg.NotFound"];
             return RedirectToPage(new { pageNumber = PageNumber });
         }
 
@@ -133,11 +139,11 @@ public sealed class DiscountsModel : PageModel
             coupon.IsActive = false;
             coupon.DisabledAt = DateTimeOffset.UtcNow;
             await _dbContext.SaveChangesAsync(cancellationToken);
-            NoticeMessage = $"Coupon {coupon.Code} disabled.";
+            NoticeMessage = _localizer["Admin.Discounts.Msg.Disabled", coupon.Code];
         }
         else
         {
-            NoticeMessage = $"Coupon {coupon.Code} is already disabled.";
+            NoticeMessage = _localizer["Admin.Discounts.Msg.AlreadyDisabled", coupon.Code];
         }
 
         return RedirectToPage(new { pageNumber = PageNumber });
@@ -212,7 +218,7 @@ public sealed class DiscountsModel : PageModel
         return new string(chars);
     }
 
-    private static string? NormalizeCode(string? value, out string? error)
+    private string? NormalizeCode(string? value, out string? error)
     {
         error = null;
         if (string.IsNullOrWhiteSpace(value))
@@ -223,7 +229,7 @@ public sealed class DiscountsModel : PageModel
         var trimmed = value.Trim().ToUpperInvariant();
         if (trimmed.Length > 64)
         {
-            error = "Coupon code must be 64 characters or fewer.";
+            error = _localizer["Admin.Discounts.Msg.CodeTooLong"];
             return null;
         }
 
@@ -234,7 +240,7 @@ public sealed class DiscountsModel : PageModel
                 continue;
             }
 
-            error = "Coupon code may only contain letters, digits, '-' or '_'.";
+            error = _localizer["Admin.Discounts.Msg.CodeInvalidChars"];
             return null;
         }
 

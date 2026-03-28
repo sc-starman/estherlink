@@ -1,7 +1,7 @@
 @page "/admin/billing"
 @model OmniRelay.Backend.Pages.Admin.BillingModel
 @{
-    ViewData["Title"] = "Admin Billing";
+    ViewData["Title"] = S["Admin.Billing.Title"];
     ViewData["AdminNav"] = "billing";
 }
 
@@ -10,18 +10,18 @@
 
     <section class="space-y-5">
         <div>
-            <h1 class="text-3xl font-bold">Billing</h1>
-            <p class="text-slate-400 mt-1">Order-centric view across all users.</p>
+            <h1 class="text-3xl font-bold">@S["Admin.Billing.Title"]</h1>
+            <p class="text-slate-400 mt-1">@S["Admin.Billing.Subtitle"]</p>
         </div>
 
         <div class="flex items-center justify-between text-sm text-slate-300">
-            <p>Total: <strong>@Model.TotalItems</strong></p>
-            <p>Page @Model.PageNumber / @Model.TotalPages</p>
+            <p>@S["Common.Total"] <strong>@Model.TotalItems</strong></p>
+            <p>@S["Common.PageXofY", Model.PageNumber, Model.TotalPages]</p>
         </div>
 
         @if (Model.Items.Count == 0)
         {
-            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">No billing orders found.</div>
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">@S["Admin.Billing.Empty"]</div>
         }
         else
         {
@@ -29,21 +29,21 @@
                 <table class="min-w-full text-sm">
                     <thead class="bg-slate-950/70 text-slate-300">
                         <tr>
-                            <th class="text-left px-4 py-3">Order ID</th>
-                            <th class="text-left px-4 py-3">User Email</th>
-                            <th class="text-left px-4 py-3">Base</th>
-                            <th class="text-left px-4 py-3">Discount</th>
-                            <th class="text-left px-4 py-3">Final</th>
-                            <th class="text-left px-4 py-3">Coupon</th>
-                            <th class="text-left px-4 py-3">Currency</th>
-                            <th class="text-left px-4 py-3">Order Status</th>
-                            <th class="text-left px-4 py-3">Created (UTC)</th>
-                            <th class="text-left px-4 py-3">Updated (UTC)</th>
-                            <th class="text-left px-4 py-3">Issued License</th>
-                            <th class="text-left px-4 py-3">Latest Intent ID</th>
-                            <th class="text-left px-4 py-3">Latest Intent Status</th>
-                            <th class="text-left px-4 py-3">Intent Expires (UTC)</th>
-                            <th class="text-left px-4 py-3">Provider Message</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.OrderId"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.UserEmail"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.Base"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.Discount"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.Final"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.Coupon"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.Currency"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.OrderStatus"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.Created"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.Updated"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.IssuedLicense"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.IntentId"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.IntentStatus"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.IntentExpires"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Billing.Table.ProviderMessage"]</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -55,20 +55,20 @@
                             <td class="px-4 py-3">@item.BaseAmount.ToString("0.00")</td>
                             <td class="px-4 py-3 text-emerald-300">-@item.DiscountAmount.ToString("0.00")</td>
                             <td class="px-4 py-3 font-semibold">@item.Amount.ToString("0.00")</td>
-                            <td class="px-4 py-3 font-mono text-xs">
-                                @(string.IsNullOrWhiteSpace(item.AppliedCouponCode)
-                                    ? "none"
+                                <td class="px-4 py-3 font-mono text-xs">
+                                    @(string.IsNullOrWhiteSpace(item.AppliedCouponCode)
+                                    ? S["Common.None"].Value
                                     : $"{item.AppliedCouponCode} ({item.AppliedDiscountPercent ?? 0}%)")
-                            </td>
+                                </td>
                             <td class="px-4 py-3">@item.Currency</td>
                             <td class="px-4 py-3">@item.OrderStatus</td>
                             <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>
                             <td class="px-4 py-3">@item.UpdatedAt.ToString("u")</td>
-                            <td class="px-4 py-3 font-mono text-xs">@(item.IssuedLicenseKey ?? "n/a")</td>
-                            <td class="px-4 py-3 font-mono text-xs">@(item.LatestIntentId ?? "n/a")</td>
-                            <td class="px-4 py-3">@(item.LatestIntentStatus ?? "n/a")</td>
-                            <td class="px-4 py-3">@(item.LatestIntentExpiresAt?.ToString("u") ?? "n/a")</td>
-                            <td class="px-4 py-3">@(item.LatestProviderMessage ?? "n/a")</td>
+                            <td class="px-4 py-3 font-mono text-xs">@(item.IssuedLicenseKey ?? S["Common.NotAvailable"].Value)</td>
+                            <td class="px-4 py-3 font-mono text-xs">@(item.LatestIntentId ?? S["Common.NotAvailable"].Value)</td>
+                            <td class="px-4 py-3">@(item.LatestIntentStatus ?? S["Common.NotAvailable"].Value)</td>
+                            <td class="px-4 py-3">@(item.LatestIntentExpiresAt?.ToString("u") ?? S["Common.NotAvailable"].Value)</td>
+                            <td class="px-4 py-3">@(item.LatestProviderMessage ?? S["Common.NotAvailable"].Value)</td>
                         </tr>
                     }
                     </tbody>
@@ -78,20 +78,20 @@
             <div class="flex items-center justify-between">
                 @if (Model.PageNumber > 1)
                 {
-                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/billing?pageNumber=@(Model.PageNumber - 1)">Previous</a>
+                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/billing?pageNumber=@(Model.PageNumber - 1)">@S["Common.Previous"]</a>
                 }
                 else
                 {
-                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">Previous</span>
+                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">@S["Common.Previous"]</span>
                 }
 
                 @if (Model.PageNumber < Model.TotalPages)
                 {
-                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/billing?pageNumber=@(Model.PageNumber + 1)">Next</a>
+                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/billing?pageNumber=@(Model.PageNumber + 1)">@S["Common.Next"]</a>
                 }
                 else
                 {
-                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">Next</span>
+                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">@S["Common.Next"]</span>
                 }
             </div>
         }

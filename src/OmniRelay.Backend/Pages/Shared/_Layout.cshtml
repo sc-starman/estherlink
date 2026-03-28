@@ -1,8 +1,43 @@
 @using Microsoft.AspNetCore.Identity
+@using System.Globalization
+@using System.Text.Json
 @using OmniRelay.Backend.Models
 @inject SignInManager<ApplicationUser> SignInManager
 @inject UserManager<ApplicationUser> UserManager
 @{
+    var currentUiLanguage = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.ToLowerInvariant();
+    if (currentUiLanguage is not ("en" or "ru"))
+    {
+        currentUiLanguage = "en";
+    }
+
+    string BuildLanguageUrl(string language)
+    {
+        var queryPairs = new List<string>();
+        foreach (var queryItem in Context.Request.Query)
+        {
+            if (string.Equals(queryItem.Key, "lang", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (var queryValue in queryItem.Value)
+            {
+                var safeValue = queryValue?.ToString() ?? string.Empty;
+                queryPairs.Add($"{Uri.EscapeDataString(queryItem.Key)}={Uri.EscapeDataString(safeValue)}");
+            }
+        }
+
+        queryPairs.Add($"lang={Uri.EscapeDataString(language)}");
+        var path = Context.Request.Path.HasValue ? Context.Request.Path.Value! : "/";
+        return queryPairs.Count == 0 ? path : $"{path}?{string.Join("&", queryPairs)}";
+    }
+
+    string LanguageLinkClass(string lang) =>
+        currentUiLanguage == lang
+            ? "rounded border border-cyan-400 px-2 py-1 text-cyan-300"
+            : "rounded border border-slate-700 px-2 py-1 text-slate-300 hover:border-cyan-400 hover:text-cyan-300";
+
     var isSignedIn = SignInManager.IsSignedIn(User);
     var isAdminUser = false;
     if (isSignedIn)
@@ -10,13 +45,37 @@
         var currentUser = await UserManager.GetUserAsync(User);
         isAdminUser = currentUser?.IsAdmin == true;
     }
+
+    var dashboardI18nJson = JsonSerializer.Serialize(new Dictionary<string, string>
+    {
+        ["trial.requesting"] = S["Js.Trial.Requesting"],
+        ["trial.requestFailed"] = S["Js.Trial.RequestFailed"],
+        ["trial.started"] = S["Js.Trial.Started"],
+        ["server.failed"] = S["Js.Server.Failed"],
+        ["coupon.invalid"] = S["Js.Coupon.Invalid"],
+        ["coupon.applied"] = S["Js.Coupon.Applied"],
+        ["coupon.none"] = S["Js.Coupon.None"],
+        ["coupon.unavailable"] = S["Js.Coupon.Unavailable"],
+        ["checkout.creatingIntent"] = S["Js.Checkout.CreatingIntent"],
+        ["checkout.createIntentFailed"] = S["Js.Checkout.CreateIntentFailed"],
+        ["checkout.intentMissing"] = S["Js.Checkout.IntentMissing"],
+        ["checkout.summary.none"] = S["Js.Checkout.Summary.None"],
+        ["order.refreshing"] = S["Js.Order.Refreshing"],
+        ["order.loadFailed"] = S["Js.Order.LoadFailed"],
+        ["order.paidIssued"] = S["Js.Order.PaidIssued"],
+        ["order.statusTemplate"] = S["Js.Order.StatusTemplate"],
+        ["order.refreshFailed"] = S["Js.Order.RefreshFailed"],
+        ["copy.copied"] = S["Js.Copy.Copied"],
+        ["copy.copy"] = S["Js.Copy.Copy"],
+        ["copy.failed"] = S["Js.Copy.Failed"]
+    });
 }
 <!DOCTYPE html>
-<html lang="en">
+<html lang="@currentUiLanguage">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>@ViewData["Title"] - OmniRelay</title>
+    <title>@ViewData["Title"] - @S["Layout.Brand"]</title>
     <link rel="stylesheet" href="~/css/app.css" asp-append-version="true" />
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
@@ -24,8 +83,8 @@
         <div class="max-w-7xl mx-auto px-4 py-3">
             <div class="flex items-center justify-between">
                 <a href="/" class="text-cyan-400 font-bold text-xl">
-                    <img src="~/images/logo.png" alt="OmniRelay" class="h-8 w-8 mr-2 inline" />
-                    OmniRelay
+                    <img src="~/images/logo.png" alt="@S["Layout.Brand"]" class="h-8 w-8 mr-2 inline" />
+                    @S["Layout.Brand"]
                 </a>
 
                 <button
@@ -34,60 +93,69 @@
                     class="md:hidden inline-flex items-center justify-center rounded border border-slate-700 px-3 py-2 text-slate-200 hover:border-cyan-400 hover:text-cyan-300"
                     aria-controls="mobileMenuPanel"
                     aria-expanded="false"
-                    aria-label="Open menu">
-                    <span class="sr-only">Open menu</span>
+                    aria-label="@S["Layout.Mobile.OpenMenu"]">
+                    <span class="sr-only">@S["Layout.Mobile.OpenMenu"]</span>
                     <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"></path>
                     </svg>
                 </button>
 
                 <nav class="hidden md:flex items-center gap-4 text-sm">
-                    <a href="/" class="hover:text-cyan-300">Home</a>
-                    <a href="/download" class="hover:text-cyan-300">Download</a>
-                    <a href="/contact" class="hover:text-cyan-300">Contact</a>
-                    <a href="/docs" class="hover:text-cyan-300">Documentation</a>
+                    <a href="/" class="hover:text-cyan-300">@S["Layout.Nav.Home"]</a>
+                    <a href="/download" class="hover:text-cyan-300">@S["Layout.Nav.Download"]</a>
+                    <a href="/contact" class="hover:text-cyan-300">@S["Layout.Nav.Contact"]</a>
+                    <a href="/docs" class="hover:text-cyan-300">@S["Layout.Nav.Documentation"]</a>
                     @if (isSignedIn)
                     {
-                        <a href="/dashboard" class="hover:text-cyan-300">Dashboard</a>
+                        <a href="/dashboard" class="hover:text-cyan-300">@S["Layout.Nav.Dashboard"]</a>
                         @if (isAdminUser)
                         {
-                            <a href="/admin" class="hover:text-cyan-300">Admin</a>
+                            <a href="/admin" class="hover:text-cyan-300">@S["Layout.Nav.Admin"]</a>
                         }
                         <form method="post" asp-page="/Account/Logout" class="inline">
                             @Html.AntiForgeryToken()
-                            <button type="submit" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">Logout</button>
+                            <button type="submit" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">@S["Layout.Nav.Logout"]</button>
                         </form>
                     }
                     else
                     {
-                        <a href="/account/login" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">Login</a>
-                        <a href="/account/register" class="px-3 py-1 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">Register</a>
+                        <a href="/account/login" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">@S["Layout.Nav.Login"]</a>
+                        <a href="/account/register" class="px-3 py-1 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">@S["Layout.Nav.Register"]</a>
                     }
+                    <div class="ml-2 flex items-center gap-2 text-xs">
+                        <a href="@BuildLanguageUrl("en")" class="@LanguageLinkClass("en")">@S["Layout.Language.English"]</a>
+                        <a href="@BuildLanguageUrl("ru")" class="@LanguageLinkClass("ru")">@S["Layout.Language.Russian"]</a>
+                    </div>
                 </nav>
             </div>
 
             <div id="mobileMenuPanel" class="md:hidden hidden pt-4">
                 <nav class="flex flex-col gap-2 text-sm rounded border border-slate-800 bg-slate-900 p-3">
-                    <a href="/" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Home</a>
-                    <a href="/download" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Download</a>
-                    <a href="/contact" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Contact</a>
-                    <a href="/docs" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Documentation</a>
+                    <div class="flex items-center gap-2 pb-2">
+                        <span class="text-xs uppercase tracking-wide text-slate-400">@S["Layout.Language"]</span>
+                        <a href="@BuildLanguageUrl("en")" class="@LanguageLinkClass("en")">@S["Layout.Language.English"]</a>
+                        <a href="@BuildLanguageUrl("ru")" class="@LanguageLinkClass("ru")">@S["Layout.Language.Russian"]</a>
+                    </div>
+                    <a href="/" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">@S["Layout.Nav.Home"]</a>
+                    <a href="/download" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">@S["Layout.Nav.Download"]</a>
+                    <a href="/contact" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">@S["Layout.Nav.Contact"]</a>
+                    <a href="/docs" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">@S["Layout.Nav.Documentation"]</a>
                     @if (isSignedIn)
                     {
-                        <a href="/dashboard" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Dashboard</a>
+                        <a href="/dashboard" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">@S["Layout.Nav.Dashboard"]</a>
                         @if (isAdminUser)
                         {
-                            <a href="/admin" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">Admin</a>
+                            <a href="/admin" class="px-2 py-2 rounded hover:bg-slate-800 hover:text-cyan-300">@S["Layout.Nav.Admin"]</a>
                         }
                         <form method="post" asp-page="/Account/Logout" class="pt-1">
                             @Html.AntiForgeryToken()
-                            <button type="submit" class="w-full px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-left">Logout</button>
+                            <button type="submit" class="w-full px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 text-left">@S["Layout.Nav.Logout"]</button>
                         </form>
                     }
                     else
                     {
-                        <a href="/account/login" class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700">Login</a>
-                        <a href="/account/register" class="px-3 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">Register</a>
+                        <a href="/account/login" class="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700">@S["Layout.Nav.Login"]</a>
+                        <a href="/account/register" class="px-3 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">@S["Layout.Nav.Register"]</a>
                     }
                 </nav>
             </div>
@@ -123,7 +191,11 @@
         })();
     </script>
 
+    <script>
+        window.omniRelayI18n = @Html.Raw(dashboardI18nJson);
+    </script>
     <script src="~/js/dashboard.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>
+

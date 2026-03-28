@@ -1,7 +1,7 @@
 @page "/dashboard"
 @model OmniRelay.Backend.Pages.App.DashboardModel
 @{
-    ViewData["Title"] = "Dashboard";
+    ViewData["Title"] = S["Dashboard.Title"];
     ViewData["DashboardNav"] = "dashboard";
 }
 
@@ -10,24 +10,24 @@
 
     <section class="space-y-8">
         <div>
-            <h1 class="text-3xl font-bold">Dashboard</h1>
-            <p class="text-slate-400 mt-1">Welcome back, @Model.Email.</p>
+            <h1 class="text-3xl font-bold">@S["Dashboard.Title"]</h1>
+            <p class="text-slate-400 mt-1">@S["Dashboard.Welcome", Model.Email]</p>
         </div>
 
         <div class="grid md:grid-cols-4 gap-4">
-            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4"><p class="text-xs text-slate-400">Licenses</p><p class="text-2xl font-bold">@Model.LicenseCount</p></div>
-            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4"><p class="text-xs text-slate-400">Trial</p><p class="text-2xl font-bold">@(Model.HasTrial ? "Issued" : "Not used")</p></div>
-            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4"><p class="text-xs text-slate-400">Paid License</p><p class="text-2xl font-bold">@(Model.HasPaid ? "Active" : "None")</p></div>
-            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4"><p class="text-xs text-slate-400">Latest Build</p><p class="text-2xl font-bold">@Model.LatestVersion</p></div>
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4"><p class="text-xs text-slate-400">@S["Dashboard.Metric.Licenses"]</p><p class="text-2xl font-bold">@Model.LicenseCount</p></div>
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4"><p class="text-xs text-slate-400">@S["Dashboard.Metric.Trial"]</p><p class="text-2xl font-bold">@(Model.HasTrial ? S["Dashboard.State.Issued"] : S["Dashboard.State.NotUsed"])</p></div>
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4"><p class="text-xs text-slate-400">@S["Dashboard.Metric.PaidLicense"]</p><p class="text-2xl font-bold">@(Model.HasPaid ? S["Dashboard.State.Active"] : S["Dashboard.State.None"])</p></div>
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-4"><p class="text-xs text-slate-400">@S["Dashboard.Metric.LatestBuild"]</p><p class="text-2xl font-bold">@Model.LatestVersion</p></div>
         </div>
 
         <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 space-y-4">
-            <h2 class="text-xl font-semibold">Quick Actions</h2>
+            <h2 class="text-xl font-semibold">@S["Dashboard.QuickActions"]</h2>
             <div class="flex flex-wrap gap-3">
-                <a href="/dashboard/trial" class="px-4 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">Manage Free Trial</a>
-                <a href="/dashboard/billing" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700">Buy One-Time License</a>
-                <a href="/dashboard/licenses" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700">View Licenses</a>
-                <a href="/download/windows" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700">Download Application</a>
+                <a href="/dashboard/trial" class="px-4 py-2 rounded bg-cyan-500 text-slate-900 font-semibold hover:bg-cyan-400">@S["Dashboard.Action.ManageTrial"]</a>
+                <a href="/dashboard/billing" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700">@S["Dashboard.Action.BuyLicense"]</a>
+                <a href="/dashboard/licenses" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700">@S["Dashboard.Action.ViewLicenses"]</a>
+                <a href="/download/windows" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700">@S["Dashboard.Action.Download"]</a>
             </div>
         </div>
     </section>

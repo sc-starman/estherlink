@@ -22,6 +22,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -33,6 +34,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 
+var supportedCultures = new[]
+{
+    new CultureInfo("en"),
+    new CultureInfo("ru")
+};
+
+builder.Services.AddLocalization(options => options.ResourcesPath = "Resources");
 builder.Services.Configure<AdminSecurityOptions>(builder.Configuration.GetSection("Admin"));
 builder.Services.Configure<LicensingOptions>(builder.Configuration.GetSection("Licensing"));
 builder.Services.Configure<PayKryptOptions>(builder.Configuration.GetSection("PayKrypt"));
@@ -152,16 +160,33 @@ builder.Services.AddScoped<IAuthorizationHandler, IsAdminAuthorizationHandler>()
 builder.Services.AddHttpClient(nameof(PayKryptClient));
 builder.Services.AddHttpClient<IRecaptchaVerifier, RecaptchaVerifier>();
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddRazorPages(options =>
+builder.Services.Configure<RequestLocalizationOptions>(options =>
 {
-    options.Conventions.AuthorizeFolder("/App");
-    options.Conventions.AuthorizeFolder("/Admin", AdminAuthorizationPolicy.Name);
-    options.Conventions.AllowAnonymousToFolder("/Account");
-    options.Conventions.AllowAnonymousToPage("/Index");
-    options.Conventions.AllowAnonymousToPage("/Docs");
-    options.Conventions.AllowAnonymousToPage("/Contact");
-    options.Conventions.AllowAnonymousToPage("/Download");
+    options.DefaultRequestCulture = new RequestCulture("en");
+    options.SupportedCultures = supportedCultures;
+    options.SupportedUICultures = supportedCultures;
+    options.RequestCultureProviders =
+    [
+        new QueryStringRequestCultureProvider
+        {
+            QueryStringKey = "lang",
+            UIQueryStringKey = "lang"
+        },
+        new CookieRequestCultureProvider()
+    ];
 });
+builder.Services.AddRazorPages(options =>
+    {
+        options.Conventions.AuthorizeFolder("/App");
+        options.Conventions.AuthorizeFolder("/Admin", AdminAuthorizationPolicy.Name);
+        options.Conventions.AllowAnonymousToFolder("/Account");
+        options.Conventions.AllowAnonymousToPage("/Index");
+        options.Conventions.AllowAnonymousToPage("/Docs");
+        options.Conventions.AllowAnonymousToPage("/Contact");
+        options.Conventions.AllowAnonymousToPage("/Download");
+    })
+    .AddViewLocalization()
+    .AddDataAnnotationsLocalization();
 
 builder.Services.AddScoped<LicenseService>();
 builder.Services.AddScoped<WhitelistService>();
@@ -250,6 +275,31 @@ var app = builder.Build();
 
 ValidateEmailDeliveryConfiguration(app.Services);
 
+var localizationOptions = app.Services.GetRequiredService<IOptions<RequestLocalizationOptions>>().Value;
+
+app.Use(async (context, next) =>
+{
+    if (context.Request.Query.TryGetValue("lang", out var langValues))
+    {
+        var requestedLanguage = langValues.ToString().Trim().ToLowerInvariant();
+        if (requestedLanguage is "en" or "ru")
+        {
+            context.Response.Cookies.Append(
+                CookieRequestCultureProvider.DefaultCookieName,
+                CookieRequestCultureProvider.MakeCookieValue(new RequestCulture(requestedLanguage)),
+                new CookieOptions
+                {
+                    IsEssential = true,
+                    Path = "/",
+                    Expires = DateTimeOffset.UtcNow.AddYears(1),
+                    SameSite = SameSiteMode.Lax
+                });
+        }
+    }
+
+    await next();
+});
+app.UseRequestLocalization(localizationOptions);
 app.UseStaticFiles();
 app.UseSwagger();
 app.UseSwaggerUI();

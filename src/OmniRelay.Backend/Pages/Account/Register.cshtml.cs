@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text;
 using OmniRelay.Backend.Configuration;
+using OmniRelay.Backend.Localization;
 using OmniRelay.Backend.Models;
 using OmniRelay.Backend.Services;
 using Microsoft.AspNetCore.WebUtilities;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 
 namespace OmniRelay.Backend.Pages.Account;
@@ -20,18 +22,21 @@ public sealed class RegisterModel : PageModel
     private readonly IOptions<SpamProtectionOptions> _spamOptions;
     private readonly IRecaptchaVerifier _recaptchaVerifier;
     private readonly ILogger<RegisterModel> _logger;
+    private readonly IStringLocalizer<SharedResource> _localizer;
 
     public RegisterModel(
         UserManager<ApplicationUser> userManager,
         IEmailDeliveryService emailDeliveryService,
         IOptions<SpamProtectionOptions> spamOptions,
         IRecaptchaVerifier recaptchaVerifier,
+        IStringLocalizer<SharedResource> localizer,
         ILogger<RegisterModel> logger)
     {
         _userManager = userManager;
         _emailDeliveryService = emailDeliveryService;
         _spamOptions = spamOptions;
         _recaptchaVerifier = recaptchaVerifier;
+        _localizer = localizer;
         _logger = logger;
     }
 
@@ -59,7 +64,7 @@ public sealed class RegisterModel : PageModel
         if (!ModelState.IsValid)
         {
             _logger.LogWarning("Register form model validation failed. Errors: {Errors}", string.Join(" | ", GetModelStateErrors()));
-            ErrorMessage = "Form validation failed. Please refresh the page and try again.";
+            ErrorMessage = _localizer["Common.Msg.ValidationFailed"];
             return Page();
         }
 
@@ -71,7 +76,7 @@ public sealed class RegisterModel : PageModel
         if (!recaptchaResult.IsValid)
         {
             _logger.LogWarning("Registration blocked by reCAPTCHA verification: {Reason}", recaptchaResult.ErrorMessage);
-            ErrorMessage = "Verification failed. Please refresh and try again.";
+            ErrorMessage = _localizer["Common.Msg.VerificationFailed"];
             return Page();
         }
 
@@ -102,19 +107,15 @@ public sealed class RegisterModel : PageModel
 
             if (string.IsNullOrWhiteSpace(confirmUrl))
             {
-                throw new InvalidOperationException("Could not generate email confirmation URL.");
+                throw new InvalidOperationException(_localizer["Register.Msg.ConfirmUrlGenerationFailed"]);
             }
 
-            var body =
-                "Welcome to OmniRelay.\n\n" +
-                "Please confirm your email address to activate your account:\n" +
-                $"{confirmUrl}\n\n" +
-                "If you did not create this account, you can ignore this message.";
+            var body = _localizer["Register.Email.Body", confirmUrl].Value;
 
             await _emailDeliveryService.SendAsync(
                 new EmailDeliveryMessage(
                     user.Email!,
-                    "Confirm your OmniRelay account",
+                    _localizer["Register.Email.Subject"],
                     body,
                     ToName: user.UserName),
                 CancellationToken.None);
@@ -123,11 +124,11 @@ public sealed class RegisterModel : PageModel
         {
             _logger.LogError(ex, "Failed to send registration confirmation email for user {UserId}.", user.Id);
             await _userManager.DeleteAsync(user);
-            ErrorMessage = "Registration could not be completed because confirmation email delivery failed. Please try again.";
+            ErrorMessage = _localizer["Register.Msg.EmailDeliveryFailed"];
             return Page();
         }
 
-        SuccessMessage = "Account created. Please check your email and confirm your address before logging in.";
+        SuccessMessage = _localizer["Register.Msg.AccountCreated"];
         return RedirectToPage("/Account/Login");
     }
 
@@ -167,7 +168,7 @@ public sealed class RegisterModel : PageModel
 
         [Required]
         [DataType(DataType.Password)]
-        [Compare(nameof(Password), ErrorMessage = "Password and confirmation must match.")]
+        [Compare(nameof(Password), ErrorMessage = "Register.Validation.PasswordMismatch")]
         public string ConfirmPassword { get; set; } = string.Empty;
 
         [StringLength(4096)]

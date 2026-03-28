@@ -1,8 +1,10 @@
 using OmniRelay.Backend.Data;
+using OmniRelay.Backend.Localization;
 using OmniRelay.Backend.Utilities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Localization;
 
 namespace OmniRelay.Backend.Pages.App;
 
@@ -13,10 +15,14 @@ public sealed class LicensesModel : PageModel
     private const int TransferWindowDays = 365;
 
     private readonly AppDbContext _dbContext;
+    private readonly IStringLocalizer<SharedResource> _localizer;
 
-    public LicensesModel(AppDbContext dbContext)
+    public LicensesModel(
+        AppDbContext dbContext,
+        IStringLocalizer<SharedResource> localizer)
     {
         _dbContext = dbContext;
+        _localizer = localizer;
     }
 
     public List<LicenseItem> Items { get; private set; } = [];
@@ -60,8 +66,8 @@ public sealed class LicensesModel : PageModel
                 Plan = x.License.Plan,
                 Status = x.License.Status.ToString().ToLowerInvariant(),
                 Term = x.License.ExpiresAt.HasValue
-                    ? $"Until {x.License.ExpiresAt.Value:yyyy-MM-dd}"
-                    : "Perpetual",
+                    ? _localizer["Licenses.Term.Until", x.License.ExpiresAt.Value.ToString("yyyy-MM-dd")]
+                    : _localizer["Licenses.Term.Perpetual"],
                 CreatedAt = x.CreatedAt,
                 CurrentDeviceId = ToDeviceHint(activeActivation?.FingerprintHash),
                 LastSeenAt = activeActivation?.LastSeenAt,
@@ -77,7 +83,7 @@ public sealed class LicensesModel : PageModel
     {
         if (string.IsNullOrWhiteSpace(fingerprintHash))
         {
-            return "none";
+            return string.Empty;
         }
 
         var value = fingerprintHash.Trim();
@@ -98,7 +104,7 @@ public sealed class LicensesModel : PageModel
         public string Status { get; set; } = string.Empty;
         public string Term { get; set; } = string.Empty;
         public DateTimeOffset CreatedAt { get; set; }
-        public string CurrentDeviceId { get; set; } = "none";
+        public string CurrentDeviceId { get; set; } = string.Empty;
         public DateTimeOffset? LastSeenAt { get; set; }
         public int TransfersUsedInWindow { get; set; }
         public int TransfersRemainingInWindow { get; set; }

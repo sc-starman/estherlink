@@ -1,7 +1,7 @@
 @page "/admin/discounts"
 @model OmniRelay.Backend.Pages.Admin.DiscountsModel
 @{
-    ViewData["Title"] = "Admin Discounts";
+    ViewData["Title"] = S["Admin.Discounts.Title"];
     ViewData["AdminNav"] = "discounts";
 }
 
@@ -10,8 +10,8 @@
 
     <section class="space-y-5">
         <div>
-            <h1 class="text-3xl font-bold">Discount Coupons</h1>
-            <p class="text-slate-400 mt-1">Create and manage reusable percentage coupons for billing checkout.</p>
+            <h1 class="text-3xl font-bold">@S["Admin.Discounts.Title"]</h1>
+            <p class="text-slate-400 mt-1">@S["Admin.Discounts.Subtitle"]</p>
         </div>
 
         @if (!string.IsNullOrWhiteSpace(Model.NoticeMessage))
@@ -29,45 +29,45 @@
         }
 
         <section class="rounded-xl border border-slate-800 bg-slate-900 p-5">
-            <h2 class="text-lg font-semibold">Create Coupon</h2>
-            <p class="mt-1 text-sm text-slate-400">Leave code empty for automatic secure generation.</p>
+            <h2 class="text-lg font-semibold">@S["Admin.Discounts.CreateCoupon"]</h2>
+            <p class="mt-1 text-sm text-slate-400">@S["Admin.Discounts.CreateHelp"]</p>
 
             <form method="post" asp-page-handler="Create" class="mt-4 grid gap-4 md:grid-cols-4">
                 <div class="md:col-span-2 space-y-1">
-                    <label asp-for="Input.Code" class="text-sm text-slate-300">Coupon Code (optional)</label>
+                    <label asp-for="Input.Code" class="text-sm text-slate-300">@S["Admin.Discounts.CouponCodeOptional"]</label>
                     <input asp-for="Input.Code" maxlength="64" class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none" />
-                    <p class="text-xs text-slate-500">Allowed: letters, digits, '-' and '_'.</p>
+                    <p class="text-xs text-slate-500">@S["Admin.Discounts.CodeAllowed"]</p>
                     <span asp-validation-for="Input.Code" class="text-xs text-rose-300"></span>
                 </div>
 
                 <div class="space-y-1">
-                    <label asp-for="Input.DiscountPercent" class="text-sm text-slate-300">Discount %</label>
+                    <label asp-for="Input.DiscountPercent" class="text-sm text-slate-300">@S["Admin.Discounts.DiscountPercent"]</label>
                     <input asp-for="Input.DiscountPercent" type="number" min="1" max="99" class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none" />
                     <span asp-validation-for="Input.DiscountPercent" class="text-xs text-rose-300"></span>
                 </div>
 
                 <div class="space-y-1">
-                    <label asp-for="Input.MaxUses" class="text-sm text-slate-300">Max Uses</label>
+                    <label asp-for="Input.MaxUses" class="text-sm text-slate-300">@S["Admin.Discounts.MaxUses"]</label>
                     <input asp-for="Input.MaxUses" type="number" min="1" class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none" />
                     <span asp-validation-for="Input.MaxUses" class="text-xs text-rose-300"></span>
                 </div>
 
                 <div class="md:col-span-4 flex items-center gap-3">
-                    <button type="submit" class="rounded bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400">Create Coupon</button>
+                    <button type="submit" class="rounded bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400">@S["Admin.Discounts.CreateButton"]</button>
                     <div asp-validation-summary="ModelOnly" class="text-xs text-rose-300"></div>
                 </div>
             </form>
         </section>
 
         <div class="flex items-center justify-between text-sm text-slate-300">
-            <p>Total: <strong>@Model.TotalItems</strong></p>
-            <p>Active: <strong>@Model.ActiveItems</strong></p>
-            <p>Page @Model.PageNumber / @Model.TotalPages</p>
+            <p>@S["Common.Total"] <strong>@Model.TotalItems</strong></p>
+            <p>@S["Admin.Card.Active"] <strong>@Model.ActiveItems</strong></p>
+            <p>@S["Common.PageXofY", Model.PageNumber, Model.TotalPages]</p>
         </div>
 
         @if (Model.Items.Count == 0)
         {
-            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">No coupons found.</div>
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">@S["Admin.Discounts.Empty"]</div>
         }
         else
         {
@@ -75,14 +75,14 @@
                 <table class="min-w-full text-sm">
                     <thead class="bg-slate-950/70 text-slate-300">
                         <tr>
-                            <th class="text-left px-4 py-3">Code</th>
-                            <th class="text-left px-4 py-3">Discount</th>
-                            <th class="text-left px-4 py-3">Used / Max</th>
-                            <th class="text-left px-4 py-3">Remaining</th>
-                            <th class="text-left px-4 py-3">Status</th>
-                            <th class="text-left px-4 py-3">Created (UTC)</th>
-                            <th class="text-left px-4 py-3">Creator</th>
-                            <th class="text-left px-4 py-3">Action</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Discounts.Table.Code"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Discounts.Table.Discount"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Discounts.Table.UsedMax"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Discounts.Table.Remaining"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Discounts.Table.Status"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Discounts.Table.Created"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Discounts.Table.Creator"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Discounts.Table.Action"]</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -92,7 +92,7 @@
                             <td class="px-4 py-3">
                                 <div class="flex items-center gap-2">
                                     <code class="font-mono text-xs text-cyan-300">@item.Code</code>
-                                    <button type="button" class="copy-discount-code rounded bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700" data-code="@item.Code">Copy</button>
+                                    <button type="button" class="copy-discount-code rounded bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700" data-code="@item.Code">@S["Js.Copy.Copy"]</button>
                                 </div>
                             </td>
                             <td class="px-4 py-3">@item.DiscountPercent%</td>
@@ -101,15 +101,15 @@
                             <td class="px-4 py-3">
                                 @if (item.IsActive)
                                 {
-                                    <span class="rounded-full bg-emerald-500/20 px-2 py-1 text-xs text-emerald-300">active</span>
+                                    <span class="rounded-full bg-emerald-500/20 px-2 py-1 text-xs text-emerald-300">@S["Common.Active"]</span>
                                 }
                                 else
                                 {
-                                    <span class="rounded-full bg-slate-700 px-2 py-1 text-xs text-slate-300">disabled</span>
+                                    <span class="rounded-full bg-slate-700 px-2 py-1 text-xs text-slate-300">@S["Common.Disabled"]</span>
                                 }
                             </td>
                             <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>
-                            <td class="px-4 py-3">@(string.IsNullOrWhiteSpace(item.CreatorEmail) ? "n/a" : item.CreatorEmail)</td>
+                            <td class="px-4 py-3">@(string.IsNullOrWhiteSpace(item.CreatorEmail) ? S["Common.NotAvailable"].Value : item.CreatorEmail)</td>
                             <td class="px-4 py-3">
                                 @if (item.IsActive)
                                 {
@@ -117,13 +117,13 @@
                                         <input type="hidden" name="id" value="@item.Id" />
                                         <input type="hidden" name="PageNumber" value="@Model.PageNumber" />
                                         <button type="submit" class="rounded border border-rose-400 px-2 py-1 text-xs text-rose-200 hover:bg-rose-950/40">
-                                            Disable
+                                            @S["Common.Disable"]
                                         </button>
                                     </form>
                                 }
                                 else
                                 {
-                                    <span class="text-xs text-slate-500">n/a</span>
+                                    <span class="text-xs text-slate-500">@S["Common.NotAvailable"]</span>
                                 }
                             </td>
                         </tr>
@@ -135,20 +135,20 @@
             <div class="flex items-center justify-between">
                 @if (Model.PageNumber > 1)
                 {
-                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/discounts?pageNumber=@(Model.PageNumber - 1)">Previous</a>
+                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/discounts?pageNumber=@(Model.PageNumber - 1)">@S["Common.Previous"]</a>
                 }
                 else
                 {
-                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">Previous</span>
+                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">@S["Common.Previous"]</span>
                 }
 
                 @if (Model.PageNumber < Model.TotalPages)
                 {
-                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/discounts?pageNumber=@(Model.PageNumber + 1)">Next</a>
+                    <a class="rounded bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700" href="/admin/discounts?pageNumber=@(Model.PageNumber + 1)">@S["Common.Next"]</a>
                 }
                 else
                 {
-                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">Next</span>
+                    <span class="rounded bg-slate-900 px-3 py-2 text-sm text-slate-500">@S["Common.Next"]</span>
                 }
             </div>
         }
@@ -158,6 +158,10 @@
 @section Scripts {
     <script>
         (function () {
+            const i18n = window.omniRelayI18n || {};
+            const copiedLabel = i18n["copy.copied"] || @Html.Raw(System.Text.Json.JsonSerializer.Serialize(S["Js.Copy.Copied"].Value));
+            const copyLabel = i18n["copy.copy"] || @Html.Raw(System.Text.Json.JsonSerializer.Serialize(S["Js.Copy.Copy"].Value));
+            const copyFailedLabel = i18n["copy.failed"] || @Html.Raw(System.Text.Json.JsonSerializer.Serialize(S["Js.Copy.Failed"].Value));
             document.querySelectorAll(".copy-discount-code").forEach(function (button) {
                 button.addEventListener("click", async function () {
                     const code = button.getAttribute("data-code") || "";
@@ -165,14 +169,14 @@
                     try {
                         await navigator.clipboard.writeText(code);
                         const oldText = button.textContent;
-                        button.textContent = "Copied";
+                        button.textContent = copiedLabel;
                         setTimeout(function () {
-                            button.textContent = oldText || "Copy";
+                            button.textContent = oldText || copyLabel;
                         }, 1000);
                     } catch {
-                        button.textContent = "Failed";
+                        button.textContent = copyFailedLabel;
                         setTimeout(function () {
-                            button.textContent = "Copy";
+                            button.textContent = copyLabel;
                         }, 1000);
                     }
                 });

@@ -1,9 +1,11 @@
 using System.ComponentModel.DataAnnotations;
 using OmniRelay.Backend.Configuration;
+using OmniRelay.Backend.Localization;
 using OmniRelay.Backend.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 
 namespace OmniRelay.Backend.Pages;
@@ -16,18 +18,21 @@ public sealed class ContactModel : PageModel
     private readonly IOptions<SpamProtectionOptions> _spamOptions;
     private readonly IRecaptchaVerifier _recaptchaVerifier;
     private readonly ILogger<ContactModel> _logger;
+    private readonly IStringLocalizer<SharedResource> _localizer;
 
     public ContactModel(
         IContactEmailSender contactEmailSender,
         IOptions<WebOptions> webOptions,
         IOptions<SpamProtectionOptions> spamOptions,
         IRecaptchaVerifier recaptchaVerifier,
+        IStringLocalizer<SharedResource> localizer,
         ILogger<ContactModel> logger)
     {
         _contactEmailSender = contactEmailSender;
         _webOptions = webOptions;
         _spamOptions = spamOptions;
         _recaptchaVerifier = recaptchaVerifier;
+        _localizer = localizer;
         _logger = logger;
     }
 
@@ -55,14 +60,14 @@ public sealed class ContactModel : PageModel
         if (!ModelState.IsValid)
         {
             _logger.LogWarning("Contact form model validation failed. Errors: {Errors}", string.Join(" | ", GetModelStateErrors()));
-            ErrorMessage = "Form validation failed. Please refresh the page and try again.";
+            ErrorMessage = _localizer["Contact.Msg.ValidationFailed"];
             return Page();
         }
 
         if (!string.IsNullOrWhiteSpace(Input.Website))
         {
             // Honeypot triggered; return generic success to avoid bot feedback.
-            SuccessMessage = "Message sent successfully. Our team will contact you shortly.";
+            SuccessMessage = _localizer["Contact.Msg.Sent"];
             return RedirectToPage("/Contact");
         }
 
@@ -73,7 +78,7 @@ public sealed class ContactModel : PageModel
             expectedAction: "contact_form");
         if (!recaptchaResult.IsValid)
         {
-            ErrorMessage = "Verification failed. Please refresh and try again.";
+            ErrorMessage = _localizer["Common.Msg.VerificationFailed"];
             _logger.LogWarning("Contact submission blocked by spam checks: {Reason}", recaptchaResult.ErrorMessage);
             return Page();
         }
@@ -81,7 +86,7 @@ public sealed class ContactModel : PageModel
         var supportEmail = _webOptions.Value.SupportEmail;
         if (string.IsNullOrWhiteSpace(supportEmail))
         {
-            ErrorMessage = "Support email is not configured. Please try again later.";
+            ErrorMessage = _localizer["Contact.Msg.SupportUnavailable"];
             return Page();
         }
 
@@ -96,13 +101,13 @@ public sealed class ContactModel : PageModel
                     supportEmail.Trim()),
                 cancellationToken);
 
-            SuccessMessage = "Message sent successfully. Our team will contact you shortly.";
+            SuccessMessage = _localizer["Contact.Msg.Sent"];
             return RedirectToPage("/Contact");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send contact email.");
-            ErrorMessage = "We could not send your message right now. Please try again later.";
+            ErrorMessage = _localizer["Contact.Msg.SendFailed"];
             return Page();
         }
     }

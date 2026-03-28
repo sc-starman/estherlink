@@ -1,104 +1,175 @@
+using OmniRelay.Backend.Localization;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.Extensions.Localization;
 
 namespace OmniRelay.Backend.Pages;
 
 public sealed class DocsModel : PageModel
 {
-    public string LastUpdated => "2026-03-07";
+    private readonly IStringLocalizer<SharedResource> _localizer;
 
-    public IReadOnlyList<string> Introduction { get; } =
+    public DocsModel(IStringLocalizer<SharedResource> localizer)
+    {
+        _localizer = localizer;
+    }
+
+    public string LastUpdated => _localizer["Docs.LastUpdatedDate"];
+
+    public IReadOnlyList<string> Introduction =>
     [
-        "OmniRelay is a desktop application for managing secure and reliable internet access in restricted or unstable environments.",
-        "You configure it through a guided interface, start relay operations from the UI, and monitor live health indicators from built-in status panels.",
-        "This guide focuses on what you see and do in the product so you can operate OmniRelay confidently without learning internal implementation details."
+        _localizer["Docs.Introduction.1"],
+        _localizer["Docs.Introduction.2"],
+        _localizer["Docs.Introduction.3"]
     ];
 
-    public IReadOnlyList<string> SystemRequirements { get; } =
+    public IReadOnlyList<string> SystemRequirements =>
     [
-        "Operating system: Windows 10 or Windows 11 (64-bit).",
-        "User permissions: local Administrator access is recommended for install/start/stop operations.",
-        "Network adapters: at least two active adapters visible in Windows when using split-network scenarios.",
-        "Internet expectations: at least one path with outbound access for setup, validation, and license checks.",
-        "Remote endpoint access: a reachable gateway server with a user account that can run operational commands.",
-        "Time sync: Windows system clock should be accurate for stable status checks and activation flows."
+        _localizer["Docs.Requirements.1"],
+        _localizer["Docs.Requirements.2"],
+        _localizer["Docs.Requirements.3"],
+        _localizer["Docs.Requirements.4"],
+        _localizer["Docs.Requirements.5"],
+        _localizer["Docs.Requirements.6"]
     ];
 
-    public IReadOnlyList<string> InstallationSteps { get; } =
+    public IReadOnlyList<string> InstallationSteps =>
     [
-        "Download the latest Windows installer from the official OmniRelay download page.",
-        "Run the installer as Administrator.",
-        "Follow the setup wizard and complete installation with default options unless your policy requires custom paths.",
-        "Launch OmniRelay from the Start Menu after setup completes.",
-        "If Windows prompts for permissions, allow access so the app can manage relay operations."
+        _localizer["Docs.Installation.1"],
+        _localizer["Docs.Installation.2"],
+        _localizer["Docs.Installation.3"],
+        _localizer["Docs.Installation.4"],
+        _localizer["Docs.Installation.5"]
     ];
 
-    public IReadOnlyList<string> FirstLaunchSteps { get; } =
+    public IReadOnlyList<string> FirstLaunchSteps =>
     [
-        "On first launch, OmniRelay opens to the onboarding flow and prompts for license activation.",
-        "After activation, the main navigation becomes available: Relay Management, Gateway Management, Whitelists, Dashboard, and Settings.",
-        "Use the status bar and action logs at the bottom of operation panels to track each command outcome.",
-        "Recommended first action: open Relay Management and confirm your network adapters are detected."
+        _localizer["Docs.FirstLaunch.1"],
+        _localizer["Docs.FirstLaunch.2"],
+        _localizer["Docs.FirstLaunch.3"],
+        _localizer["Docs.FirstLaunch.4"]
     ];
 
-    public IReadOnlyList<string> LicenseActivationSteps { get; } =
+    public IReadOnlyList<string> LicenseActivationSteps =>
     [
-        "Open the License page.",
-        "Paste your license key into the activation field.",
-        "Click Activate License.",
-        "Wait for the confirmation message and automatic navigation to operational pages.",
-        "If activation fails, verify key accuracy, system time, and internet connectivity, then retry."
+        _localizer["Docs.Activation.1"],
+        _localizer["Docs.Activation.2"],
+        _localizer["Docs.Activation.3"],
+        _localizer["Docs.Activation.4"],
+        _localizer["Docs.Activation.5"]
     ];
 
-    public IReadOnlyList<ConfigRow> RelayConfigRows { get; } =
+    public IReadOnlyList<ConfigRow> RelayConfigRows =>
     [
-        new("Proxy Listen Port", "Main local listening port used by client applications.", "1-65535", "Use an unused port. Keep consistent with your client settings."),
-        new("VPS Network (IC1)", "Network adapter used for relay-side connectivity.", "Any detected adapter", "Choose the adapter connected to the relay-side network."),
-        new("Outgoing Network (IC2)", "Network adapter used for outbound internet path.", "Any detected adapter", "Choose the adapter that provides your preferred outbound path."),
-        new("Apply Relay Config", "Saves current relay field values.", "Button action", "Always apply after editing ports or adapter selections."),
-        new("Refresh", "Reloads current status and adapter information.", "Button action", "Use after plugging/unplugging adapters or changing routes.")
+        new(
+            _localizer["Docs.RelayConfig.Row1.Field"],
+            _localizer["Docs.RelayConfig.Row1.Description"],
+            _localizer["Docs.RelayConfig.Row1.Valid"],
+            _localizer["Docs.RelayConfig.Row1.Notes"]),
+        new(
+            _localizer["Docs.RelayConfig.Row2.Field"],
+            _localizer["Docs.RelayConfig.Row2.Description"],
+            _localizer["Docs.RelayConfig.Row2.Valid"],
+            _localizer["Docs.RelayConfig.Row2.Notes"]),
+        new(
+            _localizer["Docs.RelayConfig.Row3.Field"],
+            _localizer["Docs.RelayConfig.Row3.Description"],
+            _localizer["Docs.RelayConfig.Row3.Valid"],
+            _localizer["Docs.RelayConfig.Row3.Notes"]),
+        new(
+            _localizer["Docs.RelayConfig.Row4.Field"],
+            _localizer["Docs.RelayConfig.Row4.Description"],
+            _localizer["Docs.RelayConfig.Row4.Valid"],
+            _localizer["Docs.RelayConfig.Row4.Notes"]),
+        new(
+            _localizer["Docs.RelayConfig.Row5.Field"],
+            _localizer["Docs.RelayConfig.Row5.Description"],
+            _localizer["Docs.RelayConfig.Row5.Valid"],
+            _localizer["Docs.RelayConfig.Row5.Notes"])
     ];
 
-    public IReadOnlyList<string> StartingRelaySteps { get; } =
+    public IReadOnlyList<string> StartingRelaySteps =>
     [
-        "Go to Relay Management.",
-        "Set Proxy Listen Port, VPS Network (IC1), and Outgoing Network (IC2).",
-        "Click Apply Relay Config.",
-        "Click Install/Start Relay.",
-        "Use Refresh and verify that Service State is Running and Proxy Running is True.",
-        "If you changed configuration after start, click Apply Relay Config again and refresh status."
+        _localizer["Docs.StartRelay.1"],
+        _localizer["Docs.StartRelay.2"],
+        _localizer["Docs.StartRelay.3"],
+        _localizer["Docs.StartRelay.4"],
+        _localizer["Docs.StartRelay.5"],
+        _localizer["Docs.StartRelay.6"]
     ];
 
-    public IReadOnlyList<StatusRow> MonitoringRows { get; } =
+    public IReadOnlyList<StatusRow> MonitoringRows =>
     [
-        new("Service State", "Shows whether the local relay service is running.", "Running"),
-        new("Proxy Running", "Shows whether the listening endpoint is active.", "True"),
-        new("Proxy Listen Port", "Displays the active listening port.", "Matches configured value"),
-        new("Tunnel Connected", "Shows whether remote connectivity path is currently established.", "True for active sessions"),
-        new("Gateway Service State", "Shows remote service readiness from gateway checks.", "Healthy/Active states"),
-        new("Health", "Overall health summary from latest check.", "Healthy"),
-        new("Last Error", "Latest user-facing error summary.", "Empty or informational only")
+        new(
+            _localizer["Docs.Monitoring.Row1.Indicator"],
+            _localizer["Docs.Monitoring.Row1.Meaning"],
+            _localizer["Docs.Monitoring.Row1.Expected"]),
+        new(
+            _localizer["Docs.Monitoring.Row2.Indicator"],
+            _localizer["Docs.Monitoring.Row2.Meaning"],
+            _localizer["Docs.Monitoring.Row2.Expected"]),
+        new(
+            _localizer["Docs.Monitoring.Row3.Indicator"],
+            _localizer["Docs.Monitoring.Row3.Meaning"],
+            _localizer["Docs.Monitoring.Row3.Expected"]),
+        new(
+            _localizer["Docs.Monitoring.Row4.Indicator"],
+            _localizer["Docs.Monitoring.Row4.Meaning"],
+            _localizer["Docs.Monitoring.Row4.Expected"]),
+        new(
+            _localizer["Docs.Monitoring.Row5.Indicator"],
+            _localizer["Docs.Monitoring.Row5.Meaning"],
+            _localizer["Docs.Monitoring.Row5.Expected"]),
+        new(
+            _localizer["Docs.Monitoring.Row6.Indicator"],
+            _localizer["Docs.Monitoring.Row6.Meaning"],
+            _localizer["Docs.Monitoring.Row6.Expected"]),
+        new(
+            _localizer["Docs.Monitoring.Row7.Indicator"],
+            _localizer["Docs.Monitoring.Row7.Meaning"],
+            _localizer["Docs.Monitoring.Row7.Expected"])
     ];
 
-    public IReadOnlyList<TroubleshootRow> TroubleshootingRows { get; } =
+    public IReadOnlyList<TroubleshootRow> TroubleshootingRows =>
     [
-        new("Start button completes but status stays stopped", "Open OmniRelay as Administrator and run Install/Start Relay again.", "Confirm Service State changes to Running after Refresh."),
-        new("No adapters shown in dropdowns", "Click Refresh, then verify adapters are enabled in Windows Network Settings.", "Adapters appear in IC1/IC2 lists."),
-        new("Activation fails with valid key", "Check internet access, system date/time, and key formatting (no extra spaces).", "Activation success message appears."),
-        new("Health check shows Unhealthy", "Run action sequence: Test Tunnel -> Bootstrap Check -> Health Check, then review operation log lines.", "Health moves to Healthy or shows clear actionable error."),
-        new("Connected earlier but not after outage", "Use Refresh, then rerun Test Tunnel and Start operations to re-establish session.", "Tunnel Connected returns to True."),
-        new("Button click seems to do nothing", "Hard refresh browser/UI view and retry; check operation log and bottom status message.", "Action log receives new lines with result."),
-        new("Panel unreachable", "Verify correct address/port in UI and allow the port in host and provider firewall rules.", "Panel opens and health checks pass.")
+        new(
+            _localizer["Docs.Troubleshooting.Row1.Problem"],
+            _localizer["Docs.Troubleshooting.Row1.Action"],
+            _localizer["Docs.Troubleshooting.Row1.Confirm"]),
+        new(
+            _localizer["Docs.Troubleshooting.Row2.Problem"],
+            _localizer["Docs.Troubleshooting.Row2.Action"],
+            _localizer["Docs.Troubleshooting.Row2.Confirm"]),
+        new(
+            _localizer["Docs.Troubleshooting.Row3.Problem"],
+            _localizer["Docs.Troubleshooting.Row3.Action"],
+            _localizer["Docs.Troubleshooting.Row3.Confirm"]),
+        new(
+            _localizer["Docs.Troubleshooting.Row4.Problem"],
+            _localizer["Docs.Troubleshooting.Row4.Action"],
+            _localizer["Docs.Troubleshooting.Row4.Confirm"]),
+        new(
+            _localizer["Docs.Troubleshooting.Row5.Problem"],
+            _localizer["Docs.Troubleshooting.Row5.Action"],
+            _localizer["Docs.Troubleshooting.Row5.Confirm"]),
+        new(
+            _localizer["Docs.Troubleshooting.Row6.Problem"],
+            _localizer["Docs.Troubleshooting.Row6.Action"],
+            _localizer["Docs.Troubleshooting.Row6.Confirm"]),
+        new(
+            _localizer["Docs.Troubleshooting.Row7.Problem"],
+            _localizer["Docs.Troubleshooting.Row7.Action"],
+            _localizer["Docs.Troubleshooting.Row7.Confirm"])
     ];
 
-    public IReadOnlyList<string> UpdateSteps { get; } =
+    public IReadOnlyList<string> UpdateSteps =>
     [
-        "Plan a short maintenance window.",
-        "From OmniRelay, stop active relay operations.",
-        "Download the latest installer package from the official download page.",
-        "Run the installer and complete upgrade.",
-        "Open OmniRelay and verify your saved configuration values.",
-        "Start relay operations and run a full status refresh and health check.",
-        "If needed, re-apply relay and gateway config from the UI and validate again."
+        _localizer["Docs.Update.1"],
+        _localizer["Docs.Update.2"],
+        _localizer["Docs.Update.3"],
+        _localizer["Docs.Update.4"],
+        _localizer["Docs.Update.5"],
+        _localizer["Docs.Update.6"],
+        _localizer["Docs.Update.7"]
     ];
 
     public void OnGet()

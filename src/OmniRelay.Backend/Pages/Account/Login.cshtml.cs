@@ -1,11 +1,13 @@
 using System.ComponentModel.DataAnnotations;
 using OmniRelay.Backend.Configuration;
+using OmniRelay.Backend.Localization;
 using OmniRelay.Backend.Models;
 using OmniRelay.Backend.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 
 namespace OmniRelay.Backend.Pages.Account;
@@ -17,16 +19,19 @@ public sealed class LoginModel : PageModel
     private readonly IOptions<SpamProtectionOptions> _spamOptions;
     private readonly IRecaptchaVerifier _recaptchaVerifier;
     private readonly ILogger<LoginModel> _logger;
+    private readonly IStringLocalizer<SharedResource> _localizer;
 
     public LoginModel(
         SignInManager<ApplicationUser> signInManager,
         IOptions<SpamProtectionOptions> spamOptions,
         IRecaptchaVerifier recaptchaVerifier,
+        IStringLocalizer<SharedResource> localizer,
         ILogger<LoginModel> logger)
     {
         _signInManager = signInManager;
         _spamOptions = spamOptions;
         _recaptchaVerifier = recaptchaVerifier;
+        _localizer = localizer;
         _logger = logger;
     }
 
@@ -57,7 +62,7 @@ public sealed class LoginModel : PageModel
         if (!ModelState.IsValid)
         {
             _logger.LogWarning("Login form model validation failed. Errors: {Errors}", string.Join(" | ", GetModelStateErrors()));
-            ErrorMessage = "Form validation failed. Please refresh the page and try again.";
+            ErrorMessage = _localizer["Common.Msg.ValidationFailed"];
             return Page();
         }
 
@@ -69,7 +74,7 @@ public sealed class LoginModel : PageModel
         if (!recaptchaResult.IsValid)
         {
             _logger.LogWarning("Login blocked by reCAPTCHA verification: {Reason}", recaptchaResult.ErrorMessage);
-            ErrorMessage = "Verification failed. Please refresh and try again.";
+            ErrorMessage = _localizer["Common.Msg.VerificationFailed"];
             return Page();
         }
 
@@ -82,10 +87,10 @@ public sealed class LoginModel : PageModel
         if (!result.Succeeded)
         {
             ErrorMessage = result.IsLockedOut
-                ? "Account is temporarily locked. Try again later."
+                ? _localizer["Login.Msg.LockedOut"]
                 : result.IsNotAllowed
-                    ? "Please confirm your email address before logging in."
-                    : "Invalid credentials.";
+                    ? _localizer["Login.Msg.EmailConfirmRequired"]
+                    : _localizer["Login.Msg.InvalidCredentials"];
             return Page();
         }
 

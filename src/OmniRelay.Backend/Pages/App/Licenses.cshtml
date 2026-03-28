@@ -1,7 +1,7 @@
 @page "/dashboard/licenses"
 @model OmniRelay.Backend.Pages.App.LicensesModel
 @{
-    ViewData["Title"] = "Licenses";
+    ViewData["Title"] = S["Licenses.Title"];
     ViewData["DashboardNav"] = "licenses";
 }
 
@@ -10,21 +10,20 @@
 
     <section class="space-y-6">
         <div>
-            <h1 class="text-3xl font-bold">Licenses</h1>
-            <p class="text-slate-400 mt-1">Each OmniRelay license is bound to one device at a time. Device moves require transfer.</p>
+            <h1 class="text-3xl font-bold">@S["Licenses.Title"]</h1>
+            <p class="text-slate-400 mt-1">@S["Licenses.Subtitle"]</p>
         </div>
 
         <article class="rounded-xl border border-slate-800 bg-slate-900 p-5 text-sm text-slate-300">
-            <p class="font-semibold text-slate-100 mb-1">Single-Device Policy</p>
+            <p class="font-semibold text-slate-100 mb-1">@S["Licenses.Policy.Title"]</p>
             <p>
-                A license can be active on one device concurrently. If activation is requested from another device,
-                you must transfer the license. Each license supports up to <strong>3 transfers per rolling 365 days</strong>.
+                @Html.Raw(S["Licenses.Policy.Body"])
             </p>
         </article>
 
         @if (Model.Items.Count == 0)
         {
-            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">No licenses yet. Start a trial or purchase a license.</div>
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">@S["Licenses.Empty"]</div>
         }
         else
         {
@@ -32,16 +31,16 @@
                 <table class="min-w-full text-sm">
                     <thead class="bg-slate-950/70 text-slate-300">
                         <tr>
-                            <th class="text-left px-4 py-3">License Id</th>
-                            <th class="text-left px-4 py-3">License Key</th>
-                            <th class="text-left px-4 py-3">Device Id</th>
-                            <th class="text-left px-4 py-3">Created At</th>
-                            <th class="text-left px-4 py-3">Term</th>
-                            <th class="text-left px-4 py-3">Status</th>
-                            <th class="text-left px-4 py-3">Plan</th>
-                            <th class="text-left px-4 py-3">Transfers (365d)</th>
-                            <th class="text-left px-4 py-3">Remaining</th>
-                            <th class="text-left px-4 py-3">Last Seen</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.LicenseId"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.LicenseKey"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.DeviceId"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.CreatedAt"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.Term"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.Status"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.Plan"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.Transfers"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.Remaining"]</th>
+                            <th class="text-left px-4 py-3">@S["Licenses.Table.LastSeen"]</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -55,17 +54,17 @@
                                     class="show-license px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs"
                                     data-license-id="@item.LicenseId"
                                     data-license-key="@item.LicenseKey">
-                                    Show
+                                    @S["Common.Show"]
                                 </button>
                             </td>
-                            <td class="px-4 py-3 font-mono">@item.CurrentDeviceId</td>
+                            <td class="px-4 py-3 font-mono">@(string.IsNullOrWhiteSpace(item.CurrentDeviceId) ? S["Common.NotAvailable"] : item.CurrentDeviceId)</td>
                             <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>
                             <td class="px-4 py-3">@item.Term</td>
                             <td class="px-4 py-3">@item.Status</td>
                             <td class="px-4 py-3">@item.Plan</td>
                             <td class="px-4 py-3">@item.TransfersUsedInWindow</td>
                             <td class="px-4 py-3">@item.TransfersRemainingInWindow</td>
-                            <td class="px-4 py-3">@(item.LastSeenAt?.ToString("u") ?? "n/a")</td>
+                            <td class="px-4 py-3">@(item.LastSeenAt?.ToString("u") ?? S["Common.NotAvailable"])</td>
                         </tr>
                     }
                     </tbody>
@@ -80,10 +79,10 @@
     <div class="relative mx-auto mt-24 w-[92%] max-w-xl rounded-xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
         <div class="flex items-start justify-between gap-4">
             <div>
-                <h2 class="text-xl font-semibold text-slate-100">License Key</h2>
+                <h2 class="text-xl font-semibold text-slate-100">@S["Licenses.Modal.Title"]</h2>
                 <p id="licenseKeyModalId" class="mt-1 font-mono text-xs text-slate-400"></p>
             </div>
-            <button type="button" class="rounded px-2 py-1 text-slate-300 hover:bg-slate-800" data-close-modal aria-label="Close">
+            <button type="button" class="rounded px-2 py-1 text-slate-300 hover:bg-slate-800" data-close-modal aria-label="@S["Common.Close"]">
                 x
             </button>
         </div>
@@ -94,7 +93,7 @@
 
         <div class="mt-4 flex items-center gap-3">
             <button type="button" id="licenseKeyModalCopy" class="rounded bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400">
-                Copy
+                @S["Js.Copy.Copy"]
             </button>
             <span id="licenseKeyModalCopyStatus" class="text-xs text-slate-400"></span>
         </div>
@@ -111,11 +110,16 @@
             const valueEl = document.getElementById("licenseKeyModalValue");
             const copyBtn = document.getElementById("licenseKeyModalCopy");
             const copyStatus = document.getElementById("licenseKeyModalCopyStatus");
+            const i18n = window.omniRelayI18n || {};
+            const copyLabel = i18n["copy.copy"] || @Html.Raw(System.Text.Json.JsonSerializer.Serialize(S["Js.Copy.Copy"].Value));
+            const copiedLabel = i18n["copy.copied"] || @Html.Raw(System.Text.Json.JsonSerializer.Serialize(S["Js.Copy.Copied"].Value));
+            const copyFailedLabel = i18n["copy.failed"] || @Html.Raw(System.Text.Json.JsonSerializer.Serialize(S["Js.Copy.Failed"].Value));
+            const licenseIdPrefix = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(S["Licenses.Modal.LicenseId"].Value));
             let currentKey = "";
 
             const showModal = function (licenseId, key) {
                 currentKey = key || "";
-                if (idEl) idEl.textContent = "License Id: " + (licenseId || "");
+                if (idEl) idEl.textContent = `${licenseIdPrefix} ${licenseId || ""}`;
                 if (valueEl) valueEl.textContent = currentKey;
                 if (copyStatus) copyStatus.textContent = "";
                 modal.classList.remove("hidden");
@@ -150,10 +154,11 @@
                     if (!currentKey) return;
                     try {
                         await navigator.clipboard.writeText(currentKey);
-                        if (copyStatus) copyStatus.textContent = "Copied.";
+                        if (copyStatus) copyStatus.textContent = copiedLabel;
                     } catch {
-                        if (copyStatus) copyStatus.textContent = "Copy failed.";
+                        if (copyStatus) copyStatus.textContent = copyFailedLabel;
                     }
+                    copyBtn.textContent = copyLabel;
                 });
             }
         })();
