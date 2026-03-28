@@ -21,6 +21,7 @@ const OPENVPN_ACCOUNTING_CAPABILITIES = {
 const exec = promisify(execCallback);
 const DEFAULT_SYNC_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
 const DEFAULT_ACCOUNTING_DB = "/etc/omnirelay/gateway/openvpn/accounting.db";
+const DEFAULT_STATUS_FILE = "/var/log/openvpn/omnirelay-status.log";
 
 interface OpenVpnClientRecord extends GatewayClientRecord {
   username: string;
@@ -61,7 +62,7 @@ class LocalSqliteOpenVpnAccountingSource implements OpenVpnAccountingSource {
 
     try {
       const { stdout } = await exec(
-        `sqlite3 -csv -noheader "${dbPath}" "SELECT client_id, used_bytes FROM usage_totals WHERE client_id IN (${quotedIds});"`
+        `sqlite3 -csv -noheader -cmd ".timeout 5000" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
       );
       const usageMap = new Map<string, number>();
       for (const line of stdout.split(/\r?\n/)) {
@@ -113,8 +114,52 @@ function getAccountingDbPath(): string {
   return process.env.OPENVPN_ACCOUNTING_DB?.trim() || DEFAULT_ACCOUNTING_DB;
 }
 
+function getStatusFilePath(): string {
+  return process.env.OPENVPN_STATUS_FILE?.trim() || DEFAULT_STATUS_FILE;
+}
+
 function escapeSqlLiteral(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+async function readLiveUsageByUsername(): Promise<Map<string, number>> {
+  const statusFile = getStatusFilePath();
+  try {
+    const raw = await fs.readFile(statusFile, "utf8");
+    const usageByUsername = new Map<string, number>();
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.startsWith("CLIENT_LIST,")) {
+        continue;
+      }
+
+      const parts = line.split(",");
+      if (parts.length < 10) {
+        continue;
+      }
+
+      const bytesRx = Number.parseInt(parts[5] ?? "", 10);
+      const bytesTx = Number.parseInt(parts[6] ?? "", 10);
+      const userField = (parts[9] ?? "").trim();
+      const commonName = (parts[1] ?? "").trim();
+      const username = userField && userField !== "UNDEF" ? userField : commonName;
+      if (!username) {
+        continue;
+      }
+
+      const rx = Number.isFinite(bytesRx) && bytesRx > 0 ? bytesRx : 0;
+      const tx = Number.isFinite(bytesTx) && bytesTx > 0 ? bytesTx : 0;
+      const total = rx + tx;
+      if (total <= 0) {
+        continue;
+      }
+
+      usageByUsername.set(username, (usageByUsername.get(username) ?? 0) + total);
+    }
+
+    return usageByUsername;
+  } catch {
+    return new Map();
+  }
 }
 
 function normalizeSudoCommand(command: string): string {
@@ -261,6 +306,7 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
   public async getInbound(_session: OmniSession): Promise<GatewayInboundSnapshot> {
     const clients = await readClients();
     const usageByClientId = await this.accountingSource.getUsageByClientId(clients.map((item) => item.id));
+    const liveUsageByUsername = await readLiveUsageByUsername();
     const capabilities = this.accountingSource.getCapabilities();
     return {
       inbound: {
@@ -271,12 +317,13 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
         enable: true
       },
       clients: clients.map((item) => ({
+        // Persisted accounting is the source of truth; live status is a fallback for active sessions.
+        usedBytes: Math.max(usageByClientId.get(item.id) ?? 0, liveUsageByUsername.get(item.username) ?? 0),
         id: item.id,
         email: item.email,
         enable: item.enable,
         totalGB: item.totalGB,
-        expiryTime: item.expiryTime,
-        usedBytes: usageByClientId.get(item.id) ?? null
+        expiryTime: item.expiryTime
       })),
       capabilities
     };
@@ -309,7 +356,7 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       enable: client.enable,
       totalGB: client.totalGB,
       expiryTime: client.expiryTime,
-      usedBytes: null
+      usedBytes: 0
     };
   }
 

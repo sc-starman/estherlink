@@ -64,6 +64,8 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     private string? _recoveryAction;
     private string? _lastTunnelError;
     private string? _lastBootstrapError;
+    private string? _lastLoggedProbeFailureSignature;
+    private DateTimeOffset? _lastLoggedProbeFailureUtc;
 
     public TunnelResilienceOrchestratorWorker(
         GatewayRuntime runtime,
@@ -364,6 +366,10 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                 ? "SSH tunnel session is not established."
                 : $"Local backend probe failed: {backendProbe.ReasonCode}";
             _lastBootstrapError = $"local_probe_failed:{_healthReasonCode}";
+            LogProbeFailure(
+                "local_probe",
+                _healthReasonCode ?? "unknown",
+                _lastTunnelError ?? "Local probe failed.");
             return;
         }
 
@@ -398,6 +404,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             _healthReasonCode = remote.ReasonCode;
             _lastBootstrapError = $"end_to_end_probe_failed:{remote.ReasonCode}";
             _lastTunnelError = remote.Message;
+            LogProbeFailure("end_to_end_probe", remote.ReasonCode, remote.Message);
             return;
         }
 
@@ -422,19 +429,34 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         try
         {
             // If only end-to-end probe is failing while local tunnel path is healthy,
-            // avoid tearing down a working SSH tunnel. Escalate remote remediation only.
+            // prefer preserving the local tunnel, but allow targeted restart for
+            // persistent remote-backend failures (for example backend protocol unknown).
             if (!localPathFailure)
             {
+                var requiresLocalRestart = ShouldRestartLocalTunnelForRemoteFailure(_healthReasonCode);
                 switch (tier)
                 {
                     case 1:
                         RecordEvent("warn", "recovery tier1: end-to-end probe failed; keeping local tunnel intact");
+                        _fileLog.Warn("Recovery tier1: end-to-end probe failed; keeping local tunnel intact.");
                         _tunnelState = "Degraded";
                         _recoveryAction = null;
                         _currentRecoveryTier = 0;
                         break;
                     case 2:
+                        if (requiresLocalRestart)
+                        {
+                            RecordEvent("warn", "recovery tier2: remote backend unhealthy; restarting local tunnel");
+                            _fileLog.Warn(
+                                $"Recovery tier2: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); restarting local tunnel.");
+                            _runtime.RequestTunnelRestart("tier2_remote_backend_recovery");
+                            await StopTunnelProcessAsync();
+                            attemptedRecovery = true;
+                            break;
+                        }
+
                         RecordEvent("warn", "recovery tier2: end-to-end probe failed; keeping local tunnel intact");
+                        _fileLog.Warn("Recovery tier2: end-to-end probe failed; keeping local tunnel intact.");
                         _tunnelState = "Degraded";
                         _recoveryAction = null;
                         _currentRecoveryTier = 0;
@@ -443,12 +465,25 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                         if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
                             RecordEvent("warn", "recovery tier3: end-to-end probe failed; running remote remediation only");
+                            _fileLog.Warn("Recovery tier3: end-to-end probe failed; running remote remediation only.");
                             await RunRemoteWatchdogRemediationAsync(config, "hard", cancellationToken);
                             attemptedRecovery = true;
                         }
                         else
                         {
                             RecordEvent("warn", "recovery tier3: remote remediation skipped (module missing or ssh session not established)");
+                            _fileLog.Warn("Recovery tier3: remote remediation skipped (module missing or ssh session not established).");
+                        }
+
+                        if (requiresLocalRestart)
+                        {
+                            RecordEvent("warn", "recovery tier3: remote backend remains unhealthy; restarting local tunnel");
+                            _fileLog.Warn(
+                                $"Recovery tier3: remote backend remains unhealthy ({_healthReasonCode ?? "unknown"}); restarting local tunnel.");
+                            _runtime.RequestTunnelRestart("tier3_remote_backend_recovery");
+                            await StopTunnelProcessAsync();
+                            await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
+                            attemptedRecovery = true;
                         }
                         break;
                 }
@@ -461,6 +496,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             {
                 case 1:
                     RecordEvent("warn", "recovery tier1: restarting bootstrap SOCKS and tunnel");
+                    _fileLog.Warn("Recovery tier1: restarting bootstrap SOCKS and tunnel.");
                     await _socksEngine.RestartAsync(config.BootstrapSocksLocalPort, cancellationToken);
                     _runtime.RequestTunnelRestart("tier1_recovery");
                     await StopTunnelProcessAsync();
@@ -468,6 +504,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                     break;
                 case 2:
                     RecordEvent("warn", "recovery tier2: hard local cleanup");
+                    _fileLog.Warn("Recovery tier2: hard local cleanup.");
                     await _proxyEngine.StopAsync(cancellationToken);
                     await _socksEngine.StopAsync(cancellationToken);
                     await StopTunnelProcessAsync();
@@ -478,14 +515,17 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                     break;
                 default:
                     RecordEvent("warn", "recovery tier3: hard local cleanup");
+                    _fileLog.Warn("Recovery tier3: hard local cleanup.");
                     if (_remoteProbeModuleAvailable && _tunnelConnected)
                     {
                         RecordEvent("warn", "recovery tier3: running remote remediation before local cleanup");
+                        _fileLog.Warn("Recovery tier3: running remote remediation before local cleanup.");
                         await RunRemoteWatchdogRemediationAsync(config, "hard", cancellationToken);
                     }
                     else
                     {
                         RecordEvent("warn", "recovery tier3: skipping remote remediation (module missing or ssh session not established)");
+                        _fileLog.Warn("Recovery tier3: skipping remote remediation (module missing or ssh session not established).");
                     }
                     await _proxyEngine.StopAsync(cancellationToken);
                     await _socksEngine.StopAsync(cancellationToken);
@@ -502,6 +542,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             _runtime.SetError(ex.Message);
             _lastTunnelError = ex.Message;
             RecordEvent("error", $"recovery tier{tier} failed: {ex.Message}");
+            _fileLog.Error($"Recovery tier{tier} failed.", ex);
         }
 
         if (attemptedRecovery && !string.Equals(_healthState, "Healthy", StringComparison.Ordinal))
@@ -547,6 +588,11 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
 
     private async Task<(bool Success, string Protocol, string ReasonCode)> ProbeBackendEndpointAsync(int port, CancellationToken cancellationToken)
     {
+        if (!await IsLoopbackTcpListeningAsync(port, cancellationToken))
+        {
+            return (false, "unknown", "backend_listener_down");
+        }
+
         if (await ProbeSocks5EndpointAsync(port, cancellationToken))
         {
             return (true, "socks5", string.Empty);
@@ -557,7 +603,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             return (true, "http-connect", string.Empty);
         }
 
-        return (false, "unknown", "backend_endpoint_unresponsive");
+        return (false, "unknown", "backend_protocol_unknown");
     }
 
     private static async Task<bool> ProbeSocks5EndpointAsync(int port, CancellationToken cancellationToken)
@@ -596,14 +642,29 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             var requestBytes = System.Text.Encoding.ASCII.GetBytes(request);
             await stream.WriteAsync(requestBytes, timeoutCts.Token);
 
-            var response = new byte[16];
-            var read = await stream.ReadAsync(response, timeoutCts.Token);
-            if (read <= 0)
+            var response = new byte[64];
+            var offset = 0;
+            while (offset < response.Length)
+            {
+                var read = await stream.ReadAsync(response.AsMemory(offset, response.Length - offset), timeoutCts.Token);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                offset += read;
+                if (offset >= 7)
+                {
+                    break;
+                }
+            }
+
+            if (offset <= 0)
             {
                 return false;
             }
 
-            var text = System.Text.Encoding.ASCII.GetString(response, 0, read);
+            var text = System.Text.Encoding.ASCII.GetString(response, 0, offset);
             return text.StartsWith("HTTP/1.", StringComparison.OrdinalIgnoreCase);
         }
         catch
@@ -877,8 +938,12 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             _lastTunnelError = $"IC1 source {bindIp} cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {probeError}";
             _healthReasonCode = "ssh_reachability_failed";
             RecordEvent("warn", _lastTunnelError);
+            _fileLog.Warn(_lastTunnelError);
             return;
         }
+
+        _fileLog.Info(
+            $"Starting tunnel with IC1 IfIndex={config.WhitelistAdapterIfIndex}, sourceIp={bindIp}, target={config.TunnelHost}:{config.TunnelSshPort}.");
 
         if (!SshTunnelProcessFactory.TryCreateReverseTunnelStartInfo(
                 config,
@@ -908,6 +973,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         _healthReasonCode = null;
         _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow;
         RecordEvent("info", $"tunnel process started pid={_process.Id} reconnectCount={_reconnectCount}");
+        _fileLog.Info($"Tunnel process started. pid={_process.Id} reconnectCount={_reconnectCount}");
 
         var processRef = _process;
         _ = Task.Run(async () =>
@@ -1323,6 +1389,39 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     private static string EscapeForSingleQuotedShell(string value)
     {
         return (value ?? string.Empty).Replace("'", "'\\''", StringComparison.Ordinal);
+    }
+
+    private static bool ShouldRestartLocalTunnelForRemoteFailure(string? reasonCode)
+    {
+        if (string.IsNullOrWhiteSpace(reasonCode))
+        {
+            return false;
+        }
+
+        return reasonCode.Equals("backend_protocol_unknown", StringComparison.OrdinalIgnoreCase) ||
+               reasonCode.Equals("backend_listener_down", StringComparison.OrdinalIgnoreCase) ||
+               reasonCode.Equals("backend_endpoint_unresponsive", StringComparison.OrdinalIgnoreCase) ||
+               reasonCode.Equals("remote_probe_timeout", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void LogProbeFailure(string phase, string reasonCode, string detail)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var normalizedPhase = string.IsNullOrWhiteSpace(phase) ? "probe" : phase.Trim();
+        var normalizedReason = string.IsNullOrWhiteSpace(reasonCode) ? "unknown" : reasonCode.Trim();
+        var normalizedDetail = string.IsNullOrWhiteSpace(detail) ? "no detail" : detail.Trim();
+        var signature = $"{normalizedPhase}|{normalizedReason}|{normalizedDetail}";
+        var shouldLog = !string.Equals(_lastLoggedProbeFailureSignature, signature, StringComparison.Ordinal) ||
+                        !_lastLoggedProbeFailureUtc.HasValue ||
+                        now - _lastLoggedProbeFailureUtc.Value >= TimeSpan.FromSeconds(30);
+        if (!shouldLog)
+        {
+            return;
+        }
+
+        _lastLoggedProbeFailureSignature = signature;
+        _lastLoggedProbeFailureUtc = now;
+        _fileLog.Warn($"{normalizedPhase} failed. reason={normalizedReason} detail={normalizedDetail}");
     }
 
     private static async Task<(bool Success, string Error)> ProbeSshReachabilityFromIc1Async(

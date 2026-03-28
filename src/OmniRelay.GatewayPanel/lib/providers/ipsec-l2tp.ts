@@ -63,7 +63,7 @@ class LocalSqliteIpsecL2tpAccountingSource implements IpsecL2tpAccountingSource 
 
     try {
       const { stdout } = await exec(
-        `sqlite3 -csv -noheader "${dbPath}" "SELECT client_id, used_bytes FROM usage_totals WHERE client_id IN (${quotedIds});"`
+        `sqlite3 -csv -noheader -cmd ".timeout 5000" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
       );
       const usageMap = new Map<string, number>();
       for (const line of stdout.split(/\r?\n/)) {
@@ -262,12 +262,12 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
         enable: true
       },
       clients: clients.map((item) => ({
+        usedBytes: usageByClientId.get(item.id) ?? 0,
         id: item.id,
         email: item.email,
         enable: item.enable,
         totalGB: item.totalGB,
-        expiryTime: item.expiryTime,
-        usedBytes: usageByClientId.get(item.id) ?? null
+        expiryTime: item.expiryTime
       })),
       capabilities
     };
@@ -300,7 +300,7 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
       enable: client.enable,
       totalGB: client.totalGB,
       expiryTime: client.expiryTime,
-      usedBytes: null
+      usedBytes: 0
     };
   }
 

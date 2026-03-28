@@ -66,6 +66,7 @@ OPENVPN_STATUS_FILE="/var/log/openvpn/omnirelay-status.log"
 OPENVPN_ACCOUNTING_DB="${OPENVPN_DIR}/accounting.db"
 OPENVPN_ACCOUNTING_SCRIPT="${OPENVPN_DIR}/accounting-loop.sh"
 OPENVPN_ACCOUNTING_HEARTBEAT="${OPENVPN_DIR}/accounting-heartbeat.json"
+OPENVPN_HEALTH_STATE_FILE="${OPENVPN_DIR}/health-state.json"
 OPENVPN_ACCOUNTING_SERVICE="omnirelay-openvpn-accounting"
 OPENVPN_ACCOUNTING_TIMER="omnirelay-openvpn-accounting.timer"
 OPENVPN_SOCKS_UPSTREAM_PORT="${BACKEND_PORT}"
@@ -103,7 +104,8 @@ check_dns_redirect_rule(){
   iptables -t nat -C PREROUTING -i tun0 -p "$proto" --dport 53 -j REDIRECT --to-ports "${OPENVPN_DNS_BRIDGE_LISTEN_PORT}" >/dev/null 2>&1 && echo true || echo false
 }
 check_udp_only_rule(){
-  if [[ "$DNS_UDP_ONLY" != "true" ]]; then
+  local enforce_udp_only="${1:-$DNS_UDP_ONLY}"
+  if [[ "$enforce_udp_only" != "true" ]]; then
     echo true
     return 0
   fi
@@ -121,6 +123,177 @@ clear_legacy_dns_dnat_rules(){
 }
 choose_port(){ for _ in $(seq 1 200); do p=$((RANDOM%30000+22000)); [[ "$(check_listener "$p")" == "false" ]] && echo "$p" && return 0; done; die "cannot allocate random port"; }
 ensure_meta(){ install -d -m 0755 "$METADATA_DIR"; }
+
+normalize_uint(){
+  local value
+  value="$(printf '%s' "${1:-}" | tr '\r' '\n' | awk 'NF{print; exit}')"
+  value="$(printf '%s' "$value" | tr -cd '0-9')"
+  [[ "$value" =~ ^[0-9]+$ ]] || value=0
+  printf '%s\n' "$value"
+}
+
+json_object_or_empty(){
+  local payload="${1:-}"
+  if jq -e 'type=="object"' >/dev/null 2>&1 <<<"$payload"; then
+    printf '%s\n' "$payload"
+  else
+    echo '{}'
+  fi
+}
+
+count_openvpn_connected_clients(){
+  local count
+  [[ -f "$OPENVPN_STATUS_FILE" ]] || { echo 0; return 0; }
+  count="$(grep -c '^CLIENT_LIST,' "$OPENVPN_STATUS_FILE" 2>/dev/null || true)"
+  normalize_uint "$count"
+}
+
+get_openvpn_redirect_tcp_packets(){
+  local packets
+  packets="$(iptables -t nat -vnL OMNIRELAY_OVPN 2>/dev/null | awk '/REDIRECT/ && /redir ports '"${OPENVPN_REDSOCKS_LOCAL_PORT}"'/{print $1; exit}' || true)"
+  normalize_uint "$packets"
+}
+
+count_redsocks_backend_established(){
+  local count
+  count="$(ss -H -tnp state established '( dst 127.0.0.1:'"${BACKEND_PORT}"' )' 2>/dev/null | grep -c 'redsocks' || true)"
+  normalize_uint "$count"
+}
+
+openvpn_dataplane_snapshot_json(){
+  local clients tcp_redirect redsocks_established healthy reason
+  clients="$(count_openvpn_connected_clients)"
+  tcp_redirect="$(get_openvpn_redirect_tcp_packets)"
+  redsocks_established="$(count_redsocks_backend_established)"
+
+  healthy=true
+  reason="ok"
+  if (( clients > 0 )) && (( redsocks_established <= 0 )); then
+    healthy=false
+    reason="redsocks_backend_no_established_sessions"
+  fi
+
+  jq -cn \
+    --argjson clients "$clients" \
+    --argjson tcpRedirect "$tcp_redirect" \
+    --argjson redsocksEstablished "$redsocks_established" \
+    --argjson healthy "$healthy" \
+    --arg reason "$reason" \
+    '{
+      openVpnConnectedClients:$clients,
+      openVpnRedirectTcpPackets:$tcpRedirect,
+      openVpnRedsocksBackendEstablished:$redsocksEstablished,
+      openVpnDataplaneHealthy:$healthy,
+      openVpnDataplaneReason:$reason
+    }'
+}
+
+evaluate_openvpn_dataplane_health_json(){
+  local allow_recover="${1:-false}" status_json="${2:-}"
+  local now prev_redirect prev_fail prev_recover
+  local clients tcp_redirect redsocks_established
+  local openvpn_state redsocks_state backend_listener
+  local delta healthy reason fail_count auto_recovered cooldown_sec
+
+  [[ -n "$status_json" ]] || status_json="$(status_cmd)"
+  now="$(date +%s)"
+  prev_redirect=0
+  prev_fail=0
+  prev_recover=0
+  if [[ -f "$OPENVPN_HEALTH_STATE_FILE" ]]; then
+    prev_redirect="$(jq -r '.lastRedirectTcpPackets // 0' "$OPENVPN_HEALTH_STATE_FILE" 2>/dev/null || echo 0)"
+    prev_fail="$(jq -r '.dataplaneFailCount // 0' "$OPENVPN_HEALTH_STATE_FILE" 2>/dev/null || echo 0)"
+    prev_recover="$(jq -r '.lastAutoRecoveryEpoch // 0' "$OPENVPN_HEALTH_STATE_FILE" 2>/dev/null || echo 0)"
+  fi
+  prev_redirect="$(normalize_uint "$prev_redirect")"
+  prev_fail="$(normalize_uint "$prev_fail")"
+  prev_recover="$(normalize_uint "$prev_recover")"
+
+  clients="$(jq -r '.openVpnConnectedClients // 0' <<<"$status_json")"
+  tcp_redirect="$(jq -r '.openVpnRedirectTcpPackets // 0' <<<"$status_json")"
+  redsocks_established="$(jq -r '.openVpnRedsocksBackendEstablished // 0' <<<"$status_json")"
+  openvpn_state="$(jq -r '.openVpnState // "inactive"' <<<"$status_json")"
+  redsocks_state="$(jq -r '.redsocksState // "inactive"' <<<"$status_json")"
+  backend_listener="$(jq -r '.backendListener // false' <<<"$status_json")"
+
+  clients="$(normalize_uint "$clients")"
+  tcp_redirect="$(normalize_uint "$tcp_redirect")"
+  redsocks_established="$(normalize_uint "$redsocks_established")"
+
+  delta=$(( tcp_redirect - prev_redirect ))
+  (( delta < 0 )) && delta=0
+  fail_count="$prev_fail"
+  healthy=true
+  reason="ok"
+  auto_recovered=false
+  cooldown_sec=300
+
+  if (( clients <= 0 )); then
+    fail_count=0
+    healthy=true
+    reason="no_connected_clients"
+  elif [[ "$openvpn_state" != "active" || "$redsocks_state" != "active" || "$backend_listener" != "true" ]]; then
+    fail_count=$(( prev_fail + 1 ))
+    healthy=false
+    reason="service_stack_not_ready"
+  elif (( redsocks_established > 0 )); then
+    fail_count=0
+    healthy=true
+    reason="ok"
+  elif (( delta >= 8 )); then
+    fail_count=$(( prev_fail + 1 ))
+    healthy=false
+    reason="redsocks_dataplane_stalled"
+  else
+    healthy=true
+    reason="no_recent_client_traffic"
+  fi
+
+  if [[ "$allow_recover" == "true" && "$healthy" != "true" && "$reason" == "redsocks_dataplane_stalled" ]]; then
+    if (( fail_count >= 2 )) && (( now - prev_recover >= cooldown_sec )); then
+      if systemctl restart "$OPENVPN_REDSOCKS_SERVICE" "$OPENVPN_SERVICE" >/dev/null 2>&1; then
+        auto_recovered=true
+        prev_recover="$now"
+        reason="redsocks_dataplane_auto_recovered"
+      fi
+    fi
+  fi
+
+  jq -cn \
+    --argjson healthy "$healthy" \
+    --arg reason "$reason" \
+    --argjson failCount "$fail_count" \
+    --argjson deltaPackets "$delta" \
+    --argjson autoRecovered "$auto_recovered" \
+    --argjson lastRecoveryEpoch "$prev_recover" \
+    '{
+      openVpnDataplaneHealthy:$healthy,
+      openVpnDataplaneReason:$reason,
+      openVpnDataplaneFailCount:$failCount,
+      openVpnDataplaneDeltaRedirectPackets:$deltaPackets,
+      openVpnDataplaneAutoRecovered:$autoRecovered,
+      openVpnDataplaneLastAutoRecoveryEpoch:$lastRecoveryEpoch
+    }' > "${OPENVPN_HEALTH_STATE_FILE}.tmp.result"
+
+  jq -cn \
+    --argjson updatedAt "$now" \
+    --argjson lastRedirect "$tcp_redirect" \
+    --argjson failCount "$fail_count" \
+    --argjson lastRecovery "$prev_recover" \
+    '{
+      updatedAtEpoch:$updatedAt,
+      lastRedirectTcpPackets:$lastRedirect,
+      dataplaneFailCount:$failCount,
+      lastAutoRecoveryEpoch:$lastRecovery
+    }' > "${OPENVPN_HEALTH_STATE_FILE}.tmp.state"
+
+  mv -f "${OPENVPN_HEALTH_STATE_FILE}.tmp.state" "$OPENVPN_HEALTH_STATE_FILE"
+  chmod 0640 "$OPENVPN_HEALTH_STATE_FILE" >/dev/null 2>&1 || true
+  chown root:omnigateway "$OPENVPN_HEALTH_STATE_FILE" >/dev/null 2>&1 || true
+
+  cat "${OPENVPN_HEALTH_STATE_FILE}.tmp.result"
+  rm -f "${OPENVPN_HEALTH_STATE_FILE}.tmp.result"
+}
 
 socks_endpoint_healthy(){
   local port="${1:-}"
@@ -388,10 +561,11 @@ resolve_node_bin(){
 }
 
 detect_node_major(){
-  local bin
+  local bin major
   bin="$(resolve_node_bin 2>/dev/null || true)"
   [[ -n "$bin" ]] || { echo 0; return 0; }
-  "$bin" -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0
+  major="$("$bin" -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || true)"
+  normalize_uint "$major"
 }
 
 sync_time_via_bootstrap_socks(){
@@ -680,6 +854,8 @@ main(){
   now_sec="\$(date +%s)"
   now_ms=\$(( now_sec * 1000 ))
   cutoff_sec=\$(( now_sec - STALE_AFTER_SEC ))
+
+  sqlite3 "\$DB" "PRAGMA busy_timeout=5000; INSERT INTO usage_totals(client_id,used_bytes,updated_at) SELECT c.client_id,0,\$now_sec FROM clients c LEFT JOIN usage_totals u ON u.client_id=c.client_id WHERE u.client_id IS NULL;" >/dev/null 2>&1 || true
 
   if [[ -f "\$STATUS_FILE" ]]; then
     while IFS= read -r line; do
@@ -1573,7 +1749,7 @@ dns_status_json(){
   dot_block_rule="$(check_dot_block_rule)"
   [[ "$udp53_udp" == "true" && "$udp53_tcp" == "true" ]] || rule=false
   [[ "$dot_block_rule" == "true" ]] || rule=false
-  udp_only_rule="$(check_udp_only_rule)"
+  udp_only_rule="$(check_udp_only_rule "$udpOnly")"
   dns_bridge_state="$(systemd_state "$OPENVPN_DNS_BRIDGE_SERVICE")"
   openvpn_dns_applied="$(check_openvpn_client_dns_applied)"
   drift="$(check_config_drift)"
@@ -1857,7 +2033,7 @@ SQL
 status_cmd(){
   local sshState openvpnState redsocksState dnsBridgeState panelState nginxState fail2 backendListener publicListener panelListener internalListener dns iport
   local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch createdAtUtc createdEpoch installGrace
-  local socksUpstreamPort socksUpstreamType
+  local socksUpstreamPort socksUpstreamType dataplane_snapshot
   sshState="$(systemd_state_any ssh sshd)"
   openvpnState="$(systemd_state "$OPENVPN_SERVICE")"
   redsocksState="$(systemd_state "$OPENVPN_REDSOCKS_SERVICE")"
@@ -1908,19 +2084,22 @@ status_cmd(){
   if [[ "$accountingHealthy" != "true" && "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$installGrace" == "true" ]]; then
     accountingHealthy=true
   fi
+  dataplane_snapshot="$(json_object_or_empty "$(openvpn_dataplane_snapshot_json 2>/dev/null || true)")"
 
   printf '{"activeProtocol":"openvpn_tcp_relay","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"socksUpstreamPort":%s,"socksUpstreamType":"%s","publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dot_block_active":%s,"dotBlockActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","dnsBridgeState":"%s","openVpnClientDnsApplied":%s,"dnsEnforcementMode":"%s","dnsEgressPath":"%s","configDriftDetected":%s,"redsocksState":"%s","openVpnAccountingTimerState":"%s","openVpnAccountingServiceState":"%s","openVpnAccountingDbReady":%s,"openVpnAccountingHealthy":%s}\n' \
     "$sshState" "$openvpnState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$socksUpstreamPort" "$socksUpstreamType" "$PUBLIC_PORT" "$PANEL_PORT" "$iport" \
     "$backendListener" "$publicListener" "$panelListener" "$internalListener" \
     "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dot_block_active // false' <<<"$dns")" "$(jq -r '.dotBlockActive // false' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" \
     "$dnsBridgeState" "$(jq -r '.openVpnClientDnsApplied' <<<"$dns")" "$(jq -r '.dnsEnforcementMode' <<<"$dns")" "$(jq -r '.dnsEgressPath' <<<"$dns")" "$(jq -r '.configDriftDetected' <<<"$dns")" \
-    "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy"
+    "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy" | jq -c --argjson dataplane "$dataplane_snapshot" '. + $dataplane'
 }
 
 health_cmd(){
-  local status healthy dnsLastError redsocksState
+  local status healthy dnsLastError redsocksState dataplane_eval
   set_dns_error(){ [[ -z "$dnsLastError" ]] && dnsLastError="$1"; }
-  status="$(status_cmd)"
+  status="$(json_object_or_empty "$(status_cmd 2>/dev/null || true)")"
+  dataplane_eval="$(json_object_or_empty "$(evaluate_openvpn_dataplane_health_json true "$status" 2>/dev/null || true)")"
+  status="$(jq -c --argjson dp "$dataplane_eval" '. + $dp' <<<"$status")"
   healthy=true
   [[ "$(jq -r '.sshState' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.openVpnState' <<<"$status")" == "active" ]] || healthy=false
@@ -1933,6 +2112,7 @@ health_cmd(){
   [[ "$redsocksState" == "active" ]] || healthy=false
   [[ "$(jq -r '.dnsBridgeState // "inactive"' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.openVpnAccountingHealthy // false' <<<"$status")" == "true" ]] || healthy=false
+  [[ "$(jq -r '.openVpnDataplaneHealthy // true' <<<"$status")" == "true" ]] || healthy=false
 
   dnsLastError=""
   [[ "$(jq -r '.dnsConfigPresent' <<<"$status")" == "true" ]] || set_dns_error "dns_config_missing"
@@ -1949,6 +2129,9 @@ health_cmd(){
   fi
   if [[ "$(jq -r '.dnsMode' <<<"$status")" == "udp" ]]; then
     [[ "$(jq -r '.udp53PathReady' <<<"$status")" == "true" ]] || set_dns_error "dns_rule_missing"
+  fi
+  if [[ "$(jq -r '.openVpnDataplaneHealthy // true' <<<"$status")" != "true" ]]; then
+    set_dns_error "$(jq -r '.openVpnDataplaneReason // "openvpn_dataplane_unhealthy"' <<<"$status")"
   fi
 
   jq -c --argjson healthy "$( [[ "$healthy" == true ]] && echo true || echo false )" --arg dnsLastError "$dnsLastError" 'del(.redsocksState) + {healthy:$healthy,dnsLastError:$dnsLastError}' <<<"$status"

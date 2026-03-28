@@ -119,6 +119,23 @@ normalize_bool(){
   esac
 }
 
+normalize_uint(){
+  local value
+  value="$(printf '%s' "${1:-}" | tr '\r' '\n' | awk 'NF{print; exit}')"
+  value="$(printf '%s' "$value" | tr -cd '0-9')"
+  [[ "$value" =~ ^[0-9]+$ ]] || value=0
+  printf '%s\n' "$value"
+}
+
+json_object_or_empty(){
+  local payload="${1:-}"
+  if jq -e 'type=="object"' >/dev/null 2>&1 <<<"$payload"; then
+    printf '%s\n' "$payload"
+  else
+    echo '{}'
+  fi
+}
+
 normalize_panel_ssl_mode(){
   local mode="${1:-letsencrypt}"
   mode="$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]' | xargs)"
@@ -210,7 +227,13 @@ EOF
 }
 
 resolve_node_bin(){ command -v node >/dev/null 2>&1 && command -v node && return 0; command -v nodejs >/dev/null 2>&1 && command -v nodejs && return 0; return 1; }
-detect_node_major(){ local bin; bin="$(resolve_node_bin 2>/dev/null || true)"; [[ -n "$bin" ]] || { echo 0; return 0; }; "$bin" -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0; }
+detect_node_major(){
+  local bin major
+  bin="$(resolve_node_bin 2>/dev/null || true)"
+  [[ -n "$bin" ]] || { echo 0; return 0; }
+  major="$("$bin" -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || true)"
+  normalize_uint "$major"
+}
 
 sync_time_via_bootstrap_socks(){
   local hdr remote now delta abs was_ntp
@@ -503,6 +526,8 @@ main(){
   now_ms=\$(( now_sec * 1000 ))
   cutoff=\$(( now_sec - STALE_AFTER_SEC ))
 
+  sqlite3 "\$DB" "PRAGMA busy_timeout=5000; INSERT INTO usage_totals(client_id,used_bytes,updated_at) SELECT c.client_id,0,\$now_sec FROM clients c LEFT JOIN usage_totals u ON u.client_id=c.client_id WHERE u.client_id IS NULL;" >/dev/null 2>&1 || true
+
   while IFS=',' read -r session_key client_id ifname pppd_pid last_rx last_tx; do
     [[ -n "\$session_key" && -n "\$client_id" && -n "\$ifname" ]] || continue
     [[ "\$last_rx" =~ ^[0-9]+$ ]] || last_rx=0
@@ -783,8 +808,9 @@ wait_ipsec_accounting_heartbeat(){
     if [[ -f "$IPSEC_ACCOUNTING_HEARTBEAT" ]]; then
       hb_ok="$(jq -r '.ok // false' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo false)"
       hb_epoch="$(jq -r '.runAtEpoch // 0' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo 0)"
+      hb_epoch="$(normalize_uint "$hb_epoch")"
       now_epoch="$(date +%s)"
-      if [[ "$hb_ok" == "true" && "$hb_epoch" =~ ^[0-9]+$ ]] && (( hb_epoch > 0 )) && (( now_epoch - hb_epoch <= 180 )); then
+      if [[ "$hb_ok" == "true" ]] && (( hb_epoch > 0 )) && (( now_epoch - hb_epoch <= 180 )); then
         return 0
       fi
     fi
@@ -793,8 +819,9 @@ wait_ipsec_accounting_heartbeat(){
 
   created_at="$(jq -r '.created_at_utc // empty' "$METADATA_FILE" 2>/dev/null || true)"
   created_epoch="$(date -u -d "$created_at" +%s 2>/dev/null || echo 0)"
+  created_epoch="$(normalize_uint "$created_epoch")"
   now_epoch="$(date +%s)"
-  if [[ "$created_epoch" =~ ^[0-9]+$ ]] && (( created_epoch > 0 )) && (( now_epoch - created_epoch <= 240 )); then
+  if (( created_epoch > 0 )) && (( now_epoch - created_epoch <= 240 )); then
     log "IPSec accounting heartbeat is still warming up; continuing within grace window."
     return 0
   fi
@@ -915,6 +942,7 @@ status_cmd(){
   nginxState="$(systemctl is-active nginx 2>/dev/null || echo inactive)"
   fail2="disabled"
   iport="$(jq -r '.omnipanel_internal_port // 0' "$METADATA_FILE" 2>/dev/null || echo 0)"
+  iport="$(normalize_uint "$iport")"
   backendListener="$(check_listener "$BACKEND_PORT")"
   ike="$(check_udp_listener "$IPSEC_IKE_PORT")"; natt="$(check_udp_listener "$IPSEC_NATT_PORT")"; l2tp="$(check_udp_listener "$IPSEC_L2TP_PORT")"
   [[ "$ike" == "true" && "$natt" == "true" && "$l2tp" == "true" ]] && publicListener="true" || publicListener="false"
@@ -928,16 +956,18 @@ status_cmd(){
   if [[ -f "$IPSEC_ACCOUNTING_HEARTBEAT" ]]; then
     hbOk="$(jq -r '.ok // false' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo false)"
     hbEpoch="$(jq -r '.runAtEpoch // 0' "$IPSEC_ACCOUNTING_HEARTBEAT" 2>/dev/null || echo 0)"
+    hbEpoch="$(normalize_uint "$hbEpoch")"
   fi
   nowEpoch="$(date +%s)"
   createdAtUtc="$(jq -r '.created_at_utc // empty' "$METADATA_FILE" 2>/dev/null || true)"
   createdEpoch="$(date -u -d "$createdAtUtc" +%s 2>/dev/null || echo 0)"
+  createdEpoch="$(normalize_uint "$createdEpoch")"
   installGrace=false
-  if [[ "$createdEpoch" =~ ^[0-9]+$ ]] && (( createdEpoch > 0 )) && (( nowEpoch - createdEpoch <= 240 )); then
+  if (( createdEpoch > 0 )) && (( nowEpoch - createdEpoch <= 240 )); then
     installGrace=true
   fi
   accountingHealthy=false
-  if [[ "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$hbOk" == "true" && "$hbEpoch" =~ ^[0-9]+$ ]]; then
+  if [[ "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$hbOk" == "true" ]]; then
     if (( hbEpoch > 0 && (nowEpoch - hbEpoch) <= 120 )); then
       accountingHealthy=true
     fi
@@ -950,7 +980,7 @@ status_cmd(){
 
 health_cmd(){
   local status healthy dnsLastError redsocksState
-  status="$(status_cmd)"; healthy=true
+  status="$(json_object_or_empty "$(status_cmd 2>/dev/null || true)")"; healthy=true
   [[ "$(jq -r '.sshState' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.ipsecState' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.xl2tpdState' <<<"$status")" == "active" ]] || healthy=false
