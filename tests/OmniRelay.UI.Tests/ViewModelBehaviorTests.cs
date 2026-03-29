@@ -21,7 +21,9 @@ public class ViewModelBehaviorTests
                 ProxyRunning = true,
                 LicenseValid = true,
                 TunnelConnected = true,
-                WhitelistCount = 7
+                WhitelistCount = 7,
+                HealthState = "Connected",
+                LastStatusUpdateUtc = DateTimeOffset.UtcNow
             }
         };
 
@@ -54,19 +56,19 @@ public class ViewModelBehaviorTests
     [Fact]
     public async Task WhitelistUpdate_InvalidEntry_DoesNotCallService()
     {
-        var state = new GatewayStateStore
-        {
-            WhitelistText = "1.2.3.0/24\nnot-a-cidr"
-        };
+        var state = new GatewayStateStore();
 
         var gatewayClient = new FakeGatewayClientService();
         var serviceControl = new FakeServiceControlService();
         var orchestrator = new GatewayOrchestratorService(state, gatewayClient, serviceControl, new FakeGatewayStatePersistenceService());
-        var vm = new WhitelistViewModel(orchestrator, state);
+        var vm = new WhitelistViewModel(orchestrator)
+        {
+            WhitelistText = "1.2.3.0/24\nnot-a-cidr"
+        };
 
         await vm.UpdateWhitelistCommand.ExecuteAsync(null);
 
-        Assert.Equal("Whitelist contains invalid entries.", vm.Feedback);
+        Assert.Equal("whitelist contains invalid entries.", vm.Feedback);
         Assert.Contains("Line 2", vm.ValidationSummary);
         Assert.Equal(0, gatewayClient.UpdateWhitelistCallCount);
     }
@@ -79,8 +81,7 @@ public class ViewModelBehaviorTests
         var vm = new SettingsViewModel(settingsService, themeService)
         {
             DarkThemeEnabled = false,
-            RefreshIntervalSeconds = 15,
-            CompactMode = true
+            RefreshIntervalSeconds = 15
         };
 
         vm.SaveCommand.Execute(null);
@@ -88,7 +89,6 @@ public class ViewModelBehaviorTests
         Assert.NotNull(settingsService.LastSaved);
         Assert.Equal("Light", settingsService.LastSaved!.Theme);
         Assert.Equal(15, settingsService.LastSaved.RefreshIntervalSeconds);
-        Assert.True(settingsService.LastSaved.CompactMode);
         Assert.Equal("Light", themeService.LastAppliedTheme);
         Assert.Equal("Settings saved.", vm.Feedback);
     }
@@ -137,6 +137,34 @@ public class ViewModelBehaviorTests
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
 
+        public Task<IpcResponse?> GetPolicyListAsync(string listType, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new GetPolicyListResponse(listType, [], 0, 1, DateTimeOffset.UtcNow));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> BeginPolicyUpdateAsync(string listType, string mode, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new BeginPolicyUpdateResponse(Guid.NewGuid().ToString("N"), listType, mode));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> AppendPolicyEntriesAsync(string sessionId, IReadOnlyList<string> entries, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> CommitPolicyUpdateAsync(string sessionId, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new CommitPolicyUpdateResponse("whitelist", "replace", 0, 0, 0, 0, 1, DateTimeOffset.UtcNow));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> CancelPolicyUpdateAsync(string sessionId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
         public Task<IpcResponse?> VerifyLicenseAsync(CancellationToken cancellationToken = default)
         {
             var payload = IpcJson.Serialize(new VerifyLicenseResponse(true, DateTimeOffset.UtcNow.AddDays(30), false, null));
@@ -156,6 +184,61 @@ public class ViewModelBehaviorTests
         public Task<IpcResponse?> TestTunnelConnectionAsync(ServiceConfig config, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> ApplyLocalGatewayConfigAsync(LocalGatewayConfig config, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> StartLocalGatewayAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> StopLocalGatewayAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> RestartLocalGatewayAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> GetLocalGatewayClientsAsync(CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new LocalGatewayClientsResponse(LocalGatewayProtocols.VlessTcpPlain, 443, []));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> AddLocalGatewayClientAsync(string email, string? remark, CancellationToken cancellationToken = default)
+        {
+            var record = new LocalGatewayClientRecord(
+                Guid.NewGuid().ToString("N"),
+                email,
+                true,
+                remark ?? email,
+                LocalGatewayProtocols.VlessTcpPlain,
+                "secret",
+                DateTimeOffset.UtcNow);
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, IpcJson.Serialize(record)));
+        }
+
+        public Task<IpcResponse?> UpdateLocalGatewayClientAsync(LocalGatewayClientRecord client, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> DeleteLocalGatewayClientAsync(string clientId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> BuildLocalGatewayClientConfigAsync(string clientId, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new LocalGatewayClientConfigResponse("vless://example", "Config"));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
         }
     }
 

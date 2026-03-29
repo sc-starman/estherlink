@@ -7,7 +7,7 @@ namespace OmniRelay.Service.Runtime;
 
 public sealed class ConfigStore
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -75,6 +75,14 @@ public sealed class ConfigStore
                 migrated = true;
             }
 
+            if (stored.SchemaVersion < 6)
+            {
+                stored.GatewayType = GatewayTypes.Normalize(stored.GatewayType);
+                stored.LocalGateway ??= new PersistedLocalGatewayConfig();
+                stored.SchemaVersion = 6;
+                migrated = true;
+            }
+
             var state = new PersistedState(
                 new ServiceConfig
                 {
@@ -83,6 +91,7 @@ public sealed class ConfigStore
                     BootstrapSocksLocalPort = stored.BootstrapSocksLocalPort <= 0 ? 19081 : stored.BootstrapSocksLocalPort,
                     BootstrapSocksRemotePort = stored.BootstrapSocksRemotePort <= 0 ? 16080 : stored.BootstrapSocksRemotePort,
                     GatewayOnlineInstallEnabled = stored.GatewayOnlineInstallEnabled,
+                    GatewayType = GatewayTypes.Normalize(stored.GatewayType),
                     WhitelistAdapterIfIndex = stored.WhitelistAdapterIfIndex,
                     DefaultAdapterIfIndex = stored.DefaultAdapterIfIndex,
                     TunnelHost = stored.TunnelHost ?? string.Empty,
@@ -93,7 +102,15 @@ public sealed class ConfigStore
                     TunnelPrivateKeyPath = stored.TunnelPrivateKeyPath ?? string.Empty,
                     TunnelPrivateKeyPassphrase = Decrypt(stored.EncryptedTunnelKeyPassphrase),
                     TunnelPassword = Decrypt(stored.EncryptedTunnelPassword),
-                    LicenseKey = Decrypt(stored.EncryptedLicenseKey)
+                    LicenseKey = Decrypt(stored.EncryptedLicenseKey),
+                    LocalGateway = new LocalGatewayConfig
+                    {
+                        Protocol = LocalGatewayProtocols.Normalize(stored.LocalGateway?.Protocol),
+                        Port = stored.LocalGateway?.Port is > 0 and <= 65535 ? stored.LocalGateway.Port : 443,
+                        BindAddress = string.IsNullOrWhiteSpace(stored.LocalGateway?.BindAddress) ? "0.0.0.0" : stored.LocalGateway.BindAddress.Trim(),
+                        Remark = string.IsNullOrWhiteSpace(stored.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : stored.LocalGateway.Remark.Trim(),
+                        RuntimeEnabled = stored.LocalGateway?.RuntimeEnabled ?? true
+                    }
                 },
                 stored.WhitelistEntries ?? []);
 
@@ -124,6 +141,7 @@ public sealed class ConfigStore
                 BootstrapSocksLocalPort = config.BootstrapSocksLocalPort,
                 BootstrapSocksRemotePort = config.BootstrapSocksRemotePort,
                 GatewayOnlineInstallEnabled = config.GatewayOnlineInstallEnabled,
+                GatewayType = GatewayTypes.Normalize(config.GatewayType),
                 WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
                 DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
                 TunnelHost = config.TunnelHost,
@@ -135,6 +153,14 @@ public sealed class ConfigStore
                 EncryptedTunnelKeyPassphrase = Encrypt(config.TunnelPrivateKeyPassphrase),
                 EncryptedTunnelPassword = Encrypt(config.TunnelPassword),
                 EncryptedLicenseKey = Encrypt(config.LicenseKey),
+                LocalGateway = new PersistedLocalGatewayConfig
+                {
+                    Protocol = LocalGatewayProtocols.Normalize(config.LocalGateway?.Protocol),
+                    Port = config.LocalGateway?.Port is > 0 and <= 65535 ? config.LocalGateway.Port : 443,
+                    BindAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.BindAddress) ? "0.0.0.0" : config.LocalGateway.BindAddress.Trim(),
+                    Remark = string.IsNullOrWhiteSpace(config.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : config.LocalGateway.Remark.Trim(),
+                    RuntimeEnabled = config.LocalGateway?.RuntimeEnabled ?? true
+                },
                 WhitelistEntries = null
             };
 
@@ -181,6 +207,7 @@ public sealed class ConfigStore
         public int BootstrapSocksLocalPort { get; set; } = 19081;
         public int BootstrapSocksRemotePort { get; set; } = 16080;
         public bool GatewayOnlineInstallEnabled { get; set; } = true;
+        public string GatewayType { get; set; } = GatewayTypes.Remote;
         public int WhitelistAdapterIfIndex { get; set; } = -1;
         public int DefaultAdapterIfIndex { get; set; } = -1;
         public bool TunnelEnabled { get; set; }
@@ -193,7 +220,17 @@ public sealed class ConfigStore
         public string? EncryptedTunnelKeyPassphrase { get; set; }
         public string? EncryptedTunnelPassword { get; set; }
         public string? EncryptedLicenseKey { get; set; }
+        public PersistedLocalGatewayConfig? LocalGateway { get; set; }
         public List<string>? WhitelistEntries { get; set; }
+    }
+
+    public sealed class PersistedLocalGatewayConfig
+    {
+        public string Protocol { get; set; } = LocalGatewayProtocols.VlessTcpPlain;
+        public int Port { get; set; } = 443;
+        public string BindAddress { get; set; } = "0.0.0.0";
+        public string Remark { get; set; } = "OmniRelay Local Gateway";
+        public bool RuntimeEnabled { get; set; } = true;
     }
 }
 

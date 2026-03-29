@@ -1,4 +1,5 @@
 using OmniRelay.Ipc;
+using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Policy;
 using OmniRelay.Service.Runtime;
 using System.Collections.Concurrent;
@@ -51,6 +52,15 @@ public sealed class IpcCommandHandler
                 IpcCommands.StopProxy => HandleStopProxy(),
                 IpcCommands.VerifyLicense => await HandleVerifyLicenseAsync(cancellationToken),
                 IpcCommands.TestTunnelConnection => await HandleTestTunnelConnectionAsync(request.JsonPayload, cancellationToken),
+                IpcCommands.ApplyLocalGatewayConfig => HandleApplyLocalGatewayConfig(request.JsonPayload),
+                IpcCommands.StartLocalGateway => HandleStartLocalGateway(),
+                IpcCommands.StopLocalGateway => HandleStopLocalGateway(),
+                IpcCommands.RestartLocalGateway => HandleRestartLocalGateway(),
+                IpcCommands.GetLocalGatewayClients => HandleGetLocalGatewayClients(),
+                IpcCommands.AddLocalGatewayClient => HandleAddLocalGatewayClient(request.JsonPayload),
+                IpcCommands.UpdateLocalGatewayClient => HandleUpdateLocalGatewayClient(request.JsonPayload),
+                IpcCommands.DeleteLocalGatewayClient => HandleDeleteLocalGatewayClient(request.JsonPayload),
+                IpcCommands.BuildLocalGatewayClientConfig => HandleBuildLocalGatewayClientConfig(request.JsonPayload),
                 _ => new IpcResponse(false, $"Unknown command '{request.Command}'.")
             };
         }
@@ -87,7 +97,16 @@ public sealed class IpcCommandHandler
             IpcCommands.StartProxy,
             IpcCommands.StopProxy,
             IpcCommands.VerifyLicense,
-            IpcCommands.TestTunnelConnection
+            IpcCommands.TestTunnelConnection,
+            IpcCommands.ApplyLocalGatewayConfig,
+            IpcCommands.StartLocalGateway,
+            IpcCommands.StopLocalGateway,
+            IpcCommands.RestartLocalGateway,
+            IpcCommands.GetLocalGatewayClients,
+            IpcCommands.AddLocalGatewayClient,
+            IpcCommands.UpdateLocalGatewayClient,
+            IpcCommands.DeleteLocalGatewayClient,
+            IpcCommands.BuildLocalGatewayClientConfig
         };
 
         var serviceVersion = typeof(IpcCommandHandler).Assembly.GetName().Version?.ToString() ?? "unknown";
@@ -315,6 +334,149 @@ public sealed class IpcCommandHandler
 
         _fileLog.Info("Tunnel connection test succeeded.");
         return new IpcResponse(true);
+    }
+
+    private IpcResponse HandleApplyLocalGatewayConfig(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<ApplyLocalGatewayConfigRequest>(jsonPayload);
+        if (payload is null)
+        {
+            return new IpcResponse(false, "Invalid local gateway config payload.");
+        }
+
+        if (!_runtime.TryApplyLocalGatewayConfig(payload.Config, out var error))
+        {
+            return new IpcResponse(false, error ?? "Failed applying local gateway config.");
+        }
+
+        _fileLog.Info("Local gateway config applied via IPC.");
+        return new IpcResponse(true);
+    }
+
+    private IpcResponse HandleStartLocalGateway()
+    {
+        _runtime.RequestLocalGatewayStart();
+        _fileLog.Info("Local gateway start requested via IPC.");
+        return new IpcResponse(true);
+    }
+
+    private IpcResponse HandleStopLocalGateway()
+    {
+        _runtime.RequestLocalGatewayStop();
+        _fileLog.Info("Local gateway stop requested via IPC.");
+        return new IpcResponse(true);
+    }
+
+    private IpcResponse HandleRestartLocalGateway()
+    {
+        _runtime.RequestLocalGatewayRestart();
+        _fileLog.Info("Local gateway restart requested via IPC.");
+        return new IpcResponse(true);
+    }
+
+    private IpcResponse HandleGetLocalGatewayClients()
+    {
+        var config = _runtime.GetConfigSnapshot().LocalGateway;
+        var clients = _runtime.GetLocalGatewayClientsSnapshot()
+            .Select(x => new LocalGatewayClientRecord(
+                x.Id,
+                x.Email,
+                x.Enabled,
+                x.Remark,
+                x.Protocol,
+                x.Secret,
+                x.CreatedAtUtc))
+            .ToArray();
+
+        var payload = new LocalGatewayClientsResponse(
+            LocalGatewayProtocols.Normalize(config.Protocol),
+            config.Port,
+            clients);
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(payload));
+    }
+
+    private IpcResponse HandleAddLocalGatewayClient(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<AddLocalGatewayClientRequest>(jsonPayload);
+        if (payload is null)
+        {
+            return new IpcResponse(false, "Invalid add-local-client payload.");
+        }
+
+        if (!_runtime.TryAddLocalGatewayClient(payload.Email, payload.Remark, out var client, out var error) || client is null)
+        {
+            return new IpcResponse(false, error ?? "Failed adding local gateway client.");
+        }
+
+        var response = new LocalGatewayClientRecord(
+            client.Id,
+            client.Email,
+            client.Enabled,
+            client.Remark,
+            client.Protocol,
+            client.Secret,
+            client.CreatedAtUtc);
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
+    }
+
+    private IpcResponse HandleUpdateLocalGatewayClient(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<UpdateLocalGatewayClientRequest>(jsonPayload);
+        if (payload?.Client is null)
+        {
+            return new IpcResponse(false, "Invalid update-local-client payload.");
+        }
+
+        var runtimeModel = new LocalGatewayClient
+        {
+            Id = payload.Client.Id,
+            Email = payload.Client.Email,
+            Enabled = payload.Client.Enabled,
+            Remark = payload.Client.Remark,
+            Protocol = payload.Client.Protocol,
+            Secret = payload.Client.Secret,
+            CreatedAtUtc = payload.Client.CreatedAtUtc
+        };
+
+        if (!_runtime.TryUpdateLocalGatewayClient(runtimeModel, out var error))
+        {
+            return new IpcResponse(false, error ?? "Failed updating local gateway client.");
+        }
+
+        return new IpcResponse(true);
+    }
+
+    private IpcResponse HandleDeleteLocalGatewayClient(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<DeleteLocalGatewayClientRequest>(jsonPayload);
+        if (payload is null)
+        {
+            return new IpcResponse(false, "Invalid delete-local-client payload.");
+        }
+
+        if (!_runtime.TryDeleteLocalGatewayClient(payload.ClientId, out var error))
+        {
+            return new IpcResponse(false, error ?? "Failed deleting local gateway client.");
+        }
+
+        return new IpcResponse(true);
+    }
+
+    private IpcResponse HandleBuildLocalGatewayClientConfig(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<BuildLocalGatewayClientConfigRequest>(jsonPayload);
+        if (payload is null)
+        {
+            return new IpcResponse(false, "Invalid build-local-client-config payload.");
+        }
+
+        if (!_runtime.TryBuildLocalGatewayClientUri(payload.ClientId, out var uri, out var title, out var error))
+        {
+            return new IpcResponse(false, error ?? "Failed building local gateway client config.");
+        }
+
+        var response = new LocalGatewayClientConfigResponse(uri, title);
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
     }
 
     private void CleanupStaleSessions()

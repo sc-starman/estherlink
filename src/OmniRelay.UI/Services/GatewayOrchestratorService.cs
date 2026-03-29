@@ -39,6 +39,8 @@ public sealed class GatewayOrchestratorService
         try
         {
             var persisted = _statePersistence.Load();
+            var remoteProfile = ResolveRemoteProfile(persisted);
+            var localProfile = ResolveLocalProfile(persisted);
 
             _state.Adapters.Clear();
             var adapters = NetworkAdapterCatalog.ListIpv4Adapters()
@@ -54,8 +56,13 @@ public sealed class GatewayOrchestratorService
                 _state.Adapters.Add(adapter);
             }
 
-            var persistedVps = adapters.FirstOrDefault(x => x.IfIndex == persisted.VpsAdapterIfIndex);
-            var persistedOutgoing = adapters.FirstOrDefault(x => x.IfIndex == persisted.OutgoingAdapterIfIndex);
+            _state.GatewayType = GatewayTypes.Normalize(persisted.GatewayType);
+            var preferredOutgoingIfIndex = string.Equals(_state.GatewayType, GatewayTypes.Local, StringComparison.OrdinalIgnoreCase)
+                ? localProfile.OutgoingAdapterIfIndex
+                : remoteProfile.OutgoingAdapterIfIndex;
+
+            var persistedVps = adapters.FirstOrDefault(x => x.IfIndex == remoteProfile.VpsAdapterIfIndex);
+            var persistedOutgoing = adapters.FirstOrDefault(x => x.IfIndex == preferredOutgoingIfIndex);
 
             if (adapters.Count > 0)
             {
@@ -68,44 +75,60 @@ public sealed class GatewayOrchestratorService
                 _state.OutgoingAdapter = null;
             }
 
-            _state.ProxyPortText = NormalizeOrDefault(persisted.ProxyPortText, "19080");
-            _state.BootstrapSocksLocalPortText = NormalizeOrDefault(persisted.BootstrapSocksLocalPortText, "19081");
-            _state.BootstrapSocksRemotePortText = NormalizeOrDefault(persisted.BootstrapSocksRemotePortText, "16080");
-            _state.TunnelHost = NormalizeOrDefault(persisted.TunnelHost, "vps.example.com");
-            _state.TunnelSshPortText = NormalizeOrDefault(persisted.TunnelSshPortText, "22");
-            _state.TunnelRemotePortText = NormalizeOrDefault(persisted.TunnelRemotePortText, "15000");
-            _state.SelectedGatewayProtocol = GatewayProtocols.Normalize(persisted.SelectedGatewayProtocol);
-            _state.GatewayPublicPortText = NormalizeOrDefault(persisted.GatewayPublicPortText, "443");
-            _state.GatewayPanelPortText = NormalizeOrDefault(persisted.GatewayPanelPortText, "2054");
-            _state.GatewayPanelConfiguredUser = NormalizeOrDefault(persisted.GatewayPanelConfiguredUser, string.Empty);
-            _state.GatewayPanelConfiguredPassword = GatewayStatePersistenceService.Unprotect(persisted.EncryptedGatewayPanelConfiguredPassword);
-            _state.GatewayPanelDomain = NormalizeOrDefault(persisted.GatewayPanelDomain, string.Empty);
-            _state.GatewayPanelDomainOnly = persisted.GatewayPanelDomainOnly;
-            _state.GatewayPanelUseSsl = persisted.GatewayPanelUseSsl;
-            _state.GatewayPanelSslMode = NormalizePanelSslModeOrDefault(persisted.GatewayPanelSslMode, "letsencrypt");
+            _state.ProxyPortText = NormalizeOrDefault(remoteProfile.ProxyPortText, "19080");
+            _state.BootstrapSocksLocalPortText = NormalizeOrDefault(remoteProfile.BootstrapSocksLocalPortText, "19081");
+            _state.BootstrapSocksRemotePortText = NormalizeOrDefault(remoteProfile.BootstrapSocksRemotePortText, "16080");
+            _state.TunnelHost = NormalizeOrDefault(remoteProfile.TunnelHost, "vps.example.com");
+            _state.TunnelSshPortText = NormalizeOrDefault(remoteProfile.TunnelSshPortText, "22");
+            _state.TunnelRemotePortText = NormalizeOrDefault(remoteProfile.TunnelRemotePortText, "15000");
+            _state.SelectedGatewayProtocol = GatewayProtocols.Normalize(remoteProfile.SelectedGatewayProtocol);
+            _state.GatewayPublicPortText = NormalizeOrDefault(remoteProfile.GatewayPublicPortText, "443");
+            _state.GatewayPanelPortText = NormalizeOrDefault(remoteProfile.GatewayPanelPortText, "2054");
+            _state.GatewayPanelConfiguredUser = NormalizeOrDefault(remoteProfile.GatewayPanelConfiguredUser, string.Empty);
+            _state.GatewayPanelConfiguredPassword = GatewayStatePersistenceService.Unprotect(remoteProfile.EncryptedGatewayPanelConfiguredPassword);
+            _state.GatewayPanelDomain = NormalizeOrDefault(remoteProfile.GatewayPanelDomain, string.Empty);
+            _state.GatewayPanelDomainOnly = remoteProfile.GatewayPanelDomainOnly;
+            _state.GatewayPanelUseSsl = remoteProfile.GatewayPanelUseSsl;
+            _state.GatewayPanelSslMode = NormalizePanelSslModeOrDefault(remoteProfile.GatewayPanelSslMode, "letsencrypt");
             // Keep uploaded certificate/key local file picks session-only.
             _state.GatewayPanelUploadedCertPath = string.Empty;
             _state.GatewayPanelUploadedKeyPath = string.Empty;
-            _state.GatewayBackendPortText = NormalizeOrDefault(persisted.GatewayBackendPortText, _state.TunnelRemotePortText);
+            _state.GatewayBackendPortText = NormalizeOrDefault(remoteProfile.GatewayBackendPortText, _state.TunnelRemotePortText);
             var defaultReality = GatewayRealityTargetCatalog.GetRandom();
-            _state.GatewaySni = NormalizeOrDefault(persisted.GatewaySni, defaultReality.Sni);
-            _state.GatewayTarget = NormalizeOrDefault(persisted.GatewayTarget, defaultReality.Target);
-            _state.ShadowTlsCamouflageServer = NormalizeOrDefault(persisted.ShadowTlsCamouflageServer, GatewayCamouflageCatalog.GetRandom());
-            _state.OpenVpnNetwork = NormalizeOrDefault(persisted.OpenVpnNetwork, "10.29.0.0/24");
-            _state.OpenVpnClientDns = NormalizeOrDefault(persisted.OpenVpnClientDns, "1.1.1.1,8.8.8.8");
-            _state.GatewayDnsMode = NormalizeDnsModeOrDefault(persisted.GatewayDnsMode, "hybrid");
-            _state.GatewayDohEndpointsText = NormalizeOrDefault(persisted.GatewayDohEndpointsText, "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query");
-            _state.GatewayDnsUdpOnly = persisted.GatewayDnsUdpOnly;
+            _state.GatewaySni = NormalizeOrDefault(remoteProfile.GatewaySni, defaultReality.Sni);
+            _state.GatewayTarget = NormalizeOrDefault(remoteProfile.GatewayTarget, defaultReality.Target);
+            _state.ShadowTlsCamouflageServer = NormalizeOrDefault(remoteProfile.ShadowTlsCamouflageServer, GatewayCamouflageCatalog.GetRandom());
+            _state.OpenVpnNetwork = NormalizeOrDefault(remoteProfile.OpenVpnNetwork, "10.29.0.0/24");
+            _state.OpenVpnClientDns = NormalizeOrDefault(remoteProfile.OpenVpnClientDns, "1.1.1.1,8.8.8.8");
+            _state.GatewayDnsMode = NormalizeDnsModeOrDefault(remoteProfile.GatewayDnsMode, "hybrid");
+            _state.GatewayDohEndpointsText = NormalizeOrDefault(remoteProfile.GatewayDohEndpointsText, "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query");
+            _state.GatewayDnsUdpOnly = remoteProfile.GatewayDnsUdpOnly;
             // Install result credentials are one-time only and never reloaded from persisted UI state.
             _state.GatewayPanelUrl = string.Empty;
             _state.GatewayPanelUsername = string.Empty;
             _state.GatewayInitialPanelPassword = string.Empty;
-            _state.TunnelUser = NormalizeOrDefault(persisted.TunnelUser, "OmniRelay");
-            _state.TunnelAuthMethod = TunnelAuthMethods.Normalize(persisted.TunnelAuthMethod);
-            _state.TunnelKeyPath = persisted.TunnelKeyPath ?? string.Empty;
-            _state.TunnelKeyPassphrase = GatewayStatePersistenceService.Unprotect(persisted.EncryptedTunnelKeyPassphrase);
-            _state.TunnelPassword = GatewayStatePersistenceService.Unprotect(persisted.EncryptedTunnelPassword);
-            _state.LicenseKey = GatewayStatePersistenceService.Unprotect(persisted.EncryptedLicenseKey);
+            _state.TunnelUser = NormalizeOrDefault(remoteProfile.TunnelUser, "OmniRelay");
+            _state.TunnelAuthMethod = TunnelAuthMethods.Normalize(remoteProfile.TunnelAuthMethod);
+            _state.TunnelKeyPath = remoteProfile.TunnelKeyPath ?? string.Empty;
+            _state.TunnelKeyPassphrase = GatewayStatePersistenceService.Unprotect(remoteProfile.EncryptedTunnelKeyPassphrase);
+            _state.TunnelPassword = GatewayStatePersistenceService.Unprotect(remoteProfile.EncryptedTunnelPassword);
+
+            _state.LocalGatewayProtocol = LocalGatewayProtocols.Normalize(localProfile.LocalGatewayProtocol);
+            _state.LocalGatewayPortText = NormalizeOrDefault(localProfile.LocalGatewayPortText, "443");
+            _state.LocalGatewayBindAddress = NormalizeOrDefault(localProfile.LocalGatewayBindAddress, "0.0.0.0");
+            _state.LocalGatewayRemark = NormalizeOrDefault(localProfile.LocalGatewayRemark, "OmniRelay Local Gateway");
+            _state.LocalGatewayRuntimeEnabled = localProfile.LocalGatewayRuntimeEnabled;
+
+            var preferredEncryptedLicense = string.Equals(_state.GatewayType, GatewayTypes.Local, StringComparison.OrdinalIgnoreCase)
+                ? localProfile.EncryptedLicenseKey
+                : remoteProfile.EncryptedLicenseKey;
+            if (string.IsNullOrWhiteSpace(preferredEncryptedLicense))
+            {
+                preferredEncryptedLicense = remoteProfile.EncryptedLicenseKey;
+            }
+
+            var license = GatewayStatePersistenceService.Unprotect(preferredEncryptedLicense);
+            _state.LicenseKey = license;
             _state.LicenseActivated = false;
             _state.LicenseActivatedExpiresAtUtc = null;
         }
@@ -128,6 +151,7 @@ public sealed class GatewayOrchestratorService
                 if (payload?.Status is not null)
                 {
                     _state.Status = payload.Status;
+                    _state.GatewayType = GatewayTypes.Normalize(payload.Status.GatewayType);
                 }
                 if (payload?.Status is not null)
                 {
@@ -166,6 +190,147 @@ public sealed class GatewayOrchestratorService
         return await ApplyConfigInternalAsync(requireTunnelAuthSecrets: true, cancellationToken);
     }
 
+    public async Task<OperationResult> ApplyLocalGatewayConfigAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var config = BuildConfig(requireTunnelAuthSecrets: false);
+            config.GatewayType = GatewayTypes.Local;
+            var localResponse = await _gatewayClient.ApplyLocalGatewayConfigAsync(config.LocalGateway, cancellationToken);
+            if (localResponse?.Success != true)
+            {
+                return SetAction(false, $"Local gateway apply failed: {localResponse?.Error ?? "service unavailable"}");
+            }
+
+            var response = await _gatewayClient.SetConfigAsync(config, cancellationToken);
+            if (response?.Success != true)
+            {
+                return SetAction(false, $"Configuration update failed: {response?.Error ?? "service unavailable"}");
+            }
+
+            await RefreshStatusAsync(cancellationToken);
+            return SetAction(true, "Local gateway configuration updated.");
+        }
+        catch (Exception ex)
+        {
+            return SetAction(false, ex.Message);
+        }
+    }
+
+    public async Task<OperationResult> StartLocalGatewayAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.StartLocalGatewayAsync(cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Local gateway start failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        await RefreshStatusAsync(cancellationToken);
+        return SetAction(true, "Local gateway start requested.");
+    }
+
+    public async Task<OperationResult> StopLocalGatewayAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.StopLocalGatewayAsync(cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Local gateway stop failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        await RefreshStatusAsync(cancellationToken);
+        return SetAction(true, "Local gateway stop requested.");
+    }
+
+    public async Task<OperationResult> RestartLocalGatewayAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.RestartLocalGatewayAsync(cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Local gateway restart failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        await RefreshStatusAsync(cancellationToken);
+        return SetAction(true, "Local gateway restart requested.");
+    }
+
+    public async Task<LocalGatewayClientsResult> GetLocalGatewayClientsAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.GetLocalGatewayClientsAsync(cancellationToken);
+        if (response?.Success != true)
+        {
+            var errorMessage = $"Local clients fetch failed: {response?.Error ?? "service unavailable"}";
+            SetAction(false, errorMessage);
+            return new LocalGatewayClientsResult(false, errorMessage, []);
+        }
+
+        var payload = IpcJson.Deserialize<LocalGatewayClientsResponse>(response.JsonPayload);
+        if (payload is null)
+        {
+            const string invalidPayload = "Local clients fetch failed: invalid response payload.";
+            SetAction(false, invalidPayload);
+            return new LocalGatewayClientsResult(false, invalidPayload, []);
+        }
+
+        var message = $"Loaded {payload.Clients.Count} local gateway clients.";
+        SetAction(true, message);
+        return new LocalGatewayClientsResult(true, message, payload.Clients);
+    }
+
+    public async Task<OperationResult> AddLocalGatewayClientAsync(string email, string? remark, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.AddLocalGatewayClientAsync(email, remark, cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Add local client failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        return SetAction(true, "Local client added.");
+    }
+
+    public async Task<OperationResult> UpdateLocalGatewayClientAsync(LocalGatewayClientRecord client, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.UpdateLocalGatewayClientAsync(client, cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Update local client failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        return SetAction(true, "Local client updated.");
+    }
+
+    public async Task<OperationResult> DeleteLocalGatewayClientAsync(string clientId, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.DeleteLocalGatewayClientAsync(clientId, cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Delete local client failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        return SetAction(true, "Local client deleted.");
+    }
+
+    public async Task<LocalGatewayClientConfigBuildResult> BuildLocalGatewayClientConfigAsync(string clientId, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.BuildLocalGatewayClientConfigAsync(clientId, cancellationToken);
+        if (response?.Success != true)
+        {
+            var message = $"Build config failed: {response?.Error ?? "service unavailable"}";
+            SetAction(false, message);
+            return new LocalGatewayClientConfigBuildResult(false, message, string.Empty, string.Empty);
+        }
+
+        var payload = IpcJson.Deserialize<LocalGatewayClientConfigResponse>(response.JsonPayload);
+        if (payload is null)
+        {
+            const string invalid = "Build config failed: invalid response payload.";
+            SetAction(false, invalid);
+            return new LocalGatewayClientConfigBuildResult(false, invalid, string.Empty, string.Empty);
+        }
+
+        SetAction(true, "Client config generated.");
+        return new LocalGatewayClientConfigBuildResult(true, "Client config generated.", payload.Uri, payload.Title);
+    }
+
     private async Task<OperationResult> ApplyConfigInternalAsync(bool requireTunnelAuthSecrets, CancellationToken cancellationToken = default)
     {
         try
@@ -202,6 +367,11 @@ public sealed class GatewayOrchestratorService
 
     private async Task<OperationResult> ValidateTunnelReachabilityForApplyAsync(ServiceConfig config, CancellationToken cancellationToken)
     {
+        if (string.Equals(GatewayTypes.Normalize(config.GatewayType), GatewayTypes.Local, StringComparison.OrdinalIgnoreCase))
+        {
+            return SetAction(true, "Local gateway mode selected; SSH tunnel preflight skipped.");
+        }
+
         if (string.IsNullOrWhiteSpace(config.TunnelHost))
         {
             return SetAction(true, "Tunnel host is empty; IC1 reachability preflight skipped.");
@@ -649,6 +819,8 @@ public sealed class GatewayOrchestratorService
 
     private ServiceConfig BuildConfig(bool requireTunnelAuthSecrets = true)
     {
+        var gatewayType = GatewayTypes.Normalize(_state.GatewayType);
+
         if (!int.TryParse(_state.ProxyPortText.Trim(), out var proxyPort) || proxyPort <= 0)
         {
             throw new InvalidOperationException("Proxy listen port must be a positive integer.");
@@ -665,22 +837,35 @@ public sealed class GatewayOrchestratorService
         }
 
         var authMethod = TunnelAuthMethods.Normalize(_state.TunnelAuthMethod);
-        if (requireTunnelAuthSecrets &&
+        if (string.Equals(gatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
+            requireTunnelAuthSecrets &&
             authMethod == TunnelAuthMethods.Password &&
             string.IsNullOrWhiteSpace(_state.TunnelPassword))
         {
             throw new InvalidOperationException("Tunnel password is required when password authentication is selected.");
         }
 
-        if (requireTunnelAuthSecrets &&
+        if (string.Equals(gatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
+            requireTunnelAuthSecrets &&
             authMethod == TunnelAuthMethods.HostKey &&
             string.IsNullOrWhiteSpace(_state.TunnelKeyPath))
         {
             throw new InvalidOperationException("Tunnel host key file path is required when host-key authentication is selected.");
         }
 
+        var localPort = ParsePositivePort(_state.LocalGatewayPortText, "Local gateway port");
+        var localBind = string.IsNullOrWhiteSpace(_state.LocalGatewayBindAddress)
+            ? "0.0.0.0"
+            : _state.LocalGatewayBindAddress.Trim();
+        if (!string.Equals(localBind, "0.0.0.0", StringComparison.OrdinalIgnoreCase) &&
+            !System.Net.IPAddress.TryParse(localBind, out _))
+        {
+            throw new InvalidOperationException("Local gateway bind address must be 0.0.0.0 or a valid IP address.");
+        }
+
         return new ServiceConfig
         {
+            GatewayType = gatewayType,
             LocalProxyListenPort = proxyPort,
             BootstrapSocksLocalPort = ParsePositivePort(_state.BootstrapSocksLocalPortText, "Bootstrap SOCKS local port"),
             BootstrapSocksRemotePort = ParsePositivePort(_state.BootstrapSocksRemotePortText, "Bootstrap SOCKS remote port"),
@@ -695,7 +880,17 @@ public sealed class GatewayOrchestratorService
             TunnelPrivateKeyPath = _state.TunnelKeyPath.Trim(),
             TunnelPrivateKeyPassphrase = _state.TunnelKeyPassphrase,
             TunnelPassword = _state.TunnelPassword,
-            LicenseKey = _state.LicenseKey.Trim()
+            LicenseKey = _state.LicenseKey.Trim(),
+            LocalGateway = new LocalGatewayConfig
+            {
+                Protocol = LocalGatewayProtocols.Normalize(_state.LocalGatewayProtocol),
+                Port = localPort,
+                BindAddress = localBind,
+                Remark = string.IsNullOrWhiteSpace(_state.LocalGatewayRemark)
+                    ? "OmniRelay Local Gateway"
+                    : _state.LocalGatewayRemark.Trim(),
+                RuntimeEnabled = _state.LocalGatewayRuntimeEnabled
+            }
         };
     }
 
@@ -725,13 +920,66 @@ public sealed class GatewayOrchestratorService
             return;
         }
 
+        if (e.PropertyName == nameof(GatewayStateStore.GatewayType))
+        {
+            ApplyGatewayTypeSelections();
+        }
+
         PersistUiState();
     }
 
     private void PersistUiState()
     {
+        var remoteProfile = new GatewayRemoteUiProfileModel
+        {
+            VpsAdapterIfIndex = _state.VpsAdapter?.IfIndex,
+            OutgoingAdapterIfIndex = _state.OutgoingAdapter?.IfIndex,
+            ProxyPortText = _state.ProxyPortText,
+            BootstrapSocksLocalPortText = _state.BootstrapSocksLocalPortText,
+            BootstrapSocksRemotePortText = _state.BootstrapSocksRemotePortText,
+            TunnelHost = _state.TunnelHost,
+            TunnelSshPortText = _state.TunnelSshPortText,
+            TunnelRemotePortText = _state.TunnelRemotePortText,
+            SelectedGatewayProtocol = _state.SelectedGatewayProtocol,
+            GatewayPublicPortText = _state.GatewayPublicPortText,
+            GatewayPanelPortText = _state.GatewayPanelPortText,
+            GatewayPanelConfiguredUser = _state.GatewayPanelConfiguredUser,
+            EncryptedGatewayPanelConfiguredPassword = GatewayStatePersistenceService.Protect(_state.GatewayPanelConfiguredPassword),
+            GatewayPanelDomain = _state.GatewayPanelDomain,
+            GatewayPanelDomainOnly = _state.GatewayPanelDomainOnly,
+            GatewayPanelUseSsl = _state.GatewayPanelUseSsl,
+            GatewayPanelSslMode = _state.GatewayPanelSslMode,
+            GatewayBackendPortText = _state.GatewayBackendPortText,
+            GatewaySni = _state.GatewaySni,
+            GatewayTarget = _state.GatewayTarget,
+            ShadowTlsCamouflageServer = _state.ShadowTlsCamouflageServer,
+            OpenVpnNetwork = _state.OpenVpnNetwork,
+            OpenVpnClientDns = _state.OpenVpnClientDns,
+            GatewayDnsMode = _state.GatewayDnsMode,
+            GatewayDohEndpointsText = _state.GatewayDohEndpointsText,
+            GatewayDnsUdpOnly = _state.GatewayDnsUdpOnly,
+            TunnelUser = _state.TunnelUser,
+            TunnelAuthMethod = _state.TunnelAuthMethod,
+            TunnelKeyPath = _state.TunnelKeyPath,
+            EncryptedTunnelKeyPassphrase = GatewayStatePersistenceService.Protect(_state.TunnelKeyPassphrase),
+            EncryptedTunnelPassword = GatewayStatePersistenceService.Protect(_state.TunnelPassword),
+            EncryptedLicenseKey = GatewayStatePersistenceService.Protect(_state.LicenseKey)
+        };
+
+        var localProfile = new GatewayLocalUiProfileModel
+        {
+            OutgoingAdapterIfIndex = _state.OutgoingAdapter?.IfIndex,
+            LocalGatewayProtocol = _state.LocalGatewayProtocol,
+            LocalGatewayPortText = _state.LocalGatewayPortText,
+            LocalGatewayBindAddress = _state.LocalGatewayBindAddress,
+            LocalGatewayRemark = _state.LocalGatewayRemark,
+            LocalGatewayRuntimeEnabled = _state.LocalGatewayRuntimeEnabled,
+            EncryptedLicenseKey = GatewayStatePersistenceService.Protect(_state.LicenseKey)
+        };
+
         var snapshot = new GatewayUiStateModel
         {
+            GatewayType = GatewayTypes.Normalize(_state.GatewayType),
             VpsAdapterIfIndex = _state.VpsAdapter?.IfIndex,
             OutgoingAdapterIfIndex = _state.OutgoingAdapter?.IfIndex,
             ProxyPortText = _state.ProxyPortText,
@@ -770,7 +1018,9 @@ public sealed class GatewayOrchestratorService
             TunnelKeyPath = _state.TunnelKeyPath,
             EncryptedTunnelKeyPassphrase = GatewayStatePersistenceService.Protect(_state.TunnelKeyPassphrase),
             EncryptedTunnelPassword = GatewayStatePersistenceService.Protect(_state.TunnelPassword),
-            EncryptedLicenseKey = GatewayStatePersistenceService.Protect(_state.LicenseKey)
+            EncryptedLicenseKey = GatewayStatePersistenceService.Protect(_state.LicenseKey),
+            RemoteProfile = remoteProfile,
+            LocalProfile = localProfile
         };
 
         _statePersistence.Save(snapshot);
@@ -782,10 +1032,105 @@ public sealed class GatewayOrchestratorService
         return normalized is "hybrid" or "doh" or "udp" ? normalized : fallback;
     }
 
+    private static GatewayRemoteUiProfileModel ResolveRemoteProfile(GatewayUiStateModel state)
+    {
+        if (state.RemoteProfile is not null)
+        {
+            return state.RemoteProfile;
+        }
+
+        return new GatewayRemoteUiProfileModel
+        {
+            VpsAdapterIfIndex = state.VpsAdapterIfIndex,
+            OutgoingAdapterIfIndex = state.OutgoingAdapterIfIndex,
+            ProxyPortText = state.ProxyPortText,
+            BootstrapSocksLocalPortText = state.BootstrapSocksLocalPortText,
+            BootstrapSocksRemotePortText = state.BootstrapSocksRemotePortText,
+            TunnelHost = state.TunnelHost,
+            TunnelSshPortText = state.TunnelSshPortText,
+            TunnelRemotePortText = state.TunnelRemotePortText,
+            SelectedGatewayProtocol = state.SelectedGatewayProtocol,
+            GatewayPublicPortText = state.GatewayPublicPortText,
+            GatewayPanelPortText = state.GatewayPanelPortText,
+            GatewayPanelConfiguredUser = state.GatewayPanelConfiguredUser,
+            EncryptedGatewayPanelConfiguredPassword = state.EncryptedGatewayPanelConfiguredPassword,
+            GatewayPanelDomain = state.GatewayPanelDomain,
+            GatewayPanelDomainOnly = state.GatewayPanelDomainOnly,
+            GatewayPanelUseSsl = state.GatewayPanelUseSsl,
+            GatewayPanelSslMode = state.GatewayPanelSslMode,
+            GatewayBackendPortText = state.GatewayBackendPortText,
+            GatewaySni = state.GatewaySni,
+            GatewayTarget = state.GatewayTarget,
+            ShadowTlsCamouflageServer = state.ShadowTlsCamouflageServer,
+            OpenVpnNetwork = state.OpenVpnNetwork,
+            OpenVpnClientDns = state.OpenVpnClientDns,
+            GatewayDnsMode = state.GatewayDnsMode,
+            GatewayDohEndpointsText = state.GatewayDohEndpointsText,
+            GatewayDnsUdpOnly = state.GatewayDnsUdpOnly,
+            TunnelUser = state.TunnelUser,
+            TunnelAuthMethod = state.TunnelAuthMethod,
+            TunnelKeyPath = state.TunnelKeyPath,
+            EncryptedTunnelKeyPassphrase = state.EncryptedTunnelKeyPassphrase,
+            EncryptedTunnelPassword = state.EncryptedTunnelPassword,
+            EncryptedLicenseKey = state.EncryptedLicenseKey
+        };
+    }
+
+    private static GatewayLocalUiProfileModel ResolveLocalProfile(GatewayUiStateModel state)
+    {
+        if (state.LocalProfile is not null)
+        {
+            return state.LocalProfile;
+        }
+
+        return new GatewayLocalUiProfileModel
+        {
+            OutgoingAdapterIfIndex = state.OutgoingAdapterIfIndex,
+            LocalGatewayProtocol = LocalGatewayProtocols.VlessTcpPlain,
+            LocalGatewayPortText = "443",
+            LocalGatewayBindAddress = "0.0.0.0",
+            LocalGatewayRemark = "OmniRelay Local Gateway",
+            LocalGatewayRuntimeEnabled = true,
+            EncryptedLicenseKey = state.EncryptedLicenseKey
+        };
+    }
+
     private static string NormalizePanelSslModeOrDefault(string? value, string fallback)
     {
         var normalized = NormalizeOrDefault(value, fallback).Trim().ToLowerInvariant();
         return normalized is "letsencrypt" or "uploaded" ? normalized : fallback;
+    }
+
+    private void ApplyGatewayTypeSelections()
+    {
+        var selectedGatewayType = GatewayTypes.Normalize(_state.GatewayType);
+        var persisted = _statePersistence.Load();
+        var remoteProfile = ResolveRemoteProfile(persisted);
+        var localProfile = ResolveLocalProfile(persisted);
+
+        var targetOutgoingIfIndex = string.Equals(selectedGatewayType, GatewayTypes.Local, StringComparison.OrdinalIgnoreCase)
+            ? localProfile.OutgoingAdapterIfIndex
+            : remoteProfile.OutgoingAdapterIfIndex;
+        if (targetOutgoingIfIndex.HasValue)
+        {
+            var adapter = _state.Adapters.FirstOrDefault(x => x.IfIndex == targetOutgoingIfIndex.Value);
+            if (adapter is not null)
+            {
+                _state.OutgoingAdapter = adapter;
+            }
+        }
+
+        var encryptedLicense = string.Equals(selectedGatewayType, GatewayTypes.Local, StringComparison.OrdinalIgnoreCase)
+            ? localProfile.EncryptedLicenseKey
+            : remoteProfile.EncryptedLicenseKey;
+        if (string.IsNullOrWhiteSpace(encryptedLicense))
+        {
+            encryptedLicense = remoteProfile.EncryptedLicenseKey;
+        }
+        if (!string.IsNullOrWhiteSpace(encryptedLicense))
+        {
+            _state.LicenseKey = GatewayStatePersistenceService.Unprotect(encryptedLicense);
+        }
     }
 
     private GatewayStatus EnsureStatusObject()

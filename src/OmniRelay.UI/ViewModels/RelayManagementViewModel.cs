@@ -1,8 +1,10 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Status;
 using OmniRelay.UI.Services;
 using System.ComponentModel;
+using System.Threading;
 using System.Windows.Threading;
 
 namespace OmniRelay.UI.ViewModels;
@@ -18,6 +20,7 @@ public partial class RelayManagementViewModel : ObservableObject
     private readonly GatewayStateStore _state;
     private readonly IServiceControlService _serviceControl;
     private readonly DispatcherTimer _staleTimer;
+    private int _gatewayTypeApplyRequestId;
 
     public RelayManagementViewModel(
         GatewayOrchestratorService orchestrator,
@@ -38,6 +41,26 @@ public partial class RelayManagementViewModel : ObservableObject
     }
 
     public GatewayStateStore State => _state;
+
+    public int GatewayTypeIndex
+    {
+        get => string.Equals(GatewayTypes.Normalize(State.GatewayType), GatewayTypes.Local, StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        set
+        {
+            var mapped = value == 1 ? GatewayTypes.Local : GatewayTypes.Remote;
+            if (string.Equals(GatewayTypes.Normalize(State.GatewayType), mapped, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            State.GatewayType = mapped;
+            RefreshView();
+            _ = ApplyGatewayTypeChangedAsync(mapped);
+        }
+    }
+
+    public bool IsRemoteGatewayMode => GatewayTypeIndex == 0;
+    public bool IsLocalGatewayMode => GatewayTypeIndex == 1;
 
     [ObservableProperty]
     private string serviceState = "Unknown";
@@ -145,10 +168,53 @@ public partial class RelayManagementViewModel : ObservableObject
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(GatewayStateStore.Status) or nameof(GatewayStateStore.ServiceState))
+        if (e.PropertyName is nameof(GatewayStateStore.Status) or nameof(GatewayStateStore.ServiceState) or nameof(GatewayStateStore.GatewayType))
         {
+            OnPropertyChanged(nameof(GatewayTypeIndex));
+            OnPropertyChanged(nameof(IsRemoteGatewayMode));
+            OnPropertyChanged(nameof(IsLocalGatewayMode));
             RefreshView();
         }
+    }
+
+    private async Task ApplyGatewayTypeChangedAsync(string mappedGatewayType)
+    {
+        var requestId = Interlocked.Increment(ref _gatewayTypeApplyRequestId);
+        while (IsBusy)
+        {
+            await Task.Delay(120);
+            if (requestId != _gatewayTypeApplyRequestId)
+            {
+                return;
+            }
+        }
+
+        if (requestId != _gatewayTypeApplyRequestId)
+        {
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            var result = await _orchestrator.ApplyRelayConfigAsync();
+            if (result.Success)
+            {
+                var label = string.Equals(
+                    GatewayTypes.Normalize(mappedGatewayType),
+                    GatewayTypes.Local,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? "Local"
+                    : "Remote";
+                Feedback = $"Gateway type changed to {label} and relay config applied.";
+            }
+            else
+            {
+                Feedback = result.Message;
+            }
+
+            await _orchestrator.RefreshStatusAsync();
+            RefreshView();
+        });
     }
 
     private void RefreshView()
@@ -167,6 +233,17 @@ public partial class RelayManagementViewModel : ObservableObject
             EffectiveTunnelState = "Unavailable";
             HealthStateDisplay = "Unavailable";
             HealthReasonDisplay = "status_unavailable";
+            ShowTunnelModuleNote = false;
+            TunnelModuleNote = string.Empty;
+            return;
+        }
+
+        if (string.Equals(GatewayTypes.Normalize(snapshot.GatewayType), GatewayTypes.Local, StringComparison.OrdinalIgnoreCase))
+        {
+            StatusStale = false;
+            EffectiveTunnelState = $"Local ({snapshot.LocalGatewayState})";
+            HealthStateDisplay = string.IsNullOrWhiteSpace(snapshot.HealthState) ? "Healthy" : snapshot.HealthState;
+            HealthReasonDisplay = snapshot.LocalGatewayHealthReason ?? string.Empty;
             ShowTunnelModuleNote = false;
             TunnelModuleNote = string.Empty;
             return;

@@ -1,10 +1,12 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OmniRelay.Core.Configuration;
+using OmniRelay.Ipc;
 using OmniRelay.UI.Models;
 using OmniRelay.UI.Services;
 using OmniRelay.UI.Views.Dialogs;
 using Microsoft.Win32;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -47,6 +49,69 @@ public partial class GatewayManagementViewModel : ObservableObject
     }
 
     public GatewayStateStore State => _state;
+
+    public int GatewayTypeIndex
+    {
+        get => string.Equals(GatewayTypes.Normalize(State.GatewayType), GatewayTypes.Local, StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        set
+        {
+            var mapped = value == 1 ? GatewayTypes.Local : GatewayTypes.Remote;
+            if (string.Equals(GatewayTypes.Normalize(State.GatewayType), mapped, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            State.GatewayType = mapped;
+            Feedback = string.Equals(mapped, GatewayTypes.Local, StringComparison.OrdinalIgnoreCase)
+                ? "Gateway mode switched to Local."
+                : "Gateway mode switched to Remote.";
+        }
+    }
+
+    public bool IsRemoteGatewayMode =>
+        string.Equals(GatewayTypes.Normalize(State.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsLocalGatewayMode => !IsRemoteGatewayMode;
+
+    public int LocalGatewayProtocolIndex
+    {
+        get
+        {
+            var protocol = LocalGatewayProtocols.Normalize(State.LocalGatewayProtocol);
+            if (string.Equals(protocol, LocalGatewayProtocols.Shadowsocks, StringComparison.OrdinalIgnoreCase))
+            {
+                return 1;
+            }
+
+            if (string.Equals(protocol, LocalGatewayProtocols.OpenVpnComingSoon, StringComparison.OrdinalIgnoreCase))
+            {
+                return 2;
+            }
+
+            return 0;
+        }
+        set
+        {
+            var mapped = value switch
+            {
+                1 => LocalGatewayProtocols.Shadowsocks,
+                2 => LocalGatewayProtocols.OpenVpnComingSoon,
+                _ => LocalGatewayProtocols.VlessTcpPlain
+            };
+            if (string.Equals(mapped, LocalGatewayProtocols.OpenVpnComingSoon, StringComparison.OrdinalIgnoreCase))
+            {
+                Feedback = "Local OpenVPN mode is coming soon and is currently unavailable.";
+                return;
+            }
+
+            if (string.Equals(LocalGatewayProtocols.Normalize(State.LocalGatewayProtocol), mapped, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            State.LocalGatewayProtocol = mapped;
+        }
+    }
 
     public bool IsHostKeyAuthSelected =>
         string.Equals(TunnelAuthMethods.Normalize(State.TunnelAuthMethod), TunnelAuthMethods.HostKey, StringComparison.Ordinal);
@@ -201,6 +266,26 @@ public partial class GatewayManagementViewModel : ObservableObject
     [ObservableProperty]
     private string gatewayDnsSummary = "Not checked";
 
+    public ObservableCollection<LocalGatewayClientRecord> LocalGatewayClients { get; } = [];
+
+    [ObservableProperty]
+    private LocalGatewayClientRecord? selectedLocalGatewayClient;
+
+    [ObservableProperty]
+    private string localGatewayClientEmailDraft = string.Empty;
+
+    [ObservableProperty]
+    private string selectedLocalGatewayClientRemark = string.Empty;
+
+    [ObservableProperty]
+    private bool selectedLocalGatewayClientEnabled = true;
+
+    [ObservableProperty]
+    private string localGatewayClientConfigTitle = string.Empty;
+
+    [ObservableProperty]
+    private string localGatewayClientConfigUri = string.Empty;
+
     [ObservableProperty]
     private string operationLog = string.Empty;
 
@@ -261,6 +346,8 @@ public partial class GatewayManagementViewModel : ObservableObject
     public bool CanAcknowledgeGatewayInstallSecrets => !IsGatewayOperationRunning && IsGatewayOperationInstallResultVisible;
 
     private bool CanRun() => !IsBusy;
+    private bool CanManageSelectedLocalClient() => !IsBusy && IsLocalGatewayMode && SelectedLocalGatewayClient is not null;
+    private bool CanCopyLocalGatewayClientConfig() => IsLocalGatewayMode && !string.IsNullOrWhiteSpace(LocalGatewayClientConfigUri);
 
     partial void OnIsBusyChanged(bool value)
     {
@@ -294,6 +381,39 @@ public partial class GatewayManagementViewModel : ObservableObject
         CancelGatewayOperationCommand.NotifyCanExecuteChanged();
         CloseGatewayOperationDialogCommand.NotifyCanExecuteChanged();
         AcknowledgeGatewayInstallSecretsCommand.NotifyCanExecuteChanged();
+        ApplyLocalGatewayRuntimeConfigCommand.NotifyCanExecuteChanged();
+        StartLocalGatewayRuntimeCommand.NotifyCanExecuteChanged();
+        StopLocalGatewayRuntimeCommand.NotifyCanExecuteChanged();
+        RestartLocalGatewayRuntimeCommand.NotifyCanExecuteChanged();
+        RefreshLocalGatewayClientsCommand.NotifyCanExecuteChanged();
+        AddLocalGatewayClientCommand.NotifyCanExecuteChanged();
+        SaveSelectedLocalGatewayClientCommand.NotifyCanExecuteChanged();
+        DeleteSelectedLocalGatewayClientCommand.NotifyCanExecuteChanged();
+        BuildSelectedLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+        CopyLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnSelectedLocalGatewayClientChanged(LocalGatewayClientRecord? value)
+    {
+        if (value is null)
+        {
+            SelectedLocalGatewayClientRemark = string.Empty;
+            SelectedLocalGatewayClientEnabled = true;
+        }
+        else
+        {
+            SelectedLocalGatewayClientRemark = value.Remark ?? value.Email;
+            SelectedLocalGatewayClientEnabled = value.Enabled;
+        }
+
+        SaveSelectedLocalGatewayClientCommand.NotifyCanExecuteChanged();
+        DeleteSelectedLocalGatewayClientCommand.NotifyCanExecuteChanged();
+        BuildSelectedLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnLocalGatewayClientConfigUriChanged(string value)
+    {
+        CopyLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnIsGatewayOperationPanelPasswordVisibleChanged(bool value)
@@ -363,6 +483,11 @@ public partial class GatewayManagementViewModel : ObservableObject
             {
                 await RefreshGatewayStatusAsync(sudo!);
             }
+
+            if (IsLocalGatewayMode)
+            {
+                await RefreshLocalGatewayClientsCoreAsync();
+            }
         });
     }
 
@@ -429,6 +554,12 @@ public partial class GatewayManagementViewModel : ObservableObject
     {
         await RunBusyAsync(async () =>
         {
+            if (!IsRemoteGatewayMode)
+            {
+                Feedback = "Gateway Type is Local. Use 'Apply Local Config' from Local Gateway Config tab.";
+                return;
+            }
+
             var result = await _orchestrator.ApplyGatewayConfigAsync();
             Feedback = result.Message;
             await _orchestrator.RefreshStatusAsync();
@@ -440,9 +571,198 @@ public partial class GatewayManagementViewModel : ObservableObject
     {
         await RunBusyAsync(async () =>
         {
+            if (!IsRemoteGatewayMode)
+            {
+                Feedback = "Tunnel test is only available in Remote gateway mode.";
+                return;
+            }
+
             var result = await _orchestrator.TestTunnelConnectionAsync();
             Feedback = result.Message;
         });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private async Task ApplyLocalGatewayRuntimeConfigAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            State.GatewayType = GatewayTypes.Local;
+            var result = await _orchestrator.ApplyLocalGatewayConfigAsync();
+            Feedback = result.Message;
+            await _orchestrator.RefreshStatusAsync();
+            await RefreshLocalGatewayClientsCoreAsync();
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private async Task StartLocalGatewayRuntimeAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            var result = await _orchestrator.StartLocalGatewayAsync();
+            Feedback = result.Message;
+            await _orchestrator.RefreshStatusAsync();
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private async Task StopLocalGatewayRuntimeAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            var result = await _orchestrator.StopLocalGatewayAsync();
+            Feedback = result.Message;
+            await _orchestrator.RefreshStatusAsync();
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private async Task RestartLocalGatewayRuntimeAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            var result = await _orchestrator.RestartLocalGatewayAsync();
+            Feedback = result.Message;
+            await _orchestrator.RefreshStatusAsync();
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private async Task RefreshLocalGatewayClientsAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            if (!IsLocalGatewayMode)
+            {
+                return;
+            }
+
+            await RefreshLocalGatewayClientsCoreAsync();
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private async Task AddLocalGatewayClientAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            if (!IsLocalGatewayMode)
+            {
+                Feedback = "Local client management is available only in Local gateway mode.";
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(LocalGatewayClientEmailDraft))
+            {
+                Feedback = "Client email is required.";
+                return;
+            }
+
+            var result = await _orchestrator.AddLocalGatewayClientAsync(
+                LocalGatewayClientEmailDraft.Trim(),
+                LocalGatewayClientEmailDraft.Trim());
+            Feedback = result.Message;
+            if (result.Success)
+            {
+                LocalGatewayClientEmailDraft = string.Empty;
+                await RefreshLocalGatewayClientsCoreAsync();
+            }
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanManageSelectedLocalClient))]
+    private async Task SaveSelectedLocalGatewayClientAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            if (!IsLocalGatewayMode)
+            {
+                return;
+            }
+
+            if (SelectedLocalGatewayClient is null)
+            {
+                return;
+            }
+
+            var updated = SelectedLocalGatewayClient with
+            {
+                Remark = string.IsNullOrWhiteSpace(SelectedLocalGatewayClientRemark)
+                    ? SelectedLocalGatewayClient.Email
+                    : SelectedLocalGatewayClientRemark.Trim(),
+                Enabled = SelectedLocalGatewayClientEnabled
+            };
+
+            var result = await _orchestrator.UpdateLocalGatewayClientAsync(updated);
+            Feedback = result.Message;
+            if (result.Success)
+            {
+                await RefreshLocalGatewayClientsCoreAsync();
+            }
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanManageSelectedLocalClient))]
+    private async Task DeleteSelectedLocalGatewayClientAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            if (!IsLocalGatewayMode)
+            {
+                return;
+            }
+
+            if (SelectedLocalGatewayClient is null)
+            {
+                return;
+            }
+
+            var result = await _orchestrator.DeleteLocalGatewayClientAsync(SelectedLocalGatewayClient.Id);
+            Feedback = result.Message;
+            if (result.Success)
+            {
+                await RefreshLocalGatewayClientsCoreAsync();
+            }
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanManageSelectedLocalClient))]
+    private async Task BuildSelectedLocalGatewayClientConfigAsync()
+    {
+        await RunBusyAsync(async () =>
+        {
+            if (!IsLocalGatewayMode)
+            {
+                return;
+            }
+
+            if (SelectedLocalGatewayClient is null)
+            {
+                return;
+            }
+
+            var result = await _orchestrator.BuildLocalGatewayClientConfigAsync(SelectedLocalGatewayClient.Id);
+            Feedback = result.Message;
+            if (result.Success)
+            {
+                LocalGatewayClientConfigTitle = result.Title;
+                LocalGatewayClientConfigUri = result.Uri;
+            }
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCopyLocalGatewayClientConfig))]
+    private void CopyLocalGatewayClientConfig()
+    {
+        var text = LocalGatewayClientConfigUri?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        Clipboard.SetText(text);
+        Feedback = "Local client config copied.";
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
@@ -805,6 +1125,12 @@ public partial class GatewayManagementViewModel : ObservableObject
     {
         await RunBusyAsync(async () =>
         {
+            if (!IsRemoteGatewayMode)
+            {
+                Feedback = "Remote gateway operations are disabled while Gateway Type is set to Local.";
+                return;
+            }
+
             var sudo = EnsureSudoPassword();
             if (sudo is null)
             {
@@ -1352,6 +1678,7 @@ public partial class GatewayManagementViewModel : ObservableObject
 
     private ServiceConfig BuildServiceConfig()
     {
+        var gatewayType = GatewayTypes.Normalize(_state.GatewayType);
         if (!int.TryParse(_state.ProxyPortText.Trim(), out var proxyPort) || proxyPort <= 0)
         {
             throw new InvalidOperationException("Proxy listen port must be a positive integer.");
@@ -1378,18 +1705,33 @@ public partial class GatewayManagementViewModel : ObservableObject
         }
 
         var authMethod = TunnelAuthMethods.Normalize(_state.TunnelAuthMethod);
-        if (authMethod == TunnelAuthMethods.Password && string.IsNullOrWhiteSpace(_state.TunnelPassword))
+        if (string.Equals(gatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
+            authMethod == TunnelAuthMethods.Password &&
+            string.IsNullOrWhiteSpace(_state.TunnelPassword))
         {
             throw new InvalidOperationException("Tunnel password is required when password authentication is selected.");
         }
 
-        if (authMethod == TunnelAuthMethods.HostKey && string.IsNullOrWhiteSpace(_state.TunnelKeyPath))
+        if (string.Equals(gatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
+            authMethod == TunnelAuthMethods.HostKey &&
+            string.IsNullOrWhiteSpace(_state.TunnelKeyPath))
         {
             throw new InvalidOperationException("Tunnel host key file path is required when host-key authentication is selected.");
         }
 
+        var localGatewayPort = ParsePositivePort(_state.LocalGatewayPortText, "Local gateway port");
+        var localBindAddress = string.IsNullOrWhiteSpace(_state.LocalGatewayBindAddress)
+            ? "0.0.0.0"
+            : _state.LocalGatewayBindAddress.Trim();
+        if (!string.Equals(localBindAddress, "0.0.0.0", StringComparison.OrdinalIgnoreCase) &&
+            !System.Net.IPAddress.TryParse(localBindAddress, out _))
+        {
+            throw new InvalidOperationException("Local gateway bind address must be 0.0.0.0 or a valid IP address.");
+        }
+
         return new ServiceConfig
         {
+            GatewayType = gatewayType,
             LocalProxyListenPort = proxyPort,
             BootstrapSocksLocalPort = bootstrapSocksLocalPort,
             BootstrapSocksRemotePort = bootstrapSocksRemotePort,
@@ -1404,7 +1746,15 @@ public partial class GatewayManagementViewModel : ObservableObject
             TunnelPrivateKeyPath = _state.TunnelKeyPath.Trim(),
             TunnelPrivateKeyPassphrase = _state.TunnelKeyPassphrase,
             TunnelPassword = _state.TunnelPassword,
-            LicenseKey = _state.LicenseKey.Trim()
+            LicenseKey = _state.LicenseKey.Trim(),
+            LocalGateway = new LocalGatewayConfig
+            {
+                Protocol = LocalGatewayProtocols.Normalize(_state.LocalGatewayProtocol),
+                Port = localGatewayPort,
+                BindAddress = localBindAddress,
+                Remark = string.IsNullOrWhiteSpace(_state.LocalGatewayRemark) ? "OmniRelay Local Gateway" : _state.LocalGatewayRemark.Trim(),
+                RuntimeEnabled = _state.LocalGatewayRuntimeEnabled
+            }
         };
     }
 
@@ -1433,6 +1783,31 @@ public partial class GatewayManagementViewModel : ObservableObject
         _sudoCache.Set(dialog.SecretValue);
         HasCachedSudoPassword = true;
         return dialog.SecretValue;
+    }
+
+    private async Task RefreshLocalGatewayClientsCoreAsync()
+    {
+        var selectedId = SelectedLocalGatewayClient?.Id;
+        var result = await _orchestrator.GetLocalGatewayClientsAsync();
+        if (!result.Success)
+        {
+            return;
+        }
+
+        LocalGatewayClients.Clear();
+        foreach (var client in result.Clients.OrderBy(x => x.Email, StringComparer.OrdinalIgnoreCase))
+        {
+            LocalGatewayClients.Add(client);
+        }
+
+        if (!string.IsNullOrWhiteSpace(selectedId))
+        {
+            SelectedLocalGatewayClient = LocalGatewayClients.FirstOrDefault(x => string.Equals(x.Id, selectedId, StringComparison.Ordinal));
+        }
+        else
+        {
+            SelectedLocalGatewayClient = LocalGatewayClients.FirstOrDefault();
+        }
     }
 
     private IProgress<DeploymentProgressSnapshot> CreateGatewayProgressReporter()
@@ -1466,12 +1841,32 @@ public partial class GatewayManagementViewModel : ObservableObject
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(GatewayStateStore.GatewayType))
+        {
+            OnPropertyChanged(nameof(GatewayTypeIndex));
+            OnPropertyChanged(nameof(IsRemoteGatewayMode));
+            OnPropertyChanged(nameof(IsLocalGatewayMode));
+            SaveSelectedLocalGatewayClientCommand.NotifyCanExecuteChanged();
+            DeleteSelectedLocalGatewayClientCommand.NotifyCanExecuteChanged();
+            BuildSelectedLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+            CopyLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+            if (IsLocalGatewayMode)
+            {
+                _ = RefreshLocalGatewayClientsAsync();
+            }
+        }
+
         if (e.PropertyName == nameof(GatewayStateStore.TunnelAuthMethod))
         {
             OnPropertyChanged(nameof(IsHostKeyAuthSelected));
             OnPropertyChanged(nameof(IsPasswordAuthSelected));
             OnPropertyChanged(nameof(TunnelAuthMethodIndex));
             OnPropertyChanged(nameof(AuthenticationDetailLabel));
+        }
+
+        if (e.PropertyName == nameof(GatewayStateStore.LocalGatewayProtocol))
+        {
+            OnPropertyChanged(nameof(LocalGatewayProtocolIndex));
         }
 
         if (e.PropertyName == nameof(GatewayStateStore.SelectedGatewayProtocol))
@@ -1574,6 +1969,16 @@ public partial class GatewayManagementViewModel : ObservableObject
     {
         var mode = (value ?? string.Empty).Trim().ToLowerInvariant();
         return mode is "uploaded" ? "uploaded" : "letsencrypt";
+    }
+
+    private static int ParsePositivePort(string text, string fieldName)
+    {
+        if (!int.TryParse((text ?? string.Empty).Trim(), out var port) || port <= 0 || port > 65535)
+        {
+            throw new InvalidOperationException($"{fieldName} must be a positive integer between 1 and 65535.");
+        }
+
+        return port;
     }
 
     private void BeginGatewayProgress(string operationName)

@@ -33,6 +33,15 @@ public sealed class GatewayStatePersistenceService : IGatewayStatePersistenceSer
             var json = File.ReadAllText(StatePath);
             var parsed = JsonSerializer.Deserialize<GatewayUiStateModel>(json, JsonOptions) ?? new GatewayUiStateModel();
             parsed.TunnelKeyPath ??= string.Empty;
+            if (!ContainsProfileFields(json))
+            {
+                parsed.RemoteProfile = BuildLegacyRemoteProfile(parsed);
+                parsed.LocalProfile = new GatewayLocalUiProfileModel
+                {
+                    OutgoingAdapterIfIndex = parsed.OutgoingAdapterIfIndex,
+                    EncryptedLicenseKey = parsed.EncryptedLicenseKey
+                };
+            }
 
             if (ContainsLegacyLicenseFields(json) || ContainsLegacyPolicyFields(json))
             {
@@ -111,5 +120,59 @@ public sealed class GatewayStatePersistenceService : IGatewayStatePersistenceSer
         {
             return false;
         }
+    }
+
+    private static bool ContainsProfileFields(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                   root.TryGetProperty("remoteProfile", out _);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static GatewayRemoteUiProfileModel BuildLegacyRemoteProfile(GatewayUiStateModel state)
+    {
+        return new GatewayRemoteUiProfileModel
+        {
+            VpsAdapterIfIndex = state.VpsAdapterIfIndex,
+            OutgoingAdapterIfIndex = state.OutgoingAdapterIfIndex,
+            ProxyPortText = state.ProxyPortText,
+            BootstrapSocksLocalPortText = state.BootstrapSocksLocalPortText,
+            BootstrapSocksRemotePortText = state.BootstrapSocksRemotePortText,
+            TunnelHost = state.TunnelHost,
+            TunnelSshPortText = state.TunnelSshPortText,
+            TunnelRemotePortText = state.TunnelRemotePortText,
+            SelectedGatewayProtocol = state.SelectedGatewayProtocol,
+            GatewayPublicPortText = state.GatewayPublicPortText,
+            GatewayPanelPortText = state.GatewayPanelPortText,
+            GatewayPanelConfiguredUser = state.GatewayPanelConfiguredUser,
+            EncryptedGatewayPanelConfiguredPassword = state.EncryptedGatewayPanelConfiguredPassword,
+            GatewayPanelDomain = state.GatewayPanelDomain,
+            GatewayPanelDomainOnly = state.GatewayPanelDomainOnly,
+            GatewayPanelUseSsl = state.GatewayPanelUseSsl,
+            GatewayPanelSslMode = state.GatewayPanelSslMode,
+            GatewayBackendPortText = state.GatewayBackendPortText,
+            GatewaySni = state.GatewaySni,
+            GatewayTarget = state.GatewayTarget,
+            ShadowTlsCamouflageServer = state.ShadowTlsCamouflageServer,
+            OpenVpnNetwork = state.OpenVpnNetwork,
+            OpenVpnClientDns = state.OpenVpnClientDns,
+            GatewayDnsMode = state.GatewayDnsMode,
+            GatewayDohEndpointsText = state.GatewayDohEndpointsText,
+            GatewayDnsUdpOnly = state.GatewayDnsUdpOnly,
+            TunnelUser = state.TunnelUser,
+            TunnelAuthMethod = state.TunnelAuthMethod,
+            TunnelKeyPath = state.TunnelKeyPath,
+            EncryptedTunnelKeyPassphrase = state.EncryptedTunnelKeyPassphrase,
+            EncryptedTunnelPassword = state.EncryptedTunnelPassword,
+            EncryptedLicenseKey = state.EncryptedLicenseKey
+        };
     }
 }

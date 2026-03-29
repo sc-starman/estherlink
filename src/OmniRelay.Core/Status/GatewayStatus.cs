@@ -2,6 +2,7 @@ namespace OmniRelay.Core.Status;
 
 public sealed class GatewayStatus
 {
+    public string GatewayType { get; set; } = "remote";
     public string TunnelState { get; set; } = "Disconnected";
     public string HealthState { get; set; } = "Disconnected";
     public string? HealthReasonCode { get; set; }
@@ -39,4 +40,10 @@ public sealed class GatewayStatus
     public int WhitelistCount { get; set; }
     public int BlacklistCount { get; set; }
     public string? LastError { get; set; }
+    public string LocalGatewayState { get; set; } = "inactive";
+    public string? LocalGatewayHealthReason { get; set; }
+    public string LocalGatewayProtocol { get; set; } = "vless_local_tcp_plain";
+    public int LocalGatewayPort { get; set; }
+    public int LocalGatewayClientsCount { get; set; }
+    public bool LocalGatewayAutoRecovered { get; set; }
 }

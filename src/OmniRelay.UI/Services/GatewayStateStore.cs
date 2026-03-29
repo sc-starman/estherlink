@@ -46,6 +46,9 @@ public partial class GatewayStateStore : ObservableObject
     private string selectedGatewayProtocol = GatewayProtocols.VlessReality3xui;
 
     [ObservableProperty]
+    private string gatewayType = GatewayTypes.Remote;
+
+    [ObservableProperty]
     private string gatewayPublicPortText = "443";
 
     [ObservableProperty]
@@ -92,6 +95,21 @@ public partial class GatewayStateStore : ObservableObject
 
     [ObservableProperty]
     private string openVpnClientDns = "1.1.1.1,8.8.8.8";
+
+    [ObservableProperty]
+    private string localGatewayProtocol = LocalGatewayProtocols.VlessTcpPlain;
+
+    [ObservableProperty]
+    private string localGatewayPortText = "443";
+
+    [ObservableProperty]
+    private string localGatewayBindAddress = "0.0.0.0";
+
+    [ObservableProperty]
+    private string localGatewayRemark = "OmniRelay Local Gateway";
+
+    [ObservableProperty]
+    private bool localGatewayRuntimeEnabled = true;
 
     [ObservableProperty]
     private string gatewayDnsMode = "hybrid";

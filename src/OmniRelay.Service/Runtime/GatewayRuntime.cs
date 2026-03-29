@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Licensing;
 using OmniRelay.Core.Policy;
@@ -8,6 +9,12 @@ namespace OmniRelay.Service.Runtime;
 
 public sealed class GatewayRuntime
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true
+    };
+
     private readonly object _sync = new();
     private readonly ConfigStore _configStore;
     private readonly PolicyStore _policyStore;
@@ -24,6 +31,10 @@ public sealed class GatewayRuntime
     private bool _licenseTransferRequested;
     private GatewayStatus _status;
     private long _tunnelRestartRequestVersion;
+    private bool _localGatewayRequested;
+    private bool _localGatewayRestartRequested;
+    private long _localGatewayRequestVersion;
+    private List<LocalGatewayClient> _localGatewayClients = [];
 
     public GatewayRuntime(ConfigStore configStore, PolicyStore policyStore, FileLogWriter log)
     {
@@ -38,6 +49,8 @@ public sealed class GatewayRuntime
         _whitelistIndex = PolicyAddressIndex.Build([]);
         _blacklistIndex = PolicyAddressIndex.Build([]);
         _status = new GatewayStatus();
+        _localGatewayClients = LoadLocalGatewayClients();
+        _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
 
         var policySnapshot = _policyStore.Load();
         if (policySnapshot.WhitelistEntries.Count == 0 && persisted.WhitelistEntries.Count > 0)
@@ -54,7 +67,12 @@ public sealed class GatewayRuntime
             ProxyRunning = false,
             ProxyListenPort = _config.LocalProxyListenPort,
             WhitelistCount = _whitelistEntries.Count,
-            BlacklistCount = _blacklistEntries.Count
+            BlacklistCount = _blacklistEntries.Count,
+            GatewayType = GatewayTypes.Normalize(_config.GatewayType),
+            LocalGatewayState = "inactive",
+            LocalGatewayProtocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol),
+            LocalGatewayPort = _config.LocalGateway.Port,
+            LocalGatewayClientsCount = _localGatewayClients.Count
         };
 
         // Keep relay data-plane active by default after service startup.
@@ -67,6 +85,187 @@ public sealed class GatewayRuntime
         lock (_sync)
         {
             return CloneConfig(_config);
+        }
+    }
+
+    public IReadOnlyList<LocalGatewayClient> GetLocalGatewayClientsSnapshot()
+    {
+        lock (_sync)
+        {
+            return _localGatewayClients
+                .Select(CloneLocalGatewayClient)
+                .ToList();
+        }
+    }
+
+    public bool TryAddLocalGatewayClient(string email, string? remark, out LocalGatewayClient? client, out string? error)
+    {
+        lock (_sync)
+        {
+            var normalizedEmail = (email ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedEmail))
+            {
+                client = null;
+                error = "Client email is required.";
+                return false;
+            }
+
+            var exists = _localGatewayClients.Any(x =>
+                string.Equals(x.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase));
+            if (exists)
+            {
+                client = null;
+                error = "Client email already exists.";
+                return false;
+            }
+
+            var protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
+            var created = new LocalGatewayClient
+            {
+                Id = Guid.NewGuid().ToString(),
+                Email = normalizedEmail,
+                Enabled = true,
+                Remark = string.IsNullOrWhiteSpace(remark) ? normalizedEmail : remark.Trim(),
+                Protocol = protocol,
+                Secret = CreateLocalGatewaySecret(protocol),
+                CreatedAtUtc = DateTimeOffset.UtcNow
+            };
+
+            _localGatewayClients.Add(created);
+            PersistLocalGatewayClientsLocked();
+            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
+            _localGatewayRestartRequested = true;
+            _localGatewayRequestVersion++;
+
+            client = CloneLocalGatewayClient(created);
+            error = null;
+            return true;
+        }
+    }
+
+    public bool TryUpdateLocalGatewayClient(LocalGatewayClient client, out string? error)
+    {
+        lock (_sync)
+        {
+            var id = (client.Id ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                error = "Client id is required.";
+                return false;
+            }
+
+            var existing = _localGatewayClients.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
+            if (existing is null)
+            {
+                error = "Client not found.";
+                return false;
+            }
+
+            var normalizedEmail = (client.Email ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedEmail))
+            {
+                error = "Client email is required.";
+                return false;
+            }
+
+            var duplicate = _localGatewayClients.Any(x =>
+                !string.Equals(x.Id, id, StringComparison.Ordinal) &&
+                string.Equals(x.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase));
+            if (duplicate)
+            {
+                error = "Client email already exists.";
+                return false;
+            }
+
+            existing.Email = normalizedEmail;
+            existing.Enabled = client.Enabled;
+            existing.Remark = string.IsNullOrWhiteSpace(client.Remark) ? normalizedEmail : client.Remark.Trim();
+            if (!string.IsNullOrWhiteSpace(client.Secret))
+            {
+                existing.Secret = client.Secret.Trim();
+            }
+
+            PersistLocalGatewayClientsLocked();
+            _localGatewayRestartRequested = true;
+            _localGatewayRequestVersion++;
+            error = null;
+            return true;
+        }
+    }
+
+    public bool TryDeleteLocalGatewayClient(string clientId, out string? error)
+    {
+        lock (_sync)
+        {
+            var id = (clientId ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                error = "Client id is required.";
+                return false;
+            }
+
+            var removed = _localGatewayClients.RemoveAll(x => string.Equals(x.Id, id, StringComparison.Ordinal));
+            if (removed <= 0)
+            {
+                error = "Client not found.";
+                return false;
+            }
+
+            PersistLocalGatewayClientsLocked();
+            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
+            _localGatewayRestartRequested = true;
+            _localGatewayRequestVersion++;
+            error = null;
+            return true;
+        }
+    }
+
+    public bool TryBuildLocalGatewayClientUri(string clientId, out string uri, out string title, out string? error)
+    {
+        lock (_sync)
+        {
+            var id = (clientId ?? string.Empty).Trim();
+            var client = _localGatewayClients.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
+            if (client is null)
+            {
+                uri = string.Empty;
+                title = string.Empty;
+                error = "Client not found.";
+                return false;
+            }
+
+            var host = (_status.WhitelistAdapterIp ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                host = (_status.DefaultAdapterIp ?? string.Empty).Trim();
+            }
+
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                host = "127.0.0.1";
+            }
+
+            var protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
+            var port = _config.LocalGateway.Port;
+            var display = string.IsNullOrWhiteSpace(client.Remark) ? client.Email : client.Remark;
+            if (string.Equals(protocol, LocalGatewayProtocols.Shadowsocks, StringComparison.OrdinalIgnoreCase))
+            {
+                const string method = "aes-128-gcm";
+                var userInfo = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{method}:{client.Secret}"))
+                    .TrimEnd('=')
+                    .Replace('+', '-')
+                    .Replace('/', '_');
+                uri = $"ss://{userInfo}@{host}:{port}#{Uri.EscapeDataString(display)}";
+                title = "Shadowsocks Config";
+                error = null;
+                return true;
+            }
+
+            var query = "type=tcp&security=none&encryption=none";
+            uri = $"vless://{client.Id}@{host}:{port}?{query}#{Uri.EscapeDataString(display)}";
+            title = "VLESS Config";
+            error = null;
+            return true;
         }
     }
 
@@ -109,12 +308,28 @@ public sealed class GatewayRuntime
         {
             var previous = CloneConfig(_config);
             _config = CloneConfig(config);
+            _config.GatewayType = GatewayTypes.Normalize(_config.GatewayType);
+            _config.LocalGateway.Protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
             _status.ProxyListenPort = _config.LocalProxyListenPort;
+            _status.GatewayType = _config.GatewayType;
+            _status.LocalGatewayProtocol = _config.LocalGateway.Protocol;
+            _status.LocalGatewayPort = _config.LocalGateway.Port;
+            _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
 
-            if (RequiresTunnelRestart(previous, _config, out var changeSummary))
+            if (string.Equals(_config.GatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
+                RequiresTunnelRestart(previous, _config, out var changeSummary))
             {
                 RequestTunnelRestartLocked($"Tunnel restart requested after config change: {changeSummary}.");
             }
+            else if (!string.Equals(_config.GatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+            {
+                _status.TunnelState = "LocalMode";
+                _status.HealthState = "Healthy";
+                _status.HealthReasonCode = null;
+            }
+
+            _localGatewayRestartRequested = true;
+            _localGatewayRequestVersion++;
 
             PersistLocked();
         }
@@ -133,6 +348,58 @@ public sealed class GatewayRuntime
 
             _config.LicenseKey = normalized;
             PersistLocked();
+        }
+    }
+
+    public bool TryApplyLocalGatewayConfig(LocalGatewayConfig config, out string? error)
+    {
+        lock (_sync)
+        {
+            var protocol = LocalGatewayProtocols.Normalize(config.Protocol);
+            if (!LocalGatewayProtocols.IsSupportedInV1(protocol))
+            {
+                error = "Local protocol is not supported in v1.";
+                return false;
+            }
+
+            if (config.Port <= 0 || config.Port > 65535)
+            {
+                error = "Local gateway port is invalid.";
+                return false;
+            }
+
+            var bindAddress = string.IsNullOrWhiteSpace(config.BindAddress) ? "0.0.0.0" : config.BindAddress.Trim();
+            if (!string.Equals(bindAddress, "0.0.0.0", StringComparison.OrdinalIgnoreCase) &&
+                !IPAddress.TryParse(bindAddress, out _))
+            {
+                error = "Bind address must be 0.0.0.0 or a valid IPv4/IPv6 address.";
+                return false;
+            }
+
+            _config.GatewayType = GatewayTypes.Local;
+            _config.LocalGateway.Protocol = protocol;
+            _config.LocalGateway.Port = config.Port;
+            _config.LocalGateway.BindAddress = bindAddress;
+            _config.LocalGateway.Remark = string.IsNullOrWhiteSpace(config.Remark) ? "OmniRelay Local Gateway" : config.Remark.Trim();
+            _config.LocalGateway.RuntimeEnabled = config.RuntimeEnabled;
+
+            foreach (var client in _localGatewayClients)
+            {
+                client.Protocol = protocol;
+            }
+
+            _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
+            _localGatewayRestartRequested = true;
+            _localGatewayRequestVersion++;
+            _status.GatewayType = _config.GatewayType;
+            _status.LocalGatewayProtocol = _config.LocalGateway.Protocol;
+            _status.LocalGatewayPort = _config.LocalGateway.Port;
+            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+            PersistLocalGatewayClientsLocked();
+            PersistLocked();
+            error = null;
+            return true;
         }
     }
 
@@ -223,6 +490,68 @@ public sealed class GatewayRuntime
         }
     }
 
+    public void RequestLocalGatewayStart()
+    {
+        lock (_sync)
+        {
+            _localGatewayRequested = true;
+            _config.LocalGateway.RuntimeEnabled = true;
+            _localGatewayRestartRequested = false;
+            _localGatewayRequestVersion++;
+            PersistLocked();
+        }
+    }
+
+    public void RequestLocalGatewayStop()
+    {
+        lock (_sync)
+        {
+            _localGatewayRequested = false;
+            _config.LocalGateway.RuntimeEnabled = false;
+            _localGatewayRestartRequested = false;
+            _localGatewayRequestVersion++;
+            PersistLocked();
+        }
+    }
+
+    public void RequestLocalGatewayRestart()
+    {
+        lock (_sync)
+        {
+            _localGatewayRequested = true;
+            _config.LocalGateway.RuntimeEnabled = true;
+            _localGatewayRestartRequested = true;
+            _localGatewayRequestVersion++;
+            PersistLocked();
+        }
+    }
+
+    public long GetLocalGatewayRequestVersion()
+    {
+        lock (_sync)
+        {
+            return _localGatewayRequestVersion;
+        }
+    }
+
+    public bool IsLocalGatewayRequested()
+    {
+        lock (_sync)
+        {
+            return _localGatewayRequested;
+        }
+    }
+
+    public bool ConsumeLocalGatewayRestartRequested()
+    {
+        lock (_sync)
+        {
+            var requested = _localGatewayRestartRequested;
+            _localGatewayRestartRequested = false;
+            return requested;
+        }
+    }
+
     public bool IsProxyRequested()
     {
         lock (_sync)
@@ -277,6 +606,20 @@ public sealed class GatewayRuntime
         }
     }
 
+    public void SetLocalGatewayStatus(string state, string? reason, bool autoRecovered)
+    {
+        lock (_sync)
+        {
+            _status.LocalGatewayState = string.IsNullOrWhiteSpace(state) ? "inactive" : state.Trim();
+            _status.LocalGatewayHealthReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+            _status.LocalGatewayAutoRecovered = autoRecovered;
+            _status.LocalGatewayProtocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
+            _status.LocalGatewayPort = _config.LocalGateway.Port;
+            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
     public void SetResilienceStatus(
         string tunnelState,
         string healthState,
@@ -298,6 +641,7 @@ public sealed class GatewayRuntime
     {
         lock (_sync)
         {
+            _status.GatewayType = GatewayTypes.Normalize(_config.GatewayType);
             _status.TunnelState = tunnelState;
             _status.HealthState = healthState;
             _status.HealthReasonCode = healthReasonCode;
@@ -371,6 +715,7 @@ public sealed class GatewayRuntime
         {
             return new GatewayStatus
             {
+                GatewayType = _status.GatewayType,
                 TunnelState = _status.TunnelState,
                 HealthState = _status.HealthState,
                 HealthReasonCode = _status.HealthReasonCode,
@@ -407,7 +752,13 @@ public sealed class GatewayRuntime
                 DefaultAdapterIp = _status.DefaultAdapterIp,
                 WhitelistCount = _status.WhitelistCount,
                 BlacklistCount = _status.BlacklistCount,
-                LastError = _status.LastError
+                LastError = _status.LastError,
+                LocalGatewayState = _status.LocalGatewayState,
+                LocalGatewayHealthReason = _status.LocalGatewayHealthReason,
+                LocalGatewayProtocol = _status.LocalGatewayProtocol,
+                LocalGatewayPort = _status.LocalGatewayPort,
+                LocalGatewayClientsCount = _status.LocalGatewayClientsCount,
+                LocalGatewayAutoRecovered = _status.LocalGatewayAutoRecovered
             };
         }
     }
@@ -503,6 +854,7 @@ public sealed class GatewayRuntime
         return new ServiceConfig
         {
             SchemaVersion = config.SchemaVersion,
+            GatewayType = GatewayTypes.Normalize(config.GatewayType),
             LocalProxyListenPort = config.LocalProxyListenPort,
             BootstrapSocksLocalPort = config.BootstrapSocksLocalPort,
             BootstrapSocksRemotePort = config.BootstrapSocksRemotePort,
@@ -517,8 +869,96 @@ public sealed class GatewayRuntime
             TunnelPrivateKeyPath = config.TunnelPrivateKeyPath,
             TunnelPrivateKeyPassphrase = config.TunnelPrivateKeyPassphrase,
             TunnelPassword = config.TunnelPassword,
-            LicenseKey = config.LicenseKey
+            LicenseKey = config.LicenseKey,
+            LocalGateway = new LocalGatewayConfig
+            {
+                Protocol = LocalGatewayProtocols.Normalize(config.LocalGateway?.Protocol),
+                Port = config.LocalGateway?.Port is > 0 and <= 65535 ? config.LocalGateway.Port : 443,
+                BindAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.BindAddress) ? "0.0.0.0" : config.LocalGateway.BindAddress.Trim(),
+                Remark = string.IsNullOrWhiteSpace(config.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : config.LocalGateway.Remark.Trim(),
+                RuntimeEnabled = config.LocalGateway?.RuntimeEnabled ?? true
+            }
         };
+    }
+
+    private List<LocalGatewayClient> LoadLocalGatewayClients()
+    {
+        try
+        {
+            if (!File.Exists(ServicePaths.LocalGatewayClientsPath))
+            {
+                return [];
+            }
+
+            var raw = File.ReadAllText(ServicePaths.LocalGatewayClientsPath);
+            var clients = JsonSerializer.Deserialize<List<LocalGatewayClient>>(raw, JsonOptions) ?? [];
+            var normalized = new List<LocalGatewayClient>(clients.Count);
+            foreach (var client in clients)
+            {
+                var id = (client.Id ?? string.Empty).Trim();
+                var email = (client.Email ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(email))
+                {
+                    continue;
+                }
+
+                normalized.Add(new LocalGatewayClient
+                {
+                    Id = id,
+                    Email = email,
+                    Enabled = client.Enabled,
+                    Remark = string.IsNullOrWhiteSpace(client.Remark) ? email : client.Remark.Trim(),
+                    Protocol = LocalGatewayProtocols.Normalize(client.Protocol),
+                    Secret = string.IsNullOrWhiteSpace(client.Secret) ? CreateLocalGatewaySecret(LocalGatewayProtocols.Normalize(client.Protocol)) : client.Secret.Trim(),
+                    CreatedAtUtc = client.CreatedAtUtc == default ? DateTimeOffset.UtcNow : client.CreatedAtUtc
+                });
+            }
+
+            return normalized;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Failed loading local gateway clients.", ex);
+            return [];
+        }
+    }
+
+    private void PersistLocalGatewayClientsLocked()
+    {
+        try
+        {
+            ServicePaths.EnsureDirectories();
+            var raw = JsonSerializer.Serialize(_localGatewayClients, JsonOptions);
+            File.WriteAllText(ServicePaths.LocalGatewayClientsPath, raw);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Failed persisting local gateway clients.", ex);
+        }
+    }
+
+    private static LocalGatewayClient CloneLocalGatewayClient(LocalGatewayClient client)
+    {
+        return new LocalGatewayClient
+        {
+            Id = client.Id,
+            Email = client.Email,
+            Enabled = client.Enabled,
+            Remark = client.Remark,
+            Protocol = client.Protocol,
+            Secret = client.Secret,
+            CreatedAtUtc = client.CreatedAtUtc
+        };
+    }
+
+    private static string CreateLocalGatewaySecret(string protocol)
+    {
+        if (string.Equals(LocalGatewayProtocols.Normalize(protocol), LocalGatewayProtocols.Shadowsocks, StringComparison.OrdinalIgnoreCase))
+        {
+            return Convert.ToHexString(Guid.NewGuid().ToByteArray());
+        }
+
+        return Guid.NewGuid().ToString();
     }
 
     private void ApplyPolicySnapshotLocked(PolicyStoreSnapshot snapshot)

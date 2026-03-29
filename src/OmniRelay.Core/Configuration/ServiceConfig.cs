@@ -3,6 +3,7 @@ namespace OmniRelay.Core.Configuration;
 public sealed class ServiceConfig
 {
     public int SchemaVersion { get; set; } = 4;
+    public string GatewayType { get; set; } = GatewayTypes.Remote;
     public int LocalProxyListenPort { get; set; } = 19080;
     public int BootstrapSocksLocalPort { get; set; } = 19081;
     public int BootstrapSocksRemotePort { get; set; } = 16080;
@@ -18,4 +19,5 @@ public sealed class ServiceConfig
     public string TunnelPrivateKeyPassphrase { get; set; } = string.Empty;
     public string TunnelPassword { get; set; } = string.Empty;
     public string LicenseKey { get; set; } = string.Empty;
+    public LocalGatewayConfig LocalGateway { get; set; } = new();
 }

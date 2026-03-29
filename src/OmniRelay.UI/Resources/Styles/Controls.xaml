@@ -202,6 +202,33 @@
         </Setter>
     </Style>
 
+    <Style x:Key="FormComboBoxToggleStyle" TargetType="primitives:ToggleButton">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{x:Null}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="primitives:ToggleButton">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="Transparent"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+                <Setter Property="Background" Value="Transparent"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <Style x:Key="FormComboBoxStyle" TargetType="ComboBox">
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Background" Value="{DynamicResource Brush.InputBackground}"/>
@@ -224,6 +251,7 @@
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="10"/>
                         <primitives:ToggleButton x:Name="DropDownToggle"
+                                                 Style="{StaticResource FormComboBoxToggleStyle}"
                                                  Focusable="False"
                                                  ClickMode="Press"
                                                  HorizontalContentAlignment="Stretch"

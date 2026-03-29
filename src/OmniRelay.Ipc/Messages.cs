@@ -23,6 +23,15 @@ public static class IpcCommands
     public const string SetLicenseKey = "set_license_key";
     public const string GetCapabilities = "get_capabilities";
     public const string TestTunnelConnection = "test_tunnel_connection";
+    public const string ApplyLocalGatewayConfig = "apply_local_gateway_config";
+    public const string StartLocalGateway = "start_local_gateway";
+    public const string StopLocalGateway = "stop_local_gateway";
+    public const string RestartLocalGateway = "restart_local_gateway";
+    public const string GetLocalGatewayClients = "get_local_gateway_clients";
+    public const string AddLocalGatewayClient = "add_local_gateway_client";
+    public const string UpdateLocalGatewayClient = "update_local_gateway_client";
+    public const string DeleteLocalGatewayClient = "delete_local_gateway_client";
+    public const string BuildLocalGatewayClientConfig = "build_local_gateway_client_config";
 }
 
 public sealed record IpcRequest(string Command, string? JsonPayload = null);
@@ -75,6 +84,28 @@ public sealed record SetLicenseKeyRequest(string LicenseKey);
 public sealed record CapabilitiesResponse(string ServiceVersion, IReadOnlyList<string> Capabilities);
 
 public sealed record TestTunnelConnectionRequest(ServiceConfig Config);
+
+public sealed record ApplyLocalGatewayConfigRequest(LocalGatewayConfig Config);
+
+public sealed record LocalGatewayClientRecord(
+    string Id,
+    string Email,
+    bool Enabled,
+    string Remark,
+    string Protocol,
+    string Secret,
+    DateTimeOffset CreatedAtUtc);
+
+public sealed record LocalGatewayClientsResponse(
+    string Protocol,
+    int Port,
+    IReadOnlyList<LocalGatewayClientRecord> Clients);
+
+public sealed record AddLocalGatewayClientRequest(string Email, string? Remark = null);
+public sealed record UpdateLocalGatewayClientRequest(LocalGatewayClientRecord Client);
+public sealed record DeleteLocalGatewayClientRequest(string ClientId);
+public sealed record BuildLocalGatewayClientConfigRequest(string ClientId);
+public sealed record LocalGatewayClientConfigResponse(string Uri, string Title);
 
 public static class IpcJson
 {

@@ -18,6 +18,7 @@ builder.Services.AddSingleton<IpcCommandHandler>();
 builder.Services.AddSingleton<HttpConnectProxyEngine>();
 builder.Services.AddSingleton<Socks5BootstrapProxyEngine>();
 builder.Services.AddHostedService<IpcServerWorker>();
+builder.Services.AddHostedService<LocalGatewayRuntimeWorker>();
 builder.Services.AddHostedService<TunnelResilienceOrchestratorWorker>();
 
 var host = builder.Build();

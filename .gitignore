@@ -222,3 +222,5 @@ FakesAssemblies/
 
 .env
 .env.local
+
+xray.exe

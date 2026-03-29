@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Networking;
 using OmniRelay.Service.Runtime;
 
@@ -93,6 +94,29 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             {
                 var config = _runtime.GetConfigSnapshot();
                 UpdateAdapterStatus(config);
+                if (string.Equals(GatewayTypes.Normalize(config.GatewayType), GatewayTypes.Local, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (_process is not null || _bootstrapSocksListening || _runtime.GetStatusSnapshot().ProxyRunning)
+                    {
+                        await StopLocalRuntimeAsync(stoppingToken);
+                    }
+
+                    _consecutiveFailures = 0;
+                    _currentRecoveryTier = 0;
+                    _recoveryAction = null;
+                    _tunnelConnected = false;
+                    _bootstrapSocksListening = false;
+                    _localProbeOk = true;
+                    _endToEndProbeOk = true;
+                    _tunnelState = "LocalMode";
+                    _healthState = "Healthy";
+                    _healthReasonCode = null;
+                    _lastTunnelError = null;
+                    _lastBootstrapError = null;
+                    PublishStatus();
+                    await Task.Delay(LoopDelay, stoppingToken);
+                    continue;
+                }
 
                 if (!_runtime.IsProxyRequested())
                 {

@@ -21,4 +21,11 @@
     <ProjectReference Include="..\OmniRelay.Core\OmniRelay.Core.csproj" />
     <ProjectReference Include="..\OmniRelay.Ipc\OmniRelay.Ipc.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="xray\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

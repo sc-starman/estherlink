@@ -82,6 +82,51 @@ public sealed class GatewayClientService : IGatewayClientService
         return SendAsync(IpcCommands.TestTunnelConnection, new TestTunnelConnectionRequest(config), cancellationToken, TimeSpan.FromSeconds(20));
     }
 
+    public Task<IpcResponse?> ApplyLocalGatewayConfigAsync(LocalGatewayConfig config, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.ApplyLocalGatewayConfig, new ApplyLocalGatewayConfigRequest(config), cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> StartLocalGatewayAsync(CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.StartLocalGateway, null, cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> StopLocalGatewayAsync(CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.StopLocalGateway, null, cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> RestartLocalGatewayAsync(CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.RestartLocalGateway, null, cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> GetLocalGatewayClientsAsync(CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.GetLocalGatewayClients, null, cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> AddLocalGatewayClientAsync(string email, string? remark, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.AddLocalGatewayClient, new AddLocalGatewayClientRequest(email ?? string.Empty, remark), cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> UpdateLocalGatewayClientAsync(LocalGatewayClientRecord client, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.UpdateLocalGatewayClient, new UpdateLocalGatewayClientRequest(client), cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> DeleteLocalGatewayClientAsync(string clientId, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.DeleteLocalGatewayClient, new DeleteLocalGatewayClientRequest(clientId ?? string.Empty), cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
+    public Task<IpcResponse?> BuildLocalGatewayClientConfigAsync(string clientId, CancellationToken cancellationToken = default)
+    {
+        return SendAsync(IpcCommands.BuildLocalGatewayClientConfig, new BuildLocalGatewayClientConfigRequest(clientId ?? string.Empty), cancellationToken, TimeSpan.FromSeconds(20));
+    }
+
     private async Task<IpcResponse?> SendAsync(
         string command,
         object? payload,

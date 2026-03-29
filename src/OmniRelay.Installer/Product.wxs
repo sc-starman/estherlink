@@ -3,7 +3,7 @@
   <Package
     Name="OmniRelay"
     Manufacturer="OmniRelay"
-    Version="1.38.1"
+    Version="1.39.6"
     Language="1033"
     UpgradeCode="{95EE2733-FDA4-4B0A-91CA-43D42B3E91E7}"
     Scope="perMachine">
@@ -70,7 +70,9 @@
     </ComponentGroup>
 
     <ComponentGroup Id="ServiceFiles" Directory="SERVICEDIR">
-      <Files Include="$(var.PayloadDir)\service\*.dll;$(var.PayloadDir)\service\*.json" />
+      <Files Include="$(var.PayloadDir)\service\**">
+        <Exclude Files="$(var.PayloadDir)\service\OmniRelay.Service.exe" />
+      </Files>
     </ComponentGroup>
 
     <ComponentGroup Id="ShellAndServiceComponents">
