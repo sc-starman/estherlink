@@ -136,7 +136,7 @@
     <value>Register</value>
   </data>
   <data name="Layout.Nav.Documentation" xml:space="preserve">
-    <value>Documentation</value>
+    <value>Getting Started</value>
   </data>
   <data name="Js.Copy.Copy" xml:space="preserve">
     <value>Copy</value>
@@ -400,7 +400,7 @@
     <value>Version</value>
   </data>
   <data name="Index.ReadDocumentation" xml:space="preserve">
-    <value>Read documentation</value>
+    <value>Read getting started</value>
   </data>
   <data name="Admin.Billing.Table.UserEmail" xml:space="preserve">
     <value>User email</value>
@@ -478,7 +478,7 @@
     <value>Proxy Running</value>
   </data>
   <data name="Index.Config.Faq4.A" xml:space="preserve">
-    <value>Yes. Documentation and operational guidance are included, with a clear runbook for common issues.</value>
+    <value>Yes. Getting Started and operational guidance are included, with a clear runbook for common issues.</value>
   </data>
   <data name="Admin.Billing.Table.Created" xml:space="preserve">
     <value>Created (UTC)</value>
@@ -532,7 +532,7 @@
     <value>Yes. The platform is built to handle real-world application patterns with operational controls for reliability.</value>
   </data>
   <data name="Docs.Heading" xml:space="preserve">
-    <value>Deployment Documentation</value>
+    <value>Getting Started</value>
   </data>
   <data name="Download.Minimum.Title" xml:space="preserve">
     <value>Minimum requirements</value>
@@ -637,7 +637,7 @@
     <value>No</value>
   </data>
   <data name="Docs.Title" xml:space="preserve">
-    <value>Documentation</value>
+    <value>Getting Started</value>
   </data>
   <data name="Js.Trial.Requesting" xml:space="preserve">
     <value>Requesting trial...</value>
