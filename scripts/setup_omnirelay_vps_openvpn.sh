@@ -192,7 +192,7 @@ evaluate_openvpn_dataplane_health_json(){
   local allow_recover="${1:-false}" status_json="${2:-}"
   local now prev_redirect prev_fail prev_recover
   local clients tcp_redirect redsocks_established
-  local openvpn_state redsocks_state backend_listener
+  local openvpn_state redsocks_state backend_listener socks_upstream_type
   local delta healthy reason fail_count auto_recovered cooldown_sec
 
   [[ -n "$status_json" ]] || status_json="$(status_cmd)"
@@ -215,6 +215,7 @@ evaluate_openvpn_dataplane_health_json(){
   openvpn_state="$(jq -r '.openVpnState // "inactive"' <<<"$status_json")"
   redsocks_state="$(jq -r '.redsocksState // "inactive"' <<<"$status_json")"
   backend_listener="$(jq -r '.backendListener // false' <<<"$status_json")"
+  socks_upstream_type="$(jq -r '.socksUpstreamType // "socks5"' <<<"$status_json")"
 
   clients="$(normalize_uint "$clients")"
   tcp_redirect="$(normalize_uint "$tcp_redirect")"
@@ -236,6 +237,12 @@ evaluate_openvpn_dataplane_health_json(){
     fail_count=$(( prev_fail + 1 ))
     healthy=false
     reason="service_stack_not_ready"
+  elif [[ "$socks_upstream_type" == "http-connect" ]]; then
+    # HTTP CONNECT backends are short-lived/stateless from redsocks perspective;
+    # established-session counting is not a stable dataplane health signal here.
+    fail_count=0
+    healthy=true
+    reason="http_connect_upstream_stateless"
   elif (( redsocks_established > 0 )); then
     fail_count=0
     healthy=true
@@ -250,11 +257,13 @@ evaluate_openvpn_dataplane_health_json(){
   fi
 
   if [[ "$allow_recover" == "true" && "$healthy" != "true" && "$reason" == "redsocks_dataplane_stalled" ]]; then
-    if (( fail_count >= 2 )) && (( now - prev_recover >= cooldown_sec )); then
-      if systemctl restart "$OPENVPN_REDSOCKS_SERVICE" "$OPENVPN_SERVICE" >/dev/null 2>&1; then
+    if (( fail_count >= 3 )) && (( now - prev_recover >= cooldown_sec )); then
+      if systemctl restart "$OPENVPN_REDSOCKS_SERVICE" >/dev/null 2>&1; then
         auto_recovered=true
         prev_recover="$now"
         reason="redsocks_dataplane_auto_recovered"
+        healthy=true
+        fail_count=0
       fi
     fi
   fi
@@ -340,7 +349,16 @@ sys.exit(1)
 PY
 }
 
+remediate_tunnel_backend_listener(){
+  local level="${1:-soft}"
+  local tunnelctl_bin="/usr/local/sbin/omnirelay-tunnelctl"
+  [[ -x "$tunnelctl_bin" ]] || return 1
+  "$tunnelctl_bin" remediate --level "$level" --backend-host 127.0.0.1 --backend-port "$BACKEND_PORT" >/dev/null 2>&1 || return 1
+  return 0
+}
+
 select_openvpn_socks_upstream(){
+  local level holder
   OPENVPN_SOCKS_UPSTREAM_PORT="$BACKEND_PORT"
   OPENVPN_UPSTREAM_TYPE="socks5"
   if socks_endpoint_healthy "$BACKEND_PORT"; then
@@ -352,6 +370,25 @@ select_openvpn_socks_upstream(){
     log "Runtime backend 127.0.0.1:${BACKEND_PORT} is HTTP CONNECT proxy (not SOCKS5); using redsocks type=http-connect."
     return 0
   fi
+
+  for level in soft hard; do
+    if remediate_tunnel_backend_listener "$level"; then
+      log "Backend 127.0.0.1:${BACKEND_PORT} probe failed; ran tunnelctl remediate level=${level} and retrying."
+      sleep 1
+      if socks_endpoint_healthy "$BACKEND_PORT"; then
+        OPENVPN_UPSTREAM_TYPE="socks5"
+        return 0
+      fi
+      if http_connect_endpoint_healthy "$BACKEND_PORT"; then
+        OPENVPN_UPSTREAM_TYPE="http-connect"
+        log "Runtime backend 127.0.0.1:${BACKEND_PORT} recovered as HTTP CONNECT proxy; using redsocks type=http-connect."
+        return 0
+      fi
+    fi
+  done
+
+  holder="$(ss -lntp "( sport = :${BACKEND_PORT} )" 2>/dev/null | awk 'NR>1 {print; exit}' || true)"
+  [[ -n "$holder" ]] && log "Backend ${BACKEND_PORT} current listener: ${holder}"
   die "Runtime backend 127.0.0.1:${BACKEND_PORT} is not responsive as SOCKS5 or HTTP CONNECT."
 }
 

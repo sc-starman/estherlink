@@ -461,6 +461,15 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                 switch (tier)
                 {
                     case 1:
+                        if (requiresLocalRestart && _remoteProbeModuleAvailable && _tunnelConnected)
+                        {
+                            RecordEvent("warn", "recovery tier1: remote backend unhealthy; running remote soft remediation");
+                            _fileLog.Warn(
+                                $"Recovery tier1: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); running remote soft remediation.");
+                            await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
+                            attemptedRecovery = true;
+                        }
+
                         RecordEvent("warn", "recovery tier1: end-to-end probe failed; keeping local tunnel intact");
                         _fileLog.Warn("Recovery tier1: end-to-end probe failed; keeping local tunnel intact.");
                         _tunnelState = "Degraded";
@@ -470,6 +479,14 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                     case 2:
                         if (requiresLocalRestart)
                         {
+                            if (_remoteProbeModuleAvailable && _tunnelConnected)
+                            {
+                                RecordEvent("warn", "recovery tier2: remote backend unhealthy; running remote soft remediation");
+                                _fileLog.Warn(
+                                    $"Recovery tier2: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); running remote soft remediation.");
+                                await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
+                            }
+
                             RecordEvent("warn", "recovery tier2: remote backend unhealthy; restarting local tunnel");
                             _fileLog.Warn(
                                 $"Recovery tier2: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); restarting local tunnel.");
@@ -1423,6 +1440,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         }
 
         return reasonCode.Equals("backend_protocol_unknown", StringComparison.OrdinalIgnoreCase) ||
+               reasonCode.Equals("backend_unreachable", StringComparison.OrdinalIgnoreCase) ||
                reasonCode.Equals("backend_listener_down", StringComparison.OrdinalIgnoreCase) ||
                reasonCode.Equals("backend_endpoint_unresponsive", StringComparison.OrdinalIgnoreCase) ||
                reasonCode.Equals("remote_probe_timeout", StringComparison.OrdinalIgnoreCase);
