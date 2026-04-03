@@ -10,7 +10,7 @@
 
     <section class="space-y-6">
         <div>
-            <h1 class="text-3xl font-bold">@S["Licenses.Title"]</h1>
+            <h1 class="text-2xl sm:text-3xl font-bold">@S["Licenses.Title"]</h1>
             <p class="text-slate-400 mt-1">@S["Licenses.Subtitle"]</p>
         </div>
 
@@ -27,7 +27,64 @@
         }
         else
         {
-            <div class="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900">
+            <div class="space-y-3 md:hidden">
+                @foreach (var item in Model.Items)
+                {
+                    <article class="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-3 text-sm">
+                        <div class="flex items-start justify-between gap-3">
+                            <div>
+                                <p class="text-xs uppercase tracking-wide text-slate-400">@S["Licenses.Table.LicenseId"]</p>
+                                <p class="font-mono text-xs break-all">@item.LicenseId</p>
+                            </div>
+                            <span class="rounded bg-slate-800 px-2 py-1 text-xs text-slate-200">@item.Status</span>
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="button"
+                                class="show-license px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs"
+                                data-license-id="@item.LicenseId"
+                                data-license-key="@item.LicenseKey">
+                                @S["Common.Show"]
+                            </button>
+                            <span class="text-xs text-slate-400">@S["Licenses.Table.LicenseKey"]</span>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <p class="text-xs text-slate-400">@S["Licenses.Table.Plan"]</p>
+                                <p>@item.Plan</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-slate-400">@S["Licenses.Table.Term"]</p>
+                                <p>@item.Term</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-slate-400">@S["Licenses.Table.DeviceId"]</p>
+                                <p class="font-mono text-xs">@(string.IsNullOrWhiteSpace(item.CurrentDeviceId) ? S["Common.NotAvailable"] : item.CurrentDeviceId)</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-slate-400">@S["Licenses.Table.CreatedAt"]</p>
+                                <p>@item.CreatedAt.ToString("u")</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-slate-400">@S["Licenses.Table.Transfers"]</p>
+                                <p>@item.TransfersUsedInWindow</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-slate-400">@S["Licenses.Table.Remaining"]</p>
+                                <p>@item.TransfersRemainingInWindow</p>
+                            </div>
+                            <div class="col-span-2">
+                                <p class="text-xs text-slate-400">@S["Licenses.Table.LastSeen"]</p>
+                                <p>@(item.LastSeenAt?.ToString("u") ?? S["Common.NotAvailable"])</p>
+                            </div>
+                        </div>
+                    </article>
+                }
+            </div>
+
+            <div class="hidden md:block overflow-x-auto rounded-xl border border-slate-800 bg-slate-900">
                 <table class="min-w-full text-sm">
                     <thead class="bg-slate-950/70 text-slate-300">
                         <tr>

@@ -1566,4 +1566,16 @@
   <data name="Js.Checkout.StatusCheckFailed" xml:space="preserve">
     <value>Unable to check payment status right now.</value>
   </data>
+  <data name="Billing.SuccessModal.Title" xml:space="preserve">
+    <value>Payment successful</value>
+  </data>
+  <data name="Billing.SuccessModal.Body" xml:space="preserve">
+    <value>Your payment was confirmed and your license is ready.</value>
+  </data>
+  <data name="Billing.SuccessModal.OrderId" xml:space="preserve">
+    <value>Order ID:</value>
+  </data>
+  <data name="Billing.SuccessModal.LicenseKey" xml:space="preserve">
+    <value>License key:</value>
+  </data>
 </root>

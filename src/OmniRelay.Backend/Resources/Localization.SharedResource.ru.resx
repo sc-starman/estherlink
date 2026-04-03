@@ -1566,4 +1566,16 @@
   <data name="Js.Checkout.StatusCheckFailed" xml:space="preserve">
     <value>Сейчас не удалось проверить статус оплаты.</value>
   </data>
+  <data name="Billing.SuccessModal.Title" xml:space="preserve">
+    <value>Оплата успешна</value>
+  </data>
+  <data name="Billing.SuccessModal.Body" xml:space="preserve">
+    <value>Оплата подтверждена, ваша лицензия готова.</value>
+  </data>
+  <data name="Billing.SuccessModal.OrderId" xml:space="preserve">
+    <value>ID заказа:</value>
+  </data>
+  <data name="Billing.SuccessModal.LicenseKey" xml:space="preserve">
+    <value>Лицензионный ключ:</value>
+  </data>
 </root>

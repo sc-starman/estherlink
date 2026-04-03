@@ -59,12 +59,20 @@
   const waitingStatus = document.getElementById('payment-waiting-status');
   const waitingAmount = document.getElementById('payment-waiting-amount');
   const waitingCoupon = document.getElementById('payment-waiting-coupon');
+  const waitingGoNowButton = document.getElementById('payment-waiting-go-now');
   const waitingCheckButton = document.getElementById('payment-waiting-check');
   const waitingCloseButton = document.getElementById('payment-waiting-close');
   const waitingCloseIconButton = document.getElementById('payment-waiting-close-icon');
+  const successModal = document.getElementById('payment-success-modal');
+  const successOrderId = document.getElementById('payment-success-order-id');
+  const successLicenseKey = document.getElementById('payment-success-license-key');
+  const successCopyButton = document.getElementById('payment-success-copy');
+  const successCloseButton = document.getElementById('payment-success-close');
+  const successCloseIconButton = document.getElementById('payment-success-close-icon');
   let redirectTimerId = null;
   let redirectIntervalId = null;
   let redirectTargetUrl = '';
+  let paymentGatewayUrl = '';
   let remainingSeconds = 10;
   let appliedCouponCode = null;
   let appliedDiscountPercent = null;
@@ -189,6 +197,25 @@
       waitingModal.classList.add('hidden');
     }
     pendingOrderId = '';
+    paymentGatewayUrl = '';
+  };
+
+  const closeSuccessModal = () => {
+    if (successModal) {
+      successModal.classList.add('hidden');
+    }
+  };
+
+  const showSuccessModal = (orderId, licenseKey) => {
+    if (successOrderId) {
+      successOrderId.textContent = orderId || '-';
+    }
+    if (successLicenseKey) {
+      successLicenseKey.textContent = licenseKey || '-';
+    }
+    if (successModal) {
+      successModal.classList.remove('hidden');
+    }
   };
 
   const setWaitingStatusText = (text, level) => {
@@ -208,14 +235,15 @@
   };
 
   const updateInlineOrderMessage = (orderId, message) => {
-    if (!orderId || !message) {
+    if (!orderId) {
       return;
     }
 
-    const target = document.getElementById(`order-${orderId}`);
-    if (target) {
-      target.textContent = message;
-    }
+    const text = message || '';
+    const targets = document.querySelectorAll(`[data-order-status-for="${orderId}"]`);
+    targets.forEach((target) => {
+      target.textContent = text;
+    });
   };
 
   const refreshPendingOrderStatus = async (quiet) => {
@@ -249,6 +277,8 @@
         if (checkoutResult) {
           checkoutResult.textContent = paidText;
         }
+        closeWaitingModal();
+        showSuccessModal(payload.orderId || pendingOrderId, payload.licenseKey || '');
         pendingOrderId = '';
         return;
       }
@@ -275,20 +305,26 @@
     }
   };
 
-  const redirectNow = () => {
-    if (!redirectTargetUrl) {
-      return;
+  const openPaymentGatewayTab = () => {
+    const url = paymentGatewayUrl || redirectTargetUrl;
+    if (!url) {
+      return false;
     }
 
-    const url = redirectTargetUrl;
-    const popup = window.open(url, '_blank', 'noopener,noreferrer');
-    if (!popup) {
-      if (checkoutResult) {
-        checkoutResult.textContent = t('checkout.popupBlocked', 'Unable to open payment tab. Please allow pop-ups and click Go Now again.');
+    let popup = null;
+    try {
+      popup = window.open(url, '_blank');
+      if (popup) {
+        popup.opener = null;
       }
-      return;
+    } catch {
+      popup = null;
     }
 
+    return popup !== null;
+  };
+
+  const showWaitingModal = () => {
     closeRedirectModal();
 
     if (waitingModal) {
@@ -305,6 +341,22 @@
     }
     if (waitingCoupon && redirectCoupon) {
       waitingCoupon.textContent = redirectCoupon.textContent || t('checkout.summary.none', 'none');
+    }
+  };
+
+  const redirectNow = () => {
+    if (!(paymentGatewayUrl || redirectTargetUrl)) {
+      return;
+    }
+
+    const opened = openPaymentGatewayTab();
+    showWaitingModal();
+
+    if (!opened) {
+      if (checkoutResult) {
+        checkoutResult.textContent = t('checkout.popupBlocked', 'Unable to open payment tab. Please allow pop-ups and click Go Now again.');
+      }
+      setWaitingStatusText(t('checkout.popupBlocked', 'Unable to open payment tab. Please allow pop-ups and click Go Now again.'), 'error');
     }
   };
 
@@ -340,6 +392,10 @@
     if (waitingModal && !waitingModal.classList.contains('hidden')) {
       closeWaitingModal();
     }
+
+    if (successModal && !successModal.classList.contains('hidden')) {
+      closeSuccessModal();
+    }
   });
 
   if (waitingCloseButton) {
@@ -354,6 +410,17 @@
     });
   }
 
+  if (waitingGoNowButton) {
+    waitingGoNowButton.addEventListener('click', () => {
+      const opened = openPaymentGatewayTab();
+      if (!opened) {
+        setWaitingStatusText(t('checkout.popupBlocked', 'Unable to open payment tab. Please allow pop-ups and click Go Now again.'), 'error');
+      } else {
+        setWaitingStatusText(t('checkout.waitingForPayment', 'Waiting for payment confirmation...'), 'pending');
+      }
+    });
+  }
+
   if (waitingCheckButton) {
     waitingCheckButton.addEventListener('click', async () => {
       await refreshPendingOrderStatus(false);
@@ -364,6 +431,46 @@
     waitingModal.addEventListener('click', (event) => {
       if (event.target === waitingModal) {
         closeWaitingModal();
+      }
+    });
+  }
+
+  if (successCloseButton) {
+    successCloseButton.addEventListener('click', () => {
+      closeSuccessModal();
+    });
+  }
+
+  if (successCloseIconButton) {
+    successCloseIconButton.addEventListener('click', () => {
+      closeSuccessModal();
+    });
+  }
+
+  if (successCopyButton) {
+    successCopyButton.addEventListener('click', async () => {
+      const value = successLicenseKey ? successLicenseKey.textContent || '' : '';
+      if (!value || value === '-') {
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(value);
+        successCopyButton.textContent = t('copy.copied', 'Copied');
+      } catch {
+        successCopyButton.textContent = t('copy.failed', 'Copy failed');
+      } finally {
+        setTimeout(() => {
+          successCopyButton.textContent = t('copy.copy', 'Copy');
+        }, 1200);
+      }
+    });
+  }
+
+  if (successModal) {
+    successModal.addEventListener('click', (event) => {
+      if (event.target === successModal) {
+        closeSuccessModal();
       }
     });
   }
@@ -434,6 +541,7 @@
         }
 
         redirectTargetUrl = `https://gate.paykrypt.io/pay/${encodeURIComponent(intentId)}`;
+        paymentGatewayUrl = redirectTargetUrl;
         pendingOrderId = payload.orderId || '';
         remainingSeconds = 10;
 
@@ -483,22 +591,17 @@
         return;
       }
 
-      const target = document.getElementById(`order-${orderId}`);
-      if (!target) {
-        return;
-      }
-
       button.disabled = true;
-      target.textContent = t('order.refreshing', 'Refreshing order...');
+      updateInlineOrderMessage(orderId, t('order.refreshing', 'Refreshing order...'));
       try {
         const response = await fetch(`/app/api/checkout/${orderId}/status?refresh=true`);
         if (!response.ok) {
-          target.textContent = t('order.loadFailed', 'Unable to load order status.');
+          updateInlineOrderMessage(orderId, t('order.loadFailed', 'Unable to load order status.'));
           return;
         }
 
         const payload = await response.json();
-        target.textContent = payload.licenseKey
+        updateInlineOrderMessage(orderId, payload.licenseKey
           ? formatTemplate(
               t('order.paidIssued', 'Paid. License issued: {licenseKey}'),
               { licenseKey: payload.licenseKey }
@@ -509,9 +612,9 @@
                 orderStatus: payload.orderStatus ?? '-',
                 intentStatus: payload.intentStatus ?? '-'
               }
-            );
+            ));
       } catch {
-        target.textContent = t('order.refreshFailed', 'Refresh failed.');
+        updateInlineOrderMessage(orderId, t('order.refreshFailed', 'Refresh failed.'));
       } finally {
         button.disabled = false;
       }
