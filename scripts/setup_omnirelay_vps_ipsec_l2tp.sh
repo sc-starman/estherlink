@@ -52,12 +52,20 @@ IPSEC_PSK_FILE="${IPSEC_DIR}/shared_psk"
 IPSEC_REDSOCKS_SERVICE="omnirelay-redsocks"
 IPSEC_REDSOCKS_CONFIG="${IPSEC_DIR}/redsocks.conf"
 IPSEC_REDSOCKS_LOCAL_PORT=12345
+IPSEC_REDSOCKS_RLIMIT_NOFILE=65535
+IPSEC_REDSOCKS_CONN_MAX=4096
+IPSEC_REDSOCKS_CONNPRES_IDLE_TIMEOUT=600
+IPSEC_REDSOCKS_MAX_ACCEPT_BACKOFF=5000
+IPSEC_REDSOCKS_LISTENQ=4096
+IPSEC_REDSOCKS_SATURATION_WINDOW_SEC=180
+IPSEC_REDSOCKS_SATURATION_HIT_THRESHOLD=4
 IPSEC_RULES_SERVICE="omnirelay-ipsec-rules"
 IPSEC_RULES_APPLY_SCRIPT="${IPSEC_DIR}/apply-rules.sh"
 IPSEC_RULES_CLEAR_SCRIPT="${IPSEC_DIR}/clear-rules.sh"
 IPSEC_ACCOUNTING_DB="${IPSEC_DIR}/accounting.db"
 IPSEC_ACCOUNTING_SCRIPT="${IPSEC_DIR}/accounting-loop.sh"
 IPSEC_ACCOUNTING_HEARTBEAT="${IPSEC_DIR}/accounting-heartbeat.json"
+IPSEC_HEALTH_STATE_FILE="${IPSEC_DIR}/health-state.json"
 IPSEC_ACCOUNTING_SERVICE="omnirelay-ipsec-accounting"
 IPSEC_ACCOUNTING_TIMER="omnirelay-ipsec-accounting.timer"
 IPSEC_PPP_HOOK_UP="/etc/ppp/ip-up.d/99-omnirelay-accounting"
@@ -351,8 +359,24 @@ EOF
 
 write_redsocks_config(){
   cat > "$IPSEC_REDSOCKS_CONFIG" <<EOF
-base { log_debug = off; log_info = on; daemon = off; redirector = iptables; }
-redsocks { local_ip = 0.0.0.0; local_port = ${IPSEC_REDSOCKS_LOCAL_PORT}; ip = 127.0.0.1; port = ${BACKEND_PORT}; type = socks5; }
+base {
+  log_debug = off;
+  log_info = on;
+  daemon = off;
+  redirector = iptables;
+  rlimit_nofile = ${IPSEC_REDSOCKS_RLIMIT_NOFILE};
+  redsocks_conn_max = ${IPSEC_REDSOCKS_CONN_MAX};
+  connpres_idle_timeout = ${IPSEC_REDSOCKS_CONNPRES_IDLE_TIMEOUT};
+  max_accept_backoff = ${IPSEC_REDSOCKS_MAX_ACCEPT_BACKOFF};
+}
+redsocks {
+  local_ip = 0.0.0.0;
+  local_port = ${IPSEC_REDSOCKS_LOCAL_PORT};
+  listenq = ${IPSEC_REDSOCKS_LISTENQ};
+  ip = 127.0.0.1;
+  port = ${BACKEND_PORT};
+  type = socks5;
+}
 EOF
 }
 enable_ip_forward(){ echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-omnirelay-ipsec.conf; sysctl -q -w net.ipv4.ip_forward=1 || true; }
@@ -613,6 +637,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=${redsocks_bin} -c ${IPSEC_REDSOCKS_CONFIG}
+LimitNOFILE=${IPSEC_REDSOCKS_RLIMIT_NOFILE}
 Restart=always
 RestartSec=2
 [Install]
@@ -833,6 +858,180 @@ wait_ipsec_accounting_heartbeat(){
 dns_apply(){ progress 94 "Applying DNS-through-tunnel profile"; jq -n --arg m "$DNS_MODE" --arg d "$DOH_ENDPOINTS" --argjson u "$( [[ "$DNS_UDP_ONLY" == "true" ]] && echo true || echo false )" '{mode:$m,dohEndpoints:$d,dnsUdpOnly:$u,updatedAtUtc:(now|todate)}' > "$DNS_PROFILE_FILE"; progress 100 "DNS profile applied"; }
 dns_status_json(){ local cfg rule mode doh udpOnly udp53 path; if [[ -f "$DNS_PROFILE_FILE" ]]; then cfg=true; rule=true; mode="$(jq -r '.mode' "$DNS_PROFILE_FILE")"; doh="$(jq -r '.dohEndpoints' "$DNS_PROFILE_FILE")"; udpOnly="$(jq -r '.dnsUdpOnly' "$DNS_PROFILE_FILE")"; else cfg=false; rule=false; mode=unknown; doh=""; udpOnly=false; fi; udp53="$(check_listener 53)"; path=false; [[ "$cfg" == true && "$rule" == true ]] && path=true; printf '{"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' "$cfg" "$rule" "$cfg" "$udp53" "$path" "$mode" "$udpOnly" "$(printf '%s' "$doh" | sed 's/"/\\"/g')"; }
 dns_status(){ dns_status_json; }
+
+count_ipsec_connected_clients(){
+  local count
+  count="$(ip -o link show 2>/dev/null | grep -Ec ': ppp[0-9]+:' || true)"
+  normalize_uint "$count"
+}
+
+get_ipsec_redirect_tcp_packets(){
+  local packets
+  packets="$(iptables -t nat -vnL OMNIRELAY_L2TP_TCP 2>/dev/null | awk '/REDIRECT/ && /redir ports '"${IPSEC_REDSOCKS_LOCAL_PORT}"'/{print $1; exit}' || true)"
+  normalize_uint "$packets"
+}
+
+count_ipsec_redsocks_backend_established(){
+  local count
+  count="$(ss -H -tnp state established '( dst 127.0.0.1:'"${BACKEND_PORT}"' )' 2>/dev/null | grep -c 'redsocks' || true)"
+  normalize_uint "$count"
+}
+
+count_ipsec_redsocks_connmax_events_recent(){
+  local now since_epoch count
+  now="$(date +%s)"
+  since_epoch=$(( now - IPSEC_REDSOCKS_SATURATION_WINDOW_SEC ))
+  (( since_epoch < 0 )) && since_epoch=0
+  count="$(journalctl -u "$IPSEC_REDSOCKS_SERVICE" --since "@${since_epoch}" --no-pager -o cat 2>/dev/null | grep -c 'reached redsocks_conn_max limit' || true)"
+  normalize_uint "$count"
+}
+
+ipsec_dataplane_snapshot_json(){
+  local clients tcp_redirect redsocks_established saturation_events healthy reason
+  clients="$(count_ipsec_connected_clients)"
+  tcp_redirect="$(get_ipsec_redirect_tcp_packets)"
+  redsocks_established="$(count_ipsec_redsocks_backend_established)"
+  saturation_events="$(count_ipsec_redsocks_connmax_events_recent)"
+
+  healthy=true
+  reason="ok"
+  if (( saturation_events >= IPSEC_REDSOCKS_SATURATION_HIT_THRESHOLD )) && (( clients > 0 || tcp_redirect > 0 )); then
+    healthy=false
+    reason="redsocks_conn_saturated"
+  elif (( clients > 0 )) && (( redsocks_established <= 0 )) && (( tcp_redirect >= 8 )); then
+    healthy=false
+    reason="redsocks_backend_no_established_sessions"
+  fi
+
+  jq -cn \
+    --argjson clients "$clients" \
+    --argjson tcpRedirect "$tcp_redirect" \
+    --argjson redsocksEstablished "$redsocks_established" \
+    --argjson redsocksConnMaxEventsRecent "$saturation_events" \
+    --argjson healthy "$healthy" \
+    --arg reason "$reason" \
+    '{
+      ipsecConnectedClients:$clients,
+      ipsecRedirectTcpPackets:$tcpRedirect,
+      ipsecRedsocksBackendEstablished:$redsocksEstablished,
+      ipsecRedsocksConnMaxEventsRecent:$redsocksConnMaxEventsRecent,
+      ipsecDataplaneHealthy:$healthy,
+      ipsecDataplaneReason:$reason
+    }'
+}
+
+evaluate_ipsec_dataplane_health_json(){
+  local allow_recover="${1:-false}" status_json="${2:-}"
+  local now prev_redirect prev_fail prev_recover
+  local clients tcp_redirect saturation_events
+  local ipsec_state xl2tpd_state redsocks_state backend_listener
+  local delta healthy reason fail_count auto_recovered cooldown_sec recover_threshold
+
+  [[ -n "$status_json" ]] || status_json="$(status_cmd)"
+  now="$(date +%s)"
+  prev_redirect=0
+  prev_fail=0
+  prev_recover=0
+  if [[ -f "$IPSEC_HEALTH_STATE_FILE" ]]; then
+    prev_redirect="$(jq -r '.lastRedirectTcpPackets // 0' "$IPSEC_HEALTH_STATE_FILE" 2>/dev/null || echo 0)"
+    prev_fail="$(jq -r '.dataplaneFailCount // 0' "$IPSEC_HEALTH_STATE_FILE" 2>/dev/null || echo 0)"
+    prev_recover="$(jq -r '.lastAutoRecoveryEpoch // 0' "$IPSEC_HEALTH_STATE_FILE" 2>/dev/null || echo 0)"
+  fi
+  prev_redirect="$(normalize_uint "$prev_redirect")"
+  prev_fail="$(normalize_uint "$prev_fail")"
+  prev_recover="$(normalize_uint "$prev_recover")"
+
+  clients="$(jq -r '.ipsecConnectedClients // 0' <<<"$status_json")"
+  tcp_redirect="$(jq -r '.ipsecRedirectTcpPackets // 0' <<<"$status_json")"
+  saturation_events="$(jq -r '.ipsecRedsocksConnMaxEventsRecent // 0' <<<"$status_json")"
+  ipsec_state="$(jq -r '.ipsecState // "inactive"' <<<"$status_json")"
+  xl2tpd_state="$(jq -r '.xl2tpdState // "inactive"' <<<"$status_json")"
+  redsocks_state="$(jq -r '.redsocksState // "inactive"' <<<"$status_json")"
+  backend_listener="$(jq -r '.backendListener // false' <<<"$status_json")"
+
+  clients="$(normalize_uint "$clients")"
+  tcp_redirect="$(normalize_uint "$tcp_redirect")"
+  saturation_events="$(normalize_uint "$saturation_events")"
+
+  delta=$(( tcp_redirect - prev_redirect ))
+  (( delta < 0 )) && delta=0
+  fail_count="$prev_fail"
+  healthy=true
+  reason="ok"
+  auto_recovered=false
+  cooldown_sec=300
+  recover_threshold=3
+
+  if [[ "$ipsec_state" != "active" || "$xl2tpd_state" != "active" || "$redsocks_state" != "active" || "$backend_listener" != "true" ]]; then
+    fail_count=$(( prev_fail + 1 ))
+    healthy=false
+    reason="service_stack_not_ready"
+  elif (( saturation_events >= IPSEC_REDSOCKS_SATURATION_HIT_THRESHOLD )) && (( clients > 0 || delta >= 8 )); then
+    fail_count=$(( prev_fail + 1 ))
+    healthy=false
+    reason="redsocks_conn_saturated"
+    recover_threshold=1
+  elif (( clients <= 0 )); then
+    fail_count=0
+    healthy=true
+    reason="no_connected_clients"
+  elif (( delta >= 8 )); then
+    fail_count=0
+    healthy=true
+    reason="ok"
+  else
+    fail_count=0
+    healthy=true
+    reason="no_recent_client_traffic"
+  fi
+
+  if [[ "$allow_recover" == "true" && "$healthy" != "true" && "$reason" == "redsocks_conn_saturated" ]]; then
+    if (( fail_count >= recover_threshold )) && (( now - prev_recover >= cooldown_sec )); then
+      if systemctl restart "$IPSEC_REDSOCKS_SERVICE" >/dev/null 2>&1; then
+        auto_recovered=true
+        prev_recover="$now"
+        reason="redsocks_conn_saturated_auto_recovered"
+        healthy=true
+        fail_count=0
+      fi
+    fi
+  fi
+
+  jq -cn \
+    --argjson healthy "$healthy" \
+    --arg reason "$reason" \
+    --argjson failCount "$fail_count" \
+    --argjson deltaPackets "$delta" \
+    --argjson autoRecovered "$auto_recovered" \
+    --argjson lastRecoveryEpoch "$prev_recover" \
+    '{
+      ipsecDataplaneHealthy:$healthy,
+      ipsecDataplaneReason:$reason,
+      ipsecDataplaneFailCount:$failCount,
+      ipsecDataplaneDeltaRedirectPackets:$deltaPackets,
+      ipsecDataplaneAutoRecovered:$autoRecovered,
+      ipsecDataplaneLastAutoRecoveryEpoch:$lastRecoveryEpoch
+    }' > "${IPSEC_HEALTH_STATE_FILE}.tmp.result"
+
+  jq -cn \
+    --argjson updatedAt "$now" \
+    --argjson lastRedirect "$tcp_redirect" \
+    --argjson failCount "$fail_count" \
+    --argjson lastRecovery "$prev_recover" \
+    '{
+      updatedAtEpoch:$updatedAt,
+      lastRedirectTcpPackets:$lastRedirect,
+      dataplaneFailCount:$failCount,
+      lastAutoRecoveryEpoch:$lastRecovery
+    }' > "${IPSEC_HEALTH_STATE_FILE}.tmp.state"
+
+  mv -f "${IPSEC_HEALTH_STATE_FILE}.tmp.state" "$IPSEC_HEALTH_STATE_FILE"
+  chmod 0640 "$IPSEC_HEALTH_STATE_FILE" >/dev/null 2>&1 || true
+  chown root:omnigateway "$IPSEC_HEALTH_STATE_FILE" >/dev/null 2>&1 || true
+
+  cat "${IPSEC_HEALTH_STATE_FILE}.tmp.result"
+  rm -f "${IPSEC_HEALTH_STATE_FILE}.tmp.result"
+}
 dns_repair(){ progress 94 "Repairing DNS profile"; dns_apply; }
 
 sync_clients_cmd(){
@@ -932,6 +1131,7 @@ EOF
 status_cmd(){
   local sshState ipsecState xl2tpdState redsocksState panelState nginxState fail2 backendListener publicListener panelListener internalListener dns iport ike natt l2tp
   local accountingTimerState accountingServiceState accountingDbReady accountingHealthy hbOk hbEpoch nowEpoch createdAtUtc createdEpoch installGrace
+  local dataplane_snapshot
   sshState="$(systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null || echo inactive)"
   ipsecState="$(systemctl is-active ipsec 2>/dev/null || systemctl is-active strongswan-starter 2>/dev/null || echo inactive)"
   xl2tpdState="$(systemctl is-active xl2tpd 2>/dev/null || echo inactive)"
@@ -975,12 +1175,16 @@ status_cmd(){
   if [[ "$accountingHealthy" != "true" && "$accountingTimerState" == "active" && "$accountingDbReady" == "true" && "$installGrace" == "true" ]]; then
     accountingHealthy=true
   fi
-  printf '{"activeProtocol":"ipsec_l2tp_hwdsl2","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"inactive","ipsecState":"%s","xl2tpdState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s","ipsecAccountingTimerState":"%s","ipsecAccountingServiceState":"%s","ipsecAccountingDbReady":%s,"ipsecAccountingHealthy":%s}\n' "$sshState" "$ipsecState" "$xl2tpdState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$IPSEC_L2TP_PORT" "$PANEL_PORT" "$iport" "$backendListener" "$publicListener" "$panelListener" "$internalListener" "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy"
+  dataplane_snapshot="$(json_object_or_empty "$(ipsec_dataplane_snapshot_json 2>/dev/null || true)")"
+  printf '{"activeProtocol":"ipsec_l2tp_hwdsl2","sshState":"%s","xuiState":"inactive","singBoxState":"inactive","openVpnState":"inactive","ipsecState":"%s","xl2tpdState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"xuiPanelPort":0,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","redsocksState":"%s","ipsecAccountingTimerState":"%s","ipsecAccountingServiceState":"%s","ipsecAccountingDbReady":%s,"ipsecAccountingHealthy":%s}\n' "$sshState" "$ipsecState" "$xl2tpdState" "$panelState" "$nginxState" "$fail2" "$BACKEND_PORT" "$IPSEC_L2TP_PORT" "$PANEL_PORT" "$iport" "$backendListener" "$publicListener" "$panelListener" "$internalListener" "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$(jq -r '.dnsMode' <<<"$dns")" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$(jq -r '.dohEndpoints' <<<"$dns" | sed 's/"/\\"/g')" "$redsocksState" "$accountingTimerState" "$accountingServiceState" "$accountingDbReady" "$accountingHealthy" | jq -c --argjson dataplane "$dataplane_snapshot" '. + $dataplane'
 }
 
 health_cmd(){
-  local status healthy dnsLastError redsocksState
-  status="$(json_object_or_empty "$(status_cmd 2>/dev/null || true)")"; healthy=true
+  local status healthy dnsLastError redsocksState dataplane_eval
+  status="$(json_object_or_empty "$(status_cmd 2>/dev/null || true)")"
+  dataplane_eval="$(json_object_or_empty "$(evaluate_ipsec_dataplane_health_json true "$status" 2>/dev/null || true)")"
+  status="$(jq -c --argjson dp "$dataplane_eval" '. + $dp' <<<"$status")"
+  healthy=true
   [[ "$(jq -r '.sshState' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.ipsecState' <<<"$status")" == "active" ]] || healthy=false
   [[ "$(jq -r '.xl2tpdState' <<<"$status")" == "active" ]] || healthy=false
@@ -993,9 +1197,13 @@ health_cmd(){
   [[ "$(jq -r '.dnsPathHealthy' <<<"$status")" == "true" ]] || healthy=false
   redsocksState="$(jq -r '.redsocksState // "inactive"' <<<"$status")"; [[ "$redsocksState" == "active" ]] || healthy=false
   [[ "$(jq -r '.ipsecAccountingHealthy // false' <<<"$status")" == "true" ]] || healthy=false
+  [[ "$(jq -r '.ipsecDataplaneHealthy // true' <<<"$status")" == "true" ]] || healthy=false
   dnsLastError=""
   [[ "$(jq -r '.dnsConfigPresent' <<<"$status")" == "true" ]] || dnsLastError="dnsConfigMissing"
   [[ "$(jq -r '.dnsRuleActive' <<<"$status")" == "true" ]] || dnsLastError="dnsRuleInactive"
+  if [[ "$(jq -r '.ipsecDataplaneHealthy // true' <<<"$status")" != "true" && -z "$dnsLastError" ]]; then
+    dnsLastError="$(jq -r '.ipsecDataplaneReason // "ipsec_dataplane_unhealthy"' <<<"$status")"
+  fi
   jq -c --argjson healthy "$( [[ "$healthy" == true ]] && echo true || echo false )" --arg dnsLastError "$dnsLastError" 'del(.redsocksState) + {healthy:$healthy,dnsLastError:$dnsLastError}' <<<"$status"
 }
 

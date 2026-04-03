@@ -56,6 +56,13 @@ OPENVPN_SERVICE="omnirelay-openvpn"
 OPENVPN_REDSOCKS_SERVICE="omnirelay-redsocks"
 OPENVPN_REDSOCKS_CONFIG="${OPENVPN_DIR}/redsocks.conf"
 OPENVPN_REDSOCKS_LOCAL_PORT=12345
+OPENVPN_REDSOCKS_RLIMIT_NOFILE=65535
+OPENVPN_REDSOCKS_CONN_MAX=4096
+OPENVPN_REDSOCKS_CONNPRES_IDLE_TIMEOUT=600
+OPENVPN_REDSOCKS_MAX_ACCEPT_BACKOFF=5000
+OPENVPN_REDSOCKS_LISTENQ=4096
+OPENVPN_REDSOCKS_SATURATION_WINDOW_SEC=180
+OPENVPN_REDSOCKS_SATURATION_HIT_THRESHOLD=4
 OPENVPN_DNS_BRIDGE_SERVICE="omnirelay-openvpn-dns"
 OPENVPN_DNS_BRIDGE_CONFIG="${OPENVPN_DIR}/dns-bridge.json"
 OPENVPN_DNS_BRIDGE_SCRIPT="${OPENVPN_DIR}/dns-bridge.py"
@@ -160,15 +167,28 @@ count_redsocks_backend_established(){
   normalize_uint "$count"
 }
 
+count_redsocks_connmax_events_recent(){
+  local now since_epoch count
+  now="$(date +%s)"
+  since_epoch=$(( now - OPENVPN_REDSOCKS_SATURATION_WINDOW_SEC ))
+  (( since_epoch < 0 )) && since_epoch=0
+  count="$(journalctl -u "$OPENVPN_REDSOCKS_SERVICE" --since "@${since_epoch}" --no-pager -o cat 2>/dev/null | grep -c 'reached redsocks_conn_max limit' || true)"
+  normalize_uint "$count"
+}
+
 openvpn_dataplane_snapshot_json(){
-  local clients tcp_redirect redsocks_established healthy reason
+  local clients tcp_redirect redsocks_established saturation_events healthy reason
   clients="$(count_openvpn_connected_clients)"
   tcp_redirect="$(get_openvpn_redirect_tcp_packets)"
   redsocks_established="$(count_redsocks_backend_established)"
+  saturation_events="$(count_redsocks_connmax_events_recent)"
 
   healthy=true
   reason="ok"
-  if (( clients > 0 )) && (( redsocks_established <= 0 )); then
+  if (( saturation_events >= OPENVPN_REDSOCKS_SATURATION_HIT_THRESHOLD )) && (( clients > 0 )); then
+    healthy=false
+    reason="redsocks_conn_saturated"
+  elif (( clients > 0 )) && (( redsocks_established <= 0 )); then
     healthy=false
     reason="redsocks_backend_no_established_sessions"
   fi
@@ -177,12 +197,14 @@ openvpn_dataplane_snapshot_json(){
     --argjson clients "$clients" \
     --argjson tcpRedirect "$tcp_redirect" \
     --argjson redsocksEstablished "$redsocks_established" \
+    --argjson redsocksConnMaxEventsRecent "$saturation_events" \
     --argjson healthy "$healthy" \
     --arg reason "$reason" \
     '{
       openVpnConnectedClients:$clients,
       openVpnRedirectTcpPackets:$tcpRedirect,
       openVpnRedsocksBackendEstablished:$redsocksEstablished,
+      openVpnRedsocksConnMaxEventsRecent:$redsocksConnMaxEventsRecent,
       openVpnDataplaneHealthy:$healthy,
       openVpnDataplaneReason:$reason
     }'
@@ -191,9 +213,9 @@ openvpn_dataplane_snapshot_json(){
 evaluate_openvpn_dataplane_health_json(){
   local allow_recover="${1:-false}" status_json="${2:-}"
   local now prev_redirect prev_fail prev_recover
-  local clients tcp_redirect redsocks_established
+  local clients tcp_redirect redsocks_established saturation_events
   local openvpn_state redsocks_state backend_listener socks_upstream_type
-  local delta healthy reason fail_count auto_recovered cooldown_sec
+  local delta healthy reason fail_count auto_recovered cooldown_sec recover_threshold
 
   [[ -n "$status_json" ]] || status_json="$(status_cmd)"
   now="$(date +%s)"
@@ -212,6 +234,7 @@ evaluate_openvpn_dataplane_health_json(){
   clients="$(jq -r '.openVpnConnectedClients // 0' <<<"$status_json")"
   tcp_redirect="$(jq -r '.openVpnRedirectTcpPackets // 0' <<<"$status_json")"
   redsocks_established="$(jq -r '.openVpnRedsocksBackendEstablished // 0' <<<"$status_json")"
+  saturation_events="$(jq -r '.openVpnRedsocksConnMaxEventsRecent // 0' <<<"$status_json")"
   openvpn_state="$(jq -r '.openVpnState // "inactive"' <<<"$status_json")"
   redsocks_state="$(jq -r '.redsocksState // "inactive"' <<<"$status_json")"
   backend_listener="$(jq -r '.backendListener // false' <<<"$status_json")"
@@ -220,6 +243,7 @@ evaluate_openvpn_dataplane_health_json(){
   clients="$(normalize_uint "$clients")"
   tcp_redirect="$(normalize_uint "$tcp_redirect")"
   redsocks_established="$(normalize_uint "$redsocks_established")"
+  saturation_events="$(normalize_uint "$saturation_events")"
 
   delta=$(( tcp_redirect - prev_redirect ))
   (( delta < 0 )) && delta=0
@@ -228,15 +252,21 @@ evaluate_openvpn_dataplane_health_json(){
   reason="ok"
   auto_recovered=false
   cooldown_sec=300
+  recover_threshold=3
 
-  if (( clients <= 0 )); then
-    fail_count=0
-    healthy=true
-    reason="no_connected_clients"
-  elif [[ "$openvpn_state" != "active" || "$redsocks_state" != "active" || "$backend_listener" != "true" ]]; then
+  if [[ "$openvpn_state" != "active" || "$redsocks_state" != "active" || "$backend_listener" != "true" ]]; then
     fail_count=$(( prev_fail + 1 ))
     healthy=false
     reason="service_stack_not_ready"
+  elif (( saturation_events >= OPENVPN_REDSOCKS_SATURATION_HIT_THRESHOLD )) && (( clients > 0 || delta >= 8 )); then
+    fail_count=$(( prev_fail + 1 ))
+    healthy=false
+    reason="redsocks_conn_saturated"
+    recover_threshold=1
+  elif (( clients <= 0 )); then
+    fail_count=0
+    healthy=true
+    reason="no_connected_clients"
   elif [[ "$socks_upstream_type" == "http-connect" ]]; then
     # HTTP CONNECT backends are short-lived/stateless from redsocks perspective;
     # established-session counting is not a stable dataplane health signal here.
@@ -256,12 +286,16 @@ evaluate_openvpn_dataplane_health_json(){
     reason="no_recent_client_traffic"
   fi
 
-  if [[ "$allow_recover" == "true" && "$healthy" != "true" && "$reason" == "redsocks_dataplane_stalled" ]]; then
-    if (( fail_count >= 3 )) && (( now - prev_recover >= cooldown_sec )); then
+  if [[ "$allow_recover" == "true" && "$healthy" != "true" && ( "$reason" == "redsocks_dataplane_stalled" || "$reason" == "redsocks_conn_saturated" ) ]]; then
+    if (( fail_count >= recover_threshold )) && (( now - prev_recover >= cooldown_sec )); then
       if systemctl restart "$OPENVPN_REDSOCKS_SERVICE" >/dev/null 2>&1; then
         auto_recovered=true
         prev_recover="$now"
-        reason="redsocks_dataplane_auto_recovered"
+        if [[ "$reason" == "redsocks_conn_saturated" ]]; then
+          reason="redsocks_conn_saturated_auto_recovered"
+        else
+          reason="redsocks_dataplane_auto_recovered"
+        fi
         healthy=true
         fail_count=0
       fi
@@ -1328,10 +1362,15 @@ base {
   log_info = on;
   daemon = off;
   redirector = iptables;
+  rlimit_nofile = ${OPENVPN_REDSOCKS_RLIMIT_NOFILE};
+  redsocks_conn_max = ${OPENVPN_REDSOCKS_CONN_MAX};
+  connpres_idle_timeout = ${OPENVPN_REDSOCKS_CONNPRES_IDLE_TIMEOUT};
+  max_accept_backoff = ${OPENVPN_REDSOCKS_MAX_ACCEPT_BACKOFF};
 }
 redsocks {
   local_ip = 0.0.0.0;
   local_port = ${OPENVPN_REDSOCKS_LOCAL_PORT};
+  listenq = ${OPENVPN_REDSOCKS_LISTENQ};
   ip = 127.0.0.1;
   port = ${OPENVPN_SOCKS_UPSTREAM_PORT};
   type = ${OPENVPN_UPSTREAM_TYPE};
@@ -1360,6 +1399,7 @@ Wants=network-online.target
 Type=simple
 ExecStartPre=/usr/bin/env bash -c 'if command -v fuser >/dev/null 2>&1; then fuser -k ${OPENVPN_REDSOCKS_LOCAL_PORT}/tcp >/dev/null 2>&1 || true; fi'
 ExecStart=${redsocks_bin} -c ${OPENVPN_REDSOCKS_CONFIG}
+LimitNOFILE=${OPENVPN_REDSOCKS_RLIMIT_NOFILE}
 Restart=always
 RestartSec=2
 KillMode=control-group
