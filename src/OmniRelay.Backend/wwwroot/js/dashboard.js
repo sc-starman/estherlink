@@ -55,12 +55,21 @@
   const redirectCoupon = document.getElementById('payment-redirect-coupon');
   const redirectGoNowButton = document.getElementById('payment-redirect-go-now');
   const redirectCloseButton = document.getElementById('payment-redirect-close');
+  const waitingModal = document.getElementById('payment-waiting-modal');
+  const waitingStatus = document.getElementById('payment-waiting-status');
+  const waitingAmount = document.getElementById('payment-waiting-amount');
+  const waitingCoupon = document.getElementById('payment-waiting-coupon');
+  const waitingCheckButton = document.getElementById('payment-waiting-check');
+  const waitingCloseButton = document.getElementById('payment-waiting-close');
+  const waitingCloseIconButton = document.getElementById('payment-waiting-close-icon');
   let redirectTimerId = null;
   let redirectIntervalId = null;
   let redirectTargetUrl = '';
   let remainingSeconds = 10;
   let appliedCouponCode = null;
   let appliedDiscountPercent = null;
+  let pendingOrderId = '';
+  let pendingStatusPolling = false;
 
   const formatMoney = (value) => {
     const parsed = Number(value);
@@ -175,13 +184,128 @@
     }
   };
 
+  const closeWaitingModal = () => {
+    if (waitingModal) {
+      waitingModal.classList.add('hidden');
+    }
+    pendingOrderId = '';
+  };
+
+  const setWaitingStatusText = (text, level) => {
+    if (!waitingStatus) {
+      return;
+    }
+
+    waitingStatus.textContent = text || '';
+    waitingStatus.classList.remove('text-cyan-300', 'text-emerald-300', 'text-red-300');
+    waitingStatus.classList.add(
+      level === 'success'
+        ? 'text-emerald-300'
+        : level === 'error'
+          ? 'text-red-300'
+          : 'text-cyan-300'
+    );
+  };
+
+  const updateInlineOrderMessage = (orderId, message) => {
+    if (!orderId || !message) {
+      return;
+    }
+
+    const target = document.getElementById(`order-${orderId}`);
+    if (target) {
+      target.textContent = message;
+    }
+  };
+
+  const refreshPendingOrderStatus = async (quiet) => {
+    if (!pendingOrderId || pendingStatusPolling) {
+      return;
+    }
+
+    pendingStatusPolling = true;
+    setWaitingStatusText(t('checkout.waitingChecking', 'Checking payment status...'), 'pending');
+
+    try {
+      const response = await fetch(`/app/api/checkout/${pendingOrderId}/status?refresh=true`);
+      if (!response.ok) {
+        if (!quiet) {
+          setWaitingStatusText(t('checkout.statusCheckFailed', 'Unable to check payment status right now.'), 'error');
+        }
+        return;
+      }
+
+      const payload = await response.json();
+      if (payload.isPaid) {
+        const paidText = payload.licenseKey
+          ? formatTemplate(
+              t('order.paidIssued', 'Paid. License issued: {licenseKey}'),
+              { licenseKey: payload.licenseKey }
+            )
+          : t('checkout.paymentCompleted', 'Payment confirmed.');
+
+        setWaitingStatusText(paidText, 'success');
+        updateInlineOrderMessage(pendingOrderId, paidText);
+        if (checkoutResult) {
+          checkoutResult.textContent = paidText;
+        }
+        pendingOrderId = '';
+        return;
+      }
+
+      const pendingText = formatTemplate(
+        t('checkout.paymentStillPending', 'Payment still pending ({orderStatus} / {intentStatus}).'),
+        {
+          orderStatus: payload.orderStatus ?? '-',
+          intentStatus: payload.intentStatus ?? '-'
+        }
+      );
+
+      setWaitingStatusText(pendingText, 'pending');
+      updateInlineOrderMessage(pendingOrderId, pendingText);
+      if (checkoutResult) {
+        checkoutResult.textContent = pendingText;
+      }
+    } catch {
+      if (!quiet) {
+        setWaitingStatusText(t('checkout.statusCheckFailed', 'Unable to check payment status right now.'), 'error');
+      }
+    } finally {
+      pendingStatusPolling = false;
+    }
+  };
+
   const redirectNow = () => {
     if (!redirectTargetUrl) {
       return;
     }
+
     const url = redirectTargetUrl;
+    const popup = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!popup) {
+      if (checkoutResult) {
+        checkoutResult.textContent = t('checkout.popupBlocked', 'Unable to open payment tab. Please allow pop-ups and click Go Now again.');
+      }
+      return;
+    }
+
     closeRedirectModal();
-    window.location.href = url;
+
+    if (waitingModal) {
+      waitingModal.classList.remove('hidden');
+    }
+
+    setWaitingStatusText(t('checkout.waitingForPayment', 'Waiting for payment confirmation...'), 'pending');
+    if (checkoutResult) {
+      checkoutResult.textContent = t('checkout.paymentTabOpened', 'Payment tab opened. Complete payment and return to this tab.');
+    }
+
+    if (waitingAmount && redirectAmount) {
+      waitingAmount.textContent = redirectAmount.textContent || '$0.00';
+    }
+    if (waitingCoupon && redirectCoupon) {
+      waitingCoupon.textContent = redirectCoupon.textContent || t('checkout.summary.none', 'none');
+    }
   };
 
   if (redirectCloseButton) {
@@ -205,9 +329,63 @@
   }
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && redirectModal && !redirectModal.classList.contains('hidden')) {
+    if (event.key !== 'Escape') {
+      return;
+    }
+
+    if (redirectModal && !redirectModal.classList.contains('hidden')) {
       closeRedirectModal();
     }
+
+    if (waitingModal && !waitingModal.classList.contains('hidden')) {
+      closeWaitingModal();
+    }
+  });
+
+  if (waitingCloseButton) {
+    waitingCloseButton.addEventListener('click', () => {
+      closeWaitingModal();
+    });
+  }
+
+  if (waitingCloseIconButton) {
+    waitingCloseIconButton.addEventListener('click', () => {
+      closeWaitingModal();
+    });
+  }
+
+  if (waitingCheckButton) {
+    waitingCheckButton.addEventListener('click', async () => {
+      await refreshPendingOrderStatus(false);
+    });
+  }
+
+  if (waitingModal) {
+    waitingModal.addEventListener('click', (event) => {
+      if (event.target === waitingModal) {
+        closeWaitingModal();
+      }
+    });
+  }
+
+  window.addEventListener('focus', async () => {
+    if (!pendingOrderId || !waitingModal || waitingModal.classList.contains('hidden')) {
+      return;
+    }
+
+    await refreshPendingOrderStatus(true);
+  });
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible') {
+      return;
+    }
+
+    if (!pendingOrderId || !waitingModal || waitingModal.classList.contains('hidden')) {
+      return;
+    }
+
+    await refreshPendingOrderStatus(true);
   });
 
   if (couponApplyButton) {
@@ -256,6 +434,7 @@
         }
 
         redirectTargetUrl = `https://gate.paykrypt.io/pay/${encodeURIComponent(intentId)}`;
+        pendingOrderId = payload.orderId || '';
         remainingSeconds = 10;
 
         if (redirectAmount) {

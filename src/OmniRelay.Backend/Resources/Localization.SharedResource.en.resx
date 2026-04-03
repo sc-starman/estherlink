@@ -1530,4 +1530,40 @@
   <data name="Layout.Language.Russian" xml:space="preserve">
     <value>Russian</value>
   </data>
+  <data name="Billing.WaitingModal.Title" xml:space="preserve">
+    <value>Waiting for payment</value>
+  </data>
+  <data name="Billing.WaitingModal.Body" xml:space="preserve">
+    <value>The payment page was opened in a new tab. Complete payment there, then return to this tab.</value>
+  </data>
+  <data name="Billing.WaitingModal.StatusLabel" xml:space="preserve">
+    <value>Status:</value>
+  </data>
+  <data name="Billing.WaitingModal.StatusWaiting" xml:space="preserve">
+    <value>Waiting for payment confirmation...</value>
+  </data>
+  <data name="Billing.WaitingModal.CheckNow" xml:space="preserve">
+    <value>Check Now</value>
+  </data>
+  <data name="Js.Checkout.PopupBlocked" xml:space="preserve">
+    <value>Unable to open payment tab. Please allow pop-ups and click Go Now again.</value>
+  </data>
+  <data name="Js.Checkout.PaymentTabOpened" xml:space="preserve">
+    <value>Payment tab opened. Complete payment and return to this tab.</value>
+  </data>
+  <data name="Js.Checkout.WaitingForPayment" xml:space="preserve">
+    <value>Waiting for payment confirmation...</value>
+  </data>
+  <data name="Js.Checkout.WaitingChecking" xml:space="preserve">
+    <value>Checking payment status...</value>
+  </data>
+  <data name="Js.Checkout.PaymentCompleted" xml:space="preserve">
+    <value>Payment confirmed.</value>
+  </data>
+  <data name="Js.Checkout.PaymentStillPending" xml:space="preserve">
+    <value>Payment still pending ({orderStatus} / {intentStatus}).</value>
+  </data>
+  <data name="Js.Checkout.StatusCheckFailed" xml:space="preserve">
+    <value>Unable to check payment status right now.</value>
+  </data>
 </root>

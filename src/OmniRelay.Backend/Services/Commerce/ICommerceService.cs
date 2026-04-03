@@ -24,6 +24,7 @@ public interface ICommerceService
     Task<CreateCheckoutResult> CreateCheckoutIntentAsync(Guid userId, string userEmail, string? couponCode, CancellationToken cancellationToken);
     Task<OrderStatusResult?> GetOrderStatusAsync(Guid userId, Guid orderId, bool refreshFromProvider, CancellationToken cancellationToken);
     Task<WebhookProcessResult> ProcessWebhookAsync(string payload, string? externalEventId, CancellationToken cancellationToken);
+    Task<int> ReconcilePendingPaymentsAsync(CancellationToken cancellationToken);
 }
 
 public sealed record TrialResult(bool Success, string Message, string? LicenseKey = null, DateTimeOffset? ExpiresAt = null);

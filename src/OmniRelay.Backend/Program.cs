@@ -197,6 +197,7 @@ builder.Services.AddScoped<SecurityBootstrapper>();
 builder.Services.AddScoped<LicenseResponseSigner>();
 builder.Services.AddScoped<IPayKryptClient, PayKryptClient>();
 builder.Services.AddScoped<ICommerceService, CommerceService>();
+builder.Services.AddHostedService<PendingPaymentReconcileWorker>();
 builder.Services.AddScoped<ILicenseIssuanceService, LicenseIssuanceService>();
 builder.Services.AddScoped<ITrialPolicyService, TrialPolicyService>();
 builder.Services.AddScoped<IDownloadCatalogService, DownloadCatalogService>();

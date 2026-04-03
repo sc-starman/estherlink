@@ -16,6 +16,7 @@ public sealed class CommerceService : ICommerceService
         WriteIndented = false
     };
     private const string CheckoutCurrency = "USD";
+    private static readonly string[] TerminalOrderStatuses = ["paid", "failed", "cancelled", "expired", "refunded"];
 
     private readonly AppDbContext _dbContext;
     private readonly IPayKryptClient _payKryptClient;
@@ -310,6 +311,36 @@ public sealed class CommerceService : ICommerceService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         return new WebhookProcessResult(true, reconciled ? "Webhook processed." : "Webhook accepted but no matching intent.");
+    }
+
+    public async Task<int> ReconcilePendingPaymentsAsync(CancellationToken cancellationToken)
+    {
+        var pendingIntentIds = await _dbContext.CommerceOrders
+            .AsNoTracking()
+            .Where(order => !TerminalOrderStatuses.Contains(order.Status))
+            .Select(order => order.PayKryptIntents
+                .OrderByDescending(intent => intent.CreatedAt)
+                .Select(intent => intent.PayKryptIntentId)
+                .FirstOrDefault())
+            .Where(intentId => !string.IsNullOrWhiteSpace(intentId))
+            .Take(250)
+            .ToListAsync(cancellationToken);
+
+        if (pendingIntentIds.Count == 0)
+        {
+            return 0;
+        }
+
+        var processed = 0;
+        foreach (var intentId in pendingIntentIds.Distinct(StringComparer.Ordinal))
+        {
+            if (await ReconcileIntentAsync(intentId!, cancellationToken))
+            {
+                processed += 1;
+            }
+        }
+
+        return processed;
     }
 
     private async Task<bool> ReconcileIntentAsync(string intentId, CancellationToken cancellationToken)

@@ -1530,4 +1530,40 @@
   <data name="Layout.Language.Russian" xml:space="preserve">
     <value>Русский</value>
   </data>
+  <data name="Billing.WaitingModal.Title" xml:space="preserve">
+    <value>Ожидание оплаты</value>
+  </data>
+  <data name="Billing.WaitingModal.Body" xml:space="preserve">
+    <value>Страница оплаты открыта в новой вкладке. Завершите оплату там и вернитесь в эту вкладку.</value>
+  </data>
+  <data name="Billing.WaitingModal.StatusLabel" xml:space="preserve">
+    <value>Статус:</value>
+  </data>
+  <data name="Billing.WaitingModal.StatusWaiting" xml:space="preserve">
+    <value>Ожидание подтверждения оплаты...</value>
+  </data>
+  <data name="Billing.WaitingModal.CheckNow" xml:space="preserve">
+    <value>Проверить сейчас</value>
+  </data>
+  <data name="Js.Checkout.PopupBlocked" xml:space="preserve">
+    <value>Не удалось открыть вкладку оплаты. Разрешите всплывающие окна и нажмите «Перейти сейчас» снова.</value>
+  </data>
+  <data name="Js.Checkout.PaymentTabOpened" xml:space="preserve">
+    <value>Вкладка оплаты открыта. Завершите оплату и вернитесь в эту вкладку.</value>
+  </data>
+  <data name="Js.Checkout.WaitingForPayment" xml:space="preserve">
+    <value>Ожидание подтверждения оплаты...</value>
+  </data>
+  <data name="Js.Checkout.WaitingChecking" xml:space="preserve">
+    <value>Проверка статуса оплаты...</value>
+  </data>
+  <data name="Js.Checkout.PaymentCompleted" xml:space="preserve">
+    <value>Оплата подтверждена.</value>
+  </data>
+  <data name="Js.Checkout.PaymentStillPending" xml:space="preserve">
+    <value>Оплата все еще ожидается ({orderStatus} / {intentStatus}).</value>
+  </data>
+  <data name="Js.Checkout.StatusCheckFailed" xml:space="preserve">
+    <value>Сейчас не удалось проверить статус оплаты.</value>
+  </data>
 </root>
