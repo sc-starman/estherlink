@@ -20,6 +20,8 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     private static readonly TimeSpan RemoteProbeTimeout = TimeSpan.FromSeconds(35);
     private static readonly TimeSpan TunnelFlapWindow = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan TunnelRecentExitPenalty = TimeSpan.FromSeconds(25);
+    private static readonly TimeSpan AdapterMissingRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SchedulerSkewClamp = TimeSpan.FromMinutes(2);
 
     private const int Tier1FailureThreshold = 1;
     private const int Tier2FailureThreshold = 3;
@@ -94,6 +96,8 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             {
                 var config = _runtime.GetConfigSnapshot();
                 UpdateAdapterStatus(config);
+                var now = DateTimeOffset.UtcNow;
+                NormalizeScheduledTimes(now);
                 if (string.Equals(GatewayTypes.Normalize(config.GatewayType), GatewayTypes.Local, StringComparison.OrdinalIgnoreCase))
                 {
                     if (_process is not null || _bootstrapSocksListening || _runtime.GetStatusSnapshot().ProxyRunning)
@@ -150,7 +154,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                 }
 
                 var probeCycleExecuted = false;
-                var now = DateTimeOffset.UtcNow;
                 if (now >= _nextLocalProbeAtUtc)
                 {
                     _nextLocalProbeAtUtc = now.Add(LocalProbeInterval + TimeSpan.FromMilliseconds(Random.Shared.Next(50, 450)));
@@ -440,6 +443,15 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     {
         if (DateTimeOffset.UtcNow < _nextRecoveryAllowedAtUtc)
         {
+            return;
+        }
+
+        if (string.Equals(_healthReasonCode, "ic1_adapter_missing_ipv4", StringComparison.OrdinalIgnoreCase))
+        {
+            _currentRecoveryTier = 0;
+            _tunnelState = "Degraded";
+            _recoveryAction = "awaiting_ic1_ipv4";
+            _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(AdapterMissingRetryDelay);
             return;
         }
 
@@ -959,6 +971,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         {
             _lastTunnelError = $"IC1 adapter IfIndex={config.WhitelistAdapterIfIndex} has no usable IPv4 address.";
             _healthReasonCode = "ic1_adapter_missing_ipv4";
+            _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(AdapterMissingRetryDelay);
             RecordEvent("warn", _lastTunnelError);
             return;
         }
@@ -1137,6 +1150,31 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         NetworkAdapterCatalog.TryGetPrimaryIpv4(config.WhitelistAdapterIfIndex, out var whitelistIp);
         NetworkAdapterCatalog.TryGetPrimaryIpv4(config.DefaultAdapterIfIndex, out var defaultIp);
         _runtime.SetAdapterIps(whitelistIp?.ToString(), defaultIp?.ToString());
+    }
+
+    private void NormalizeScheduledTimes(DateTimeOffset now)
+    {
+        if (_nextRecoveryAllowedAtUtc - now > SchedulerSkewClamp)
+        {
+            _nextRecoveryAllowedAtUtc = now;
+            RecordEvent("warn", "clock_shift_detected_reset_recovery_window");
+            _fileLog.Warn("Detected large clock shift; reset tunnel recovery cooldown window.");
+        }
+
+        if (_nextLocalProbeAtUtc - now > SchedulerSkewClamp)
+        {
+            _nextLocalProbeAtUtc = now;
+        }
+
+        if (_nextEndToEndProbeAtUtc - now > SchedulerSkewClamp)
+        {
+            _nextEndToEndProbeAtUtc = now;
+        }
+
+        if (_nextLicenseCheckAtUtc - now > SchedulerSkewClamp)
+        {
+            _nextLicenseCheckAtUtc = now;
+        }
     }
 
     private static async Task<bool> IsLoopbackTcpListeningAsync(int port, CancellationToken cancellationToken)
