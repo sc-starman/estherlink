@@ -67,13 +67,13 @@ internal static class SshCliStartInfoFactory
 
         if (config.WhitelistAdapterIfIndex <= 0)
         {
-            error = "VPS Network (IC1) adapter is not selected.";
+            error = "Incoming Network (IC1) adapter is not selected.";
             return false;
         }
 
         if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(config.WhitelistAdapterIfIndex, out var ip) || ip is null || IPAddress.IsLoopback(ip))
         {
-            error = $"VPS Network (IC1) adapter has no usable IPv4 address (IfIndex={config.WhitelistAdapterIfIndex}).";
+            error = $"Incoming Network (IC1) adapter has no usable IPv4 address (IfIndex={config.WhitelistAdapterIfIndex}).";
             return false;
         }
 

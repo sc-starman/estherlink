@@ -6,7 +6,7 @@ Traffic flow:
 - External client connects to VPS public TCP port (for example `443`).
 - VPS forwards TCP stream through reverse tunnel to Windows local proxy listener.
 - Windows service parses CONNECT and chooses egress adapter:
-  - Whitelisted destination -> IC1 (`VPS Network` adapter).
+  - Whitelisted destination -> IC1 (`Incoming VPS Network` adapter).
   - Non-whitelisted -> IC2 (`Outgoing Network` adapter).
 
 ## Projects
@@ -161,7 +161,7 @@ dotnet run --project src/OmniRelay.UI
 ```
 
 In UI:
-1. Select `VPS Network (IC1)` and `Outgoing Network (IC2)` adapters.
+1. Select `Incoming VPS Network (IC1)` and `Outgoing Network (IC2)` adapters.
 2. Configure Relay page (proxy port + IC1/IC2 adapters) and apply relay config.
 3. Configure Gateway page (tunnel/auth + bootstrap socks + gateway ports) and apply gateway config.
 4. Update whitelist and verify license.

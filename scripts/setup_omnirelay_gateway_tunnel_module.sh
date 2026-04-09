@@ -111,6 +111,16 @@ backend_listener_up() {
   ss -lnt "( sport = :${BACKEND_PORT} )" 2>/dev/null | awk 'NR>1 {print}' | grep -q .
 }
 
+backend_listener_holder_line() {
+  ss -lntp "( sport = :${BACKEND_PORT} )" 2>/dev/null | awk 'NR>1 {print; exit}'
+}
+
+backend_listener_is_sshd() {
+  local holder_line="${1:-}"
+  [[ -n "$holder_line" ]] || return 1
+  grep -q 'users:(("sshd"' <<<"$holder_line"
+}
+
 detect_backend_protocol() {
   if ! command -v python3 >/dev/null 2>&1; then
     echo "missing-python3"
@@ -265,28 +275,44 @@ status_cmd() {
 remediate_cmd() {
   require_root
 
-  local now action reason ok
+  local now action reason ok holder_line destructive_allowed
   now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   ok=true
   reason="ok"
   action="none"
+  destructive_allowed=true
+  holder_line="$(backend_listener_holder_line || true)"
 
-  if command -v fuser >/dev/null 2>&1; then
-    if fuser -k "${BACKEND_PORT}/tcp" >/dev/null 2>&1; then
-      action="killed_port_holder"
+  # Port 15000 is expected to be owned by reverse-tunnel sshd children.
+  # Killing sshd here causes listener flapping and self-inflicted outages.
+  if backend_listener_is_sshd "$holder_line"; then
+    destructive_allowed=false
+    reason="skipped_sshd_holder"
+    action="sshd_holder_detected_no_kill"
+  fi
+
+  if [[ "$destructive_allowed" == "true" ]]; then
+    if command -v fuser >/dev/null 2>&1; then
+      if fuser -k "${BACKEND_PORT}/tcp" >/dev/null 2>&1; then
+        action="killed_port_holder"
+      else
+        action="no_port_holder"
+      fi
     else
-      action="no_port_holder"
+      action="fuser_unavailable"
     fi
-  else
-    action="fuser_unavailable"
   fi
 
   if [[ "$REMEDIATE_LEVEL" == "hard" ]]; then
     # Hard mode also clears TIME_WAIT/ESTAB sessions tied to backend if supported.
-    if command -v ss >/dev/null 2>&1; then
+    if [[ "$destructive_allowed" == "true" ]] && command -v ss >/dev/null 2>&1; then
       ss -K dport = "$BACKEND_PORT" >/dev/null 2>&1 || true
+    elif [[ "$destructive_allowed" != "true" ]]; then
+      action="${action},hard_socket_reset_skipped"
     fi
-    action="${action},hard_socket_reset"
+    if [[ "$destructive_allowed" == "true" ]]; then
+      action="${action},hard_socket_reset"
+    fi
   fi
 
   if [[ "$OUTPUT_JSON" == "true" ]]; then

@@ -1210,7 +1210,7 @@ public sealed class GatewayOrchestratorService
     {
         if (!SshCliStartInfoFactory.TryResolveIc1BindIp(config, out var bindIp, out var bindError))
         {
-            return (false, bindError ?? "VPS Network (IC1) adapter has no usable IPv4 address.");
+            return (false, bindError ?? "Incoming Network (IC1) adapter has no usable IPv4 address.");
         }
 
         try

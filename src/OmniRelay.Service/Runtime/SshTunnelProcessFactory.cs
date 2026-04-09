@@ -183,19 +183,19 @@ internal static class SshTunnelProcessFactory
 
         if (config.WhitelistAdapterIfIndex <= 0)
         {
-            error = "VPS network adapter is not selected.";
+            error = "Incoming network adapter is not selected.";
             return false;
         }
 
         if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(config.WhitelistAdapterIfIndex, out var ip) || ip is null)
         {
-            error = $"VPS network adapter IfIndex {config.WhitelistAdapterIfIndex} has no usable IPv4 address.";
+            error = $"Incoming network adapter IfIndex {config.WhitelistAdapterIfIndex} has no usable IPv4 address.";
             return false;
         }
 
         if (IPAddress.IsLoopback(ip))
         {
-            error = "VPS network adapter cannot be a loopback interface.";
+            error = "Incoming network adapter cannot be a loopback interface.";
             return false;
         }
 

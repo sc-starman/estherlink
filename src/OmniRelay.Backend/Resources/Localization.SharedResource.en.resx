@@ -277,7 +277,7 @@
     <value>Attempt ID</value>
   </data>
   <data name="Docs.StartRelay.2" xml:space="preserve">
-    <value>Set Proxy Listen Port, VPS Network (IC1), and Outgoing Network (IC2).</value>
+    <value>Set Proxy Listen Port, Incoming Network (IC1), and Outgoing Network (IC2).</value>
   </data>
   <data name="Admin.Table.Plan" xml:space="preserve">
     <value>Plan</value>
@@ -541,7 +541,7 @@
     <value>Base</value>
   </data>
   <data name="Docs.RelayConfig.Row2.Field" xml:space="preserve">
-    <value>VPS Network (IC1)</value>
+    <value>Incoming Network (IC1)</value>
   </data>
   <data name="Licenses.Table.Plan" xml:space="preserve">
     <value>Plan</value>
