@@ -391,34 +391,56 @@ remediate_tunnel_backend_listener(){
   return 0
 }
 
-select_openvpn_socks_upstream(){
-  local level holder
-  OPENVPN_SOCKS_UPSTREAM_PORT="$BACKEND_PORT"
-  OPENVPN_UPSTREAM_TYPE="socks5"
+detect_openvpn_backend_mode(){
   if socks_endpoint_healthy "$BACKEND_PORT"; then
-    OPENVPN_UPSTREAM_TYPE="socks5"
+    echo "socks5"
     return 0
   fi
   if http_connect_endpoint_healthy "$BACKEND_PORT"; then
-    OPENVPN_UPSTREAM_TYPE="http-connect"
-    log "Runtime backend 127.0.0.1:${BACKEND_PORT} is HTTP CONNECT proxy (not SOCKS5); using redsocks type=http-connect."
+    echo "http-connect"
+    return 0
+  fi
+  return 1
+}
+
+select_openvpn_socks_upstream(){
+  local level holder mode attempt max_attempts
+  OPENVPN_SOCKS_UPSTREAM_PORT="$BACKEND_PORT"
+  OPENVPN_UPSTREAM_TYPE="socks5"
+
+  mode="$(detect_openvpn_backend_mode || true)"
+  if [[ "$mode" == "socks5" || "$mode" == "http-connect" ]]; then
+    OPENVPN_UPSTREAM_TYPE="$mode"
+    if [[ "$mode" == "http-connect" ]]; then
+      log "Runtime backend 127.0.0.1:${BACKEND_PORT} is HTTP CONNECT proxy (not SOCKS5); using redsocks type=http-connect."
+    fi
     return 0
   fi
 
-  for level in soft hard; do
-    if remediate_tunnel_backend_listener "$level"; then
-      log "Backend 127.0.0.1:${BACKEND_PORT} probe failed; ran tunnelctl remediate level=${level} and retrying."
-      sleep 1
-      if socks_endpoint_healthy "$BACKEND_PORT"; then
-        OPENVPN_UPSTREAM_TYPE="socks5"
-        return 0
+  max_attempts=24
+  for attempt in $(seq 1 "$max_attempts"); do
+    if (( attempt == 1 || attempt % 3 == 1 )); then
+      level="soft"
+      if (( attempt > (max_attempts / 2) )); then
+        level="hard"
       fi
-      if http_connect_endpoint_healthy "$BACKEND_PORT"; then
-        OPENVPN_UPSTREAM_TYPE="http-connect"
-        log "Runtime backend 127.0.0.1:${BACKEND_PORT} recovered as HTTP CONNECT proxy; using redsocks type=http-connect."
-        return 0
+      if remediate_tunnel_backend_listener "$level"; then
+        log "Backend 127.0.0.1:${BACKEND_PORT} unavailable; ran tunnelctl remediate level=${level} (attempt ${attempt}/${max_attempts})."
       fi
     fi
+
+    mode="$(detect_openvpn_backend_mode || true)"
+    if [[ "$mode" == "socks5" || "$mode" == "http-connect" ]]; then
+      OPENVPN_UPSTREAM_TYPE="$mode"
+      if [[ "$mode" == "http-connect" ]]; then
+        log "Runtime backend 127.0.0.1:${BACKEND_PORT} recovered as HTTP CONNECT proxy; using redsocks type=http-connect."
+      else
+        log "Runtime backend 127.0.0.1:${BACKEND_PORT} recovered as SOCKS5 upstream."
+      fi
+      return 0
+    fi
+
+    sleep 2
   done
 
   holder="$(ss -lntp "( sport = :${BACKEND_PORT} )" 2>/dev/null | awk 'NR>1 {print; exit}' || true)"

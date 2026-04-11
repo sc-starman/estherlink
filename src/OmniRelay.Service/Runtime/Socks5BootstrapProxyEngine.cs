@@ -109,6 +109,14 @@ public sealed class Socks5BootstrapProxyEngine
             {
                 break;
             }
+            catch (SocketException ex) when (
+                ex.SocketErrorCode == SocketError.ConnectionReset ||
+                ex.SocketErrorCode == SocketError.OperationAborted ||
+                ex.SocketErrorCode == SocketError.Interrupted)
+            {
+                // Transient listener socket interruptions can happen during abrupt client churn.
+                continue;
+            }
             catch (Exception ex)
             {
                 _runtime.SetError(ex.Message);
@@ -140,7 +148,11 @@ public sealed class Socks5BootstrapProxyEngine
 
             using var outboundSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             outboundSocket.Bind(new IPEndPoint(bindIp, 0));
-            await outboundSocket.ConnectAsync(new IPEndPoint(destinationIp, target.Port), connectionCts.Token);
+            using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(connectionCts.Token))
+            {
+                connectCts.CancelAfter(TimeSpan.FromSeconds(10));
+                await outboundSocket.ConnectAsync(new IPEndPoint(destinationIp, target.Port), connectCts.Token);
+            }
             var localEndpoint = (IPEndPoint?)outboundSocket.LocalEndPoint;
             await SendReplyAsync(stream, 0x00, localEndpoint?.Address ?? IPAddress.Any, localEndpoint?.Port ?? 0, connectionCts.Token);
 

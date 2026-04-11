@@ -7,6 +7,7 @@ using Chaos.NaCl;
 using OmniRelay.Backend.Contracts.Licensing;
 using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Licensing;
+using OmniRelay.Core.Networking;
 using Microsoft.Win32;
 
 namespace OmniRelay.Service.Runtime;
@@ -21,8 +22,8 @@ public sealed class LicenseValidator
     };
 
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("OmniRelay.LicenseCache.v2");
-    private static readonly HttpClient DirectHttpClient = CreateDirectHttpClient();
-    private static readonly HttpClient ProxyHttpClient = CreateProxyAwareHttpClient();
+    private static readonly TimeSpan HttpConnectTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan HttpRequestTimeout = TimeSpan.FromSeconds(45);
     private static readonly SemaphoreSlim ValidationLock = new(1, 1);
     private static int _diagnosticLogged;
     private readonly ILogger<LicenseValidator> _logger;
@@ -47,7 +48,7 @@ public sealed class LicenseValidator
         {
             if (Interlocked.Exchange(ref _diagnosticLogged, 1) == 0)
             {
-                _fileLog.Info("License validator HTTP mode: direct+proxy fallback, per-attempt timeout=45s, connect-timeout=30s.");
+                _fileLog.Info("License validator HTTP mode: direct IC1/IC2 then proxy-aware IC1/IC2, per-attempt timeout=45s, connect-timeout=30s.");
             }
 
             var now = DateTimeOffset.UtcNow;
@@ -103,7 +104,7 @@ public sealed class LicenseValidator
 
                 var verifyRequestJson = JsonSerializer.Serialize(verifyRequest, JsonOptions);
 
-                var verifyAttempt = await SendVerifyWithFallbackAsync(verifyUrl, verifyRequestJson, cancellationToken);
+                var verifyAttempt = await SendVerifyWithFallbackAsync(config, verifyUrl, verifyRequestJson, cancellationToken);
                 if (!verifyAttempt.Success)
                 {
                     return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, verifyAttempt.Error ?? "License verification failed.");
@@ -132,7 +133,7 @@ public sealed class LicenseValidator
                     return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, "Unsupported license signature algorithm.");
                 }
 
-                var keysResponse = await FetchPublicKeysWithFallbackAsync(verifyUrl, cancellationToken);
+                var keysResponse = await FetchPublicKeysWithFallbackAsync(config, verifyUrl, cancellationToken);
                 if (keysResponse is not null)
                 {
                     publicKeys = keysResponse;
@@ -290,10 +291,11 @@ public sealed class LicenseValidator
     }
 
     private static async Task<LicensePublicKeysResponse?> FetchPublicKeysAsync(
-        HttpClient client,
+        NetworkAttempt attempt,
         string verifyUrl,
         CancellationToken cancellationToken)
     {
+        using var client = CreateHttpClient(attempt.UseProxy, attempt.BindIp);
         var keysUrl = BuildPublicKeysUrl(verifyUrl);
         using var response = await client.GetAsync(keysUrl, cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -305,28 +307,37 @@ public sealed class LicenseValidator
         return JsonSerializer.Deserialize<LicensePublicKeysResponse>(json, JsonOptions);
     }
 
-    private async Task<VerifyAttempt> SendVerifyWithFallbackAsync(string verifyUrl, string requestJson, CancellationToken cancellationToken)
+    private async Task<VerifyAttempt> SendVerifyWithFallbackAsync(
+        ServiceConfig config,
+        string verifyUrl,
+        string requestJson,
+        CancellationToken cancellationToken)
     {
-        var direct = await SendVerifyAsync(DirectHttpClient, verifyUrl, requestJson, cancellationToken);
-        if (direct.Success)
+        var attempts = BuildAttempts(config);
+        if (attempts.Count == 0)
         {
-            return direct;
+            return new VerifyAttempt(false, null, null, "No usable IC1/IC2 source adapter IPv4 found for license verification.");
         }
 
-        _fileLog.Warn($"License direct verification attempt failed: {direct.Error}");
-
-        var proxy = await SendVerifyAsync(ProxyHttpClient, verifyUrl, requestJson, cancellationToken);
-        if (proxy.Success)
+        var errors = new List<string>();
+        foreach (var attempt in attempts)
         {
-            return proxy;
+            var result = await SendVerifyAsync(attempt, verifyUrl, requestJson, cancellationToken);
+            if (result.Success)
+            {
+                return result;
+            }
+
+            var error = result.Error ?? "unknown error";
+            errors.Add($"{attempt.DisplayName}: {error}");
+            _fileLog.Warn($"License {attempt.DisplayName} verification attempt failed: {error}");
         }
 
-        _fileLog.Warn($"License proxy verification attempt failed: {proxy.Error}");
-        return new VerifyAttempt(false, null, null, $"Direct+Proxy verify failed. direct={direct.Error}; proxy={proxy.Error}");
+        return new VerifyAttempt(false, null, null, $"All 4 license verify paths failed. {string.Join(" | ", errors)}");
     }
 
     private static async Task<VerifyAttempt> SendVerifyAsync(
-        HttpClient client,
+        NetworkAttempt attempt,
         string verifyUrl,
         string requestJson,
         CancellationToken cancellationToken)
@@ -334,6 +345,7 @@ public sealed class LicenseValidator
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
+            using var client = CreateHttpClient(attempt.UseProxy, attempt.BindIp);
             using var request = new HttpRequestMessage(HttpMethod.Post, verifyUrl)
             {
                 Content = new StringContent(requestJson, Encoding.UTF8, "application/json")
@@ -357,31 +369,36 @@ public sealed class LicenseValidator
     }
 
     private async Task<LicensePublicKeysResponse?> FetchPublicKeysWithFallbackAsync(
+        ServiceConfig config,
         string verifyUrl,
         CancellationToken cancellationToken)
     {
-        try
+        var attempts = BuildAttempts(config);
+        if (attempts.Count == 0)
         {
-            var direct = await FetchPublicKeysAsync(DirectHttpClient, verifyUrl, cancellationToken);
-            if (direct is not null)
-            {
-                return direct;
-            }
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
-        {
-            _fileLog.Warn($"Public keys direct fetch failed: {ex.Message}");
-        }
-
-        try
-        {
-            return await FetchPublicKeysAsync(ProxyHttpClient, verifyUrl, cancellationToken);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
-        {
-            _fileLog.Warn($"Public keys proxy fetch failed: {ex.Message}");
+            _fileLog.Warn("Public keys fetch skipped: no usable IC1/IC2 source adapter IPv4 found.");
             return null;
         }
+
+        foreach (var attempt in attempts)
+        {
+            try
+            {
+                var response = await FetchPublicKeysAsync(attempt, verifyUrl, cancellationToken);
+                if (response is not null)
+                {
+                    return response;
+                }
+
+                _fileLog.Warn($"Public keys fetch returned non-success status via {attempt.DisplayName}.");
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+            {
+                _fileLog.Warn($"Public keys fetch failed via {attempt.DisplayName}: {ex.Message}");
+            }
+        }
+
+        return null;
     }
 
     private static bool VerifyResponseSignature(
@@ -614,36 +631,20 @@ public sealed class LicenseValidator
         await File.WriteAllBytesAsync(ServicePaths.LicensePublicKeysCachePath, protectedBytes, cancellationToken);
     }
 
-    private static HttpClient CreateDirectHttpClient()
+    private static HttpClient CreateHttpClient(bool useProxy, IPAddress bindIp)
     {
         var handler = new SocketsHttpHandler
         {
-            UseProxy = false,
-            ConnectTimeout = TimeSpan.FromSeconds(30),
+            UseProxy = useProxy,
+            Proxy = useProxy ? WebRequest.DefaultWebProxy : null,
+            ConnectTimeout = HttpConnectTimeout,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            ConnectCallback = ConnectWithIpv4PreferenceAsync
+            ConnectCallback = (context, cancellationToken) => ConnectWithIpv4PreferenceAsync(context, bindIp, cancellationToken)
         };
 
         return new HttpClient(handler)
         {
-            Timeout = TimeSpan.FromSeconds(45)
-        };
-    }
-
-    private static HttpClient CreateProxyAwareHttpClient()
-    {
-        var handler = new SocketsHttpHandler
-        {
-            UseProxy = true,
-            Proxy = WebRequest.DefaultWebProxy,
-            ConnectTimeout = TimeSpan.FromSeconds(30),
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            ConnectCallback = ConnectWithIpv4PreferenceAsync
-        };
-
-        return new HttpClient(handler)
-        {
-            Timeout = TimeSpan.FromSeconds(45)
+            Timeout = HttpRequestTimeout
         };
     }
 
@@ -651,6 +652,7 @@ public sealed class LicenseValidator
 
     private static async ValueTask<Stream> ConnectWithIpv4PreferenceAsync(
         SocketsHttpConnectionContext context,
+        IPAddress bindIp,
         CancellationToken cancellationToken)
     {
         var host = context.DnsEndPoint.Host;
@@ -664,6 +666,11 @@ public sealed class LicenseValidator
         Exception? lastError = null;
         foreach (var address in addresses.OrderBy(a => a.AddressFamily == AddressFamily.InterNetwork ? 0 : 1))
         {
+            if (address.AddressFamily != bindIp.AddressFamily)
+            {
+                continue;
+            }
+
             var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
             {
                 NoDelay = true
@@ -671,6 +678,7 @@ public sealed class LicenseValidator
 
             try
             {
+                socket.Bind(new IPEndPoint(bindIp, 0));
                 await socket.ConnectAsync(address, port, cancellationToken);
                 return new NetworkStream(socket, ownsSocket: true);
             }
@@ -685,6 +693,52 @@ public sealed class LicenseValidator
             }
         }
 
-        throw new HttpRequestException($"Unable to connect to {host}:{port}.", lastError);
+        throw new HttpRequestException($"Unable to connect to {host}:{port} from source {bindIp}.", lastError);
+    }
+
+    private static List<NetworkAttempt> BuildAttempts(ServiceConfig config)
+    {
+        var adapters = new List<AdapterBindTarget>(capacity: 2);
+        AddAdapter(adapters, "IC1", config.WhitelistAdapterIfIndex);
+        AddAdapter(adapters, "IC2", config.DefaultAdapterIfIndex);
+
+        var attempts = new List<NetworkAttempt>(capacity: 4);
+        foreach (var adapter in adapters)
+        {
+            attempts.Add(new NetworkAttempt("Direct", UseProxy: false, adapter.BindIp, $"{adapter.Label} ifIndex={adapter.IfIndex} source={adapter.BindIp}"));
+        }
+
+        foreach (var adapter in adapters)
+        {
+            attempts.Add(new NetworkAttempt("Proxy-aware", UseProxy: true, adapter.BindIp, $"{adapter.Label} ifIndex={adapter.IfIndex} source={adapter.BindIp}"));
+        }
+
+        return attempts;
+    }
+
+    private static void AddAdapter(List<AdapterBindTarget> adapters, string label, int ifIndex)
+    {
+        if (ifIndex <= 0)
+        {
+            return;
+        }
+
+        if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(ifIndex, out var bindIp) || bindIp is null)
+        {
+            return;
+        }
+
+        if (adapters.Any(x => x.IfIndex == ifIndex))
+        {
+            return;
+        }
+
+        adapters.Add(new AdapterBindTarget(label, ifIndex, bindIp));
+    }
+
+    private sealed record AdapterBindTarget(string Label, int IfIndex, IPAddress BindIp);
+    private sealed record NetworkAttempt(string Mode, bool UseProxy, IPAddress BindIp, string AdapterLabel)
+    {
+        public string DisplayName => $"{Mode} {AdapterLabel}";
     }
 }

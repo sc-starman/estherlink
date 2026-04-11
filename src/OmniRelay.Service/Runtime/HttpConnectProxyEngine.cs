@@ -113,6 +113,14 @@ public sealed class HttpConnectProxyEngine
             {
                 break;
             }
+            catch (SocketException ex) when (
+                ex.SocketErrorCode == SocketError.ConnectionReset ||
+                ex.SocketErrorCode == SocketError.OperationAborted ||
+                ex.SocketErrorCode == SocketError.Interrupted)
+            {
+                // Transient listener socket interruptions can happen during abrupt client churn.
+                continue;
+            }
             catch (Exception ex)
             {
                 _runtime.SetError(ex.Message);
@@ -156,7 +164,11 @@ public sealed class HttpConnectProxyEngine
 
             using var outboundSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             outboundSocket.Bind(new IPEndPoint(bindIp, 0));
-            await outboundSocket.ConnectAsync(new IPEndPoint(destinationIp, request.Port), connectionCts.Token);
+            using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(connectionCts.Token))
+            {
+                connectCts.CancelAfter(TimeSpan.FromSeconds(10));
+                await outboundSocket.ConnectAsync(new IPEndPoint(destinationIp, request.Port), connectCts.Token);
+            }
 
             using var outboundStream = new NetworkStream(outboundSocket, ownsSocket: true);
             await stream.WriteAsync("HTTP/1.1 200 Connection Established\r\n\r\n"u8.ToArray(), connectionCts.Token);
@@ -179,6 +191,35 @@ public sealed class HttpConnectProxyEngine
                 invalidOp.Message.Contains("Client closed before sending request.", StringComparison.OrdinalIgnoreCase))
             {
                 // Expected for health checks that only open+close the local proxy socket.
+                return;
+            }
+
+            if (ex is InvalidOperationException unsupportedMethod &&
+                unsupportedMethod.Message.Contains("Only HTTP CONNECT is supported.", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await SendHttpErrorAsync(stream, 405, "Method Not Allowed");
+                }
+                catch
+                {
+                }
+
+                return;
+            }
+
+            if (ex is InvalidOperationException badRequest &&
+                (badRequest.Message.Contains("Invalid HTTP request.", StringComparison.OrdinalIgnoreCase) ||
+                 badRequest.Message.Contains("CONNECT target is invalid.", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    await SendHttpErrorAsync(stream, 400, "Bad Request");
+                }
+                catch
+                {
+                }
+
                 return;
             }
 
@@ -338,6 +379,13 @@ public sealed class HttpConnectProxyEngine
 
         if (request.Port != 443)
         {
+            if (request.Port == 9 &&
+                (request.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+                 request.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
             return false;
         }
 

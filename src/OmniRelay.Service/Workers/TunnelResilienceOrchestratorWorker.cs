@@ -646,14 +646,14 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             return (false, "unknown", "backend_listener_down");
         }
 
-        if (await ProbeSocks5EndpointAsync(port, cancellationToken))
-        {
-            return (true, "socks5", string.Empty);
-        }
-
         if (await ProbeHttpConnectEndpointAsync(port, cancellationToken))
         {
             return (true, "http-connect", string.Empty);
+        }
+
+        if (await ProbeSocks5EndpointAsync(port, cancellationToken))
+        {
+            return (true, "socks5", string.Empty);
         }
 
         return (false, "unknown", "backend_protocol_unknown");
@@ -691,7 +691,8 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port, timeoutCts.Token);
             using var stream = client.GetStream();
-            const string request = "CONNECT 1.1.1.1:443 HTTP/1.1\r\nHost: 1.1.1.1:443\r\n\r\n";
+            // Use method/protocol validation only, independent from egress reachability.
+            const string request = "GET / HTTP/1.1\r\nHost: omnirelay-probe.local\r\n\r\n";
             var requestBytes = System.Text.Encoding.ASCII.GetBytes(request);
             await stream.WriteAsync(requestBytes, timeoutCts.Token);
 
@@ -986,14 +987,51 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             _fileLog.Warn(routeResult.Message);
         }
 
-        var (probeOk, probeError) = await ProbeSshReachabilityFromIc1Async(bindIp, config.TunnelHost, config.TunnelSshPort, cancellationToken);
-        if (!probeOk)
+        if (_sshSourceBindEnabled)
         {
-            _lastTunnelError = $"IC1 source {bindIp} cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {probeError}";
-            _healthReasonCode = "ssh_reachability_failed";
-            RecordEvent("warn", _lastTunnelError);
-            _fileLog.Warn(_lastTunnelError);
-            return;
+            var (boundProbeOk, boundProbeError) = await ProbeSshReachabilityFromIc1Async(
+                bindIp,
+                config.TunnelHost,
+                config.TunnelSshPort,
+                cancellationToken);
+
+            if (!boundProbeOk)
+            {
+                if (IsSshSourceBindFailure(boundProbeError))
+                {
+                    _sshSourceBindEnabled = false;
+                    _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow;
+                    var bindFailureMessage =
+                        $"IC1 bound reachability probe failed from {bindIp} to {config.TunnelHost}:{config.TunnelSshPort} ({boundProbeError}); switching to route-only mode.";
+                    _fileLog.Warn(bindFailureMessage);
+                    RecordEvent("warn", "ssh reachability source-bind failed; falling back to route-only connect");
+                }
+                else
+                {
+                    _lastTunnelError = $"IC1 source {bindIp} cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {boundProbeError}";
+                    _healthReasonCode = "ssh_reachability_failed";
+                    RecordEvent("warn", _lastTunnelError);
+                    _fileLog.Warn(_lastTunnelError);
+                    return;
+                }
+            }
+        }
+
+        if (!_sshSourceBindEnabled)
+        {
+            var (routeProbeOk, routeProbeError) = await ProbeSshReachabilityRouteOnlyAsync(
+                config.TunnelHost,
+                config.TunnelSshPort,
+                cancellationToken);
+
+            if (!routeProbeOk)
+            {
+                _lastTunnelError = $"Route-only probe cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {routeProbeError}";
+                _healthReasonCode = "ssh_reachability_failed";
+                RecordEvent("warn", _lastTunnelError);
+                _fileLog.Warn(_lastTunnelError);
+                return;
+            }
         }
 
         _fileLog.Info(
@@ -1514,6 +1552,25 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         {
             using var client = new TcpClient();
             client.Client.Bind(new IPEndPoint(sourceIp, 0));
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(8));
+            await client.ConnectAsync(tunnelHost, tunnelPort, cts.Token);
+            return (true, string.Empty);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    private static async Task<(bool Success, string Error)> ProbeSshReachabilityRouteOnlyAsync(
+        string tunnelHost,
+        int tunnelPort,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = new TcpClient();
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(8));
             await client.ConnectAsync(tunnelHost, tunnelPort, cts.Token);

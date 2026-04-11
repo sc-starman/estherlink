@@ -573,31 +573,52 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             "raise SystemExit(44)\n" +
             "PY";
 
+        void ReportLine(string line)
+        {
+            var clean = SanitizeTerminalLine(line);
+            if (string.IsNullOrWhiteSpace(clean))
+            {
+                return;
+            }
+
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 0,
+                Message = $"[vps] {clean}"
+            });
+        }
+
         var probeResult = await ExecuteCommandAsync(
             request.Config,
             command,
             sudoPassword,
-            line =>
-            {
-                var clean = SanitizeTerminalLine(line);
-                if (string.IsNullOrWhiteSpace(clean))
-                {
-                    return;
-                }
-
-                progress?.Report(new DeploymentProgressSnapshot
-                {
-                    Phase = DeploymentPhases.GatewayInstall,
-                    Percent = 0,
-                    Message = $"[vps] {clean}"
-                });
-            },
+            ReportLine,
             cancellationToken);
 
         if (!probeResult.Success)
         {
-            throw new InvalidOperationException(
-                $"Runtime tunnel backend preflight failed on 127.0.0.1:{backendPort}. {probeResult.ErrorMessage}");
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 4,
+                Message = $"Runtime backend probe failed; trying tunnel remediation (127.0.0.1:{backendPort})"
+            });
+
+            var recoveryResult = await TryRecoverRuntimeSocksBackendForInstallAsync(
+                request,
+                sudoPassword,
+                backendPort,
+                command,
+                ReportLine,
+                progress,
+                cancellationToken);
+
+            if (!recoveryResult.Success)
+            {
+                throw new InvalidOperationException(
+                    $"Runtime tunnel backend preflight failed on 127.0.0.1:{backendPort}. Initial error: {probeResult.ErrorMessage}. Recovery error: {recoveryResult.ErrorMessage}");
+            }
         }
 
         progress?.Report(new DeploymentProgressSnapshot
@@ -606,6 +627,93 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             Percent = 4,
             Message = $"Runtime tunnel backend check passed (127.0.0.1:{backendPort})"
         });
+    }
+
+    private async Task<CommandExecutionResult> TryRecoverRuntimeSocksBackendForInstallAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        int backendPort,
+        string probeCommand,
+        Action<string>? onLine,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var tunnelCtlQuoted = ShellQuote(TunnelCtlPath);
+        var levels = new[] { "soft", "hard" };
+        CommandExecutionResult? lastProbeResult = null;
+        CommandExecutionResult? lastRemediateResult = null;
+
+        foreach (var level in levels)
+        {
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 4,
+                Message = $"Running tunnel remediation ({level}) for backend 127.0.0.1:{backendPort}"
+            });
+
+            var remediateCommand =
+                "set -euo pipefail; " +
+                $"[ -x {tunnelCtlQuoted} ] || {{ echo 'tunnelctl is missing on VPS.'; exit 45; }}; " +
+                $"{tunnelCtlQuoted} remediate --level {ShellQuote(level)} --backend-host 127.0.0.1 --backend-port {backendPort} --json || true; " +
+                $"{tunnelCtlQuoted} probe --backend-host 127.0.0.1 --backend-port {backendPort} --json || true";
+
+            lastRemediateResult = await ExecuteCommandAsync(
+                request.Config,
+                remediateCommand,
+                sudoPassword,
+                onLine,
+                cancellationToken);
+
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+
+            lastProbeResult = await ExecuteCommandAsync(
+                request.Config,
+                probeCommand,
+                sudoPassword,
+                onLine,
+                cancellationToken);
+
+            if (lastProbeResult.Success)
+            {
+                return lastProbeResult;
+            }
+        }
+
+        for (var attempt = 1; attempt <= 8; attempt++)
+        {
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 4,
+                Message = $"Waiting for runtime backend recovery (attempt {attempt}/8)"
+            });
+
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            lastProbeResult = await ExecuteCommandAsync(
+                request.Config,
+                probeCommand,
+                sudoPassword,
+                onLine,
+                cancellationToken);
+            if (lastProbeResult.Success)
+            {
+                return lastProbeResult;
+            }
+        }
+
+        var error = lastProbeResult?.ErrorMessage;
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            error = lastRemediateResult?.ErrorMessage;
+        }
+
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            error = "Runtime backend recovery attempts did not restore 127.0.0.1 listener.";
+        }
+
+        return new CommandExecutionResult(false, lastProbeResult?.Output ?? string.Empty, error);
     }
 
     private async Task<(bool GatewayCtlPresent, bool ProtocolDetermined, string? CurrentProtocol)> DetectCurrentGatewayProtocolAsync(

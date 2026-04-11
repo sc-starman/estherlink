@@ -149,7 +149,7 @@ def probe_http_connect():
     try:
         s = socket.create_connection((host, port), timeout=4)
         s.settimeout(4)
-        s.sendall(b"CONNECT 1.1.1.1:443 HTTP/1.1\r\nHost: 1.1.1.1:443\r\n\r\n")
+        s.sendall(b"GET / HTTP/1.1\r\nHost: omnirelay-probe.local\r\n\r\n")
         data = s.recv(32)
         s.close()
         return data.startswith(b"HTTP/1.")
