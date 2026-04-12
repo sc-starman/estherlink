@@ -116,6 +116,7 @@ public sealed class GatewayOrchestratorService
             _state.LocalGatewayProtocol = LocalGatewayProtocols.Normalize(localProfile.LocalGatewayProtocol);
             _state.LocalGatewayPortText = NormalizeOrDefault(localProfile.LocalGatewayPortText, "443");
             _state.LocalGatewayBindAddress = NormalizeOrDefault(localProfile.LocalGatewayBindAddress, "0.0.0.0");
+            _state.LocalGatewayRemoteAddress = NormalizeOrDefault(localProfile.LocalGatewayRemoteAddress, string.Empty);
             _state.LocalGatewayRemark = NormalizeOrDefault(localProfile.LocalGatewayRemark, "OmniRelay Local Gateway");
             _state.LocalGatewayRuntimeEnabled = localProfile.LocalGatewayRuntimeEnabled;
 
@@ -196,12 +197,6 @@ public sealed class GatewayOrchestratorService
         {
             var config = BuildConfig(requireTunnelAuthSecrets: false);
             config.GatewayType = GatewayTypes.Local;
-            var localResponse = await _gatewayClient.ApplyLocalGatewayConfigAsync(config.LocalGateway, cancellationToken);
-            if (localResponse?.Success != true)
-            {
-                return SetAction(false, $"Local gateway apply failed: {localResponse?.Error ?? "service unavailable"}");
-            }
-
             var response = await _gatewayClient.SetConfigAsync(config, cancellationToken);
             if (response?.Success != true)
             {
@@ -217,7 +212,7 @@ public sealed class GatewayOrchestratorService
         }
     }
 
-    public async Task<OperationResult> StartLocalGatewayAsync(CancellationToken cancellationToken = default)
+    public async Task<OperationResult> StartLocalGatewayAsync(Action<string>? progress = null, CancellationToken cancellationToken = default)
     {
         var response = await _gatewayClient.StartLocalGatewayAsync(cancellationToken);
         if (response?.Success != true)
@@ -225,8 +220,13 @@ public sealed class GatewayOrchestratorService
             return SetAction(false, $"Local gateway start failed: {response?.Error ?? "service unavailable"}");
         }
 
-        await RefreshStatusAsync(cancellationToken);
-        return SetAction(true, "Local gateway start requested.");
+        if (!IsOpenVpnLocalProtocolSelected())
+        {
+            await RefreshStatusAsync(cancellationToken);
+            return SetAction(true, "Local gateway start requested.");
+        }
+
+        return await WaitForLocalGatewayActivationAsync("start", progress, cancellationToken);
     }
 
     public async Task<OperationResult> StopLocalGatewayAsync(CancellationToken cancellationToken = default)
@@ -241,7 +241,7 @@ public sealed class GatewayOrchestratorService
         return SetAction(true, "Local gateway stop requested.");
     }
 
-    public async Task<OperationResult> RestartLocalGatewayAsync(CancellationToken cancellationToken = default)
+    public async Task<OperationResult> RestartLocalGatewayAsync(Action<string>? progress = null, CancellationToken cancellationToken = default)
     {
         var response = await _gatewayClient.RestartLocalGatewayAsync(cancellationToken);
         if (response?.Success != true)
@@ -249,8 +249,13 @@ public sealed class GatewayOrchestratorService
             return SetAction(false, $"Local gateway restart failed: {response?.Error ?? "service unavailable"}");
         }
 
-        await RefreshStatusAsync(cancellationToken);
-        return SetAction(true, "Local gateway restart requested.");
+        if (!IsOpenVpnLocalProtocolSelected())
+        {
+            await RefreshStatusAsync(cancellationToken);
+            return SetAction(true, "Local gateway restart requested.");
+        }
+
+        return await WaitForLocalGatewayActivationAsync("restart", progress, cancellationToken);
     }
 
     public async Task<LocalGatewayClientsResult> GetLocalGatewayClientsAsync(CancellationToken cancellationToken = default)
@@ -316,7 +321,7 @@ public sealed class GatewayOrchestratorService
         {
             var message = $"Build config failed: {response?.Error ?? "service unavailable"}";
             SetAction(false, message);
-            return new LocalGatewayClientConfigBuildResult(false, message, string.Empty, string.Empty);
+            return new LocalGatewayClientConfigBuildResult(false, message, "uri", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
         }
 
         var payload = IpcJson.Deserialize<LocalGatewayClientConfigResponse>(response.JsonPayload);
@@ -324,11 +329,20 @@ public sealed class GatewayOrchestratorService
         {
             const string invalid = "Build config failed: invalid response payload.";
             SetAction(false, invalid);
-            return new LocalGatewayClientConfigBuildResult(false, invalid, string.Empty, string.Empty);
+            return new LocalGatewayClientConfigBuildResult(false, invalid, "uri", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
         }
 
         SetAction(true, "Client config generated.");
-        return new LocalGatewayClientConfigBuildResult(true, "Client config generated.", payload.Uri, payload.Title);
+        return new LocalGatewayClientConfigBuildResult(
+            true,
+            "Client config generated.",
+            string.IsNullOrWhiteSpace(payload.Mode) ? "uri" : payload.Mode,
+            payload.Uri ?? string.Empty,
+            payload.Title ?? string.Empty,
+            payload.Username ?? string.Empty,
+            payload.Password ?? string.Empty,
+            payload.OvpnFileName ?? string.Empty,
+            payload.OvpnContent ?? string.Empty);
     }
 
     private async Task<OperationResult> ApplyConfigInternalAsync(bool requireTunnelAuthSecrets, CancellationToken cancellationToken = default)
@@ -862,6 +876,13 @@ public sealed class GatewayOrchestratorService
         {
             throw new InvalidOperationException("Local gateway bind address must be 0.0.0.0 or a valid IP address.");
         }
+        var localRemoteAddress = string.IsNullOrWhiteSpace(_state.LocalGatewayRemoteAddress)
+            ? string.Empty
+            : _state.LocalGatewayRemoteAddress.Trim();
+        if (!string.IsNullOrWhiteSpace(localRemoteAddress) && Uri.CheckHostName(localRemoteAddress) == UriHostNameType.Unknown)
+        {
+            throw new InvalidOperationException("Local gateway remote address must be empty, a hostname, or an IP address.");
+        }
 
         return new ServiceConfig
         {
@@ -886,6 +907,7 @@ public sealed class GatewayOrchestratorService
                 Protocol = LocalGatewayProtocols.Normalize(_state.LocalGatewayProtocol),
                 Port = localPort,
                 BindAddress = localBind,
+                RemoteAddress = localRemoteAddress,
                 Remark = string.IsNullOrWhiteSpace(_state.LocalGatewayRemark)
                     ? "OmniRelay Local Gateway"
                     : _state.LocalGatewayRemark.Trim(),
@@ -972,6 +994,7 @@ public sealed class GatewayOrchestratorService
             LocalGatewayProtocol = _state.LocalGatewayProtocol,
             LocalGatewayPortText = _state.LocalGatewayPortText,
             LocalGatewayBindAddress = _state.LocalGatewayBindAddress,
+            LocalGatewayRemoteAddress = _state.LocalGatewayRemoteAddress,
             LocalGatewayRemark = _state.LocalGatewayRemark,
             LocalGatewayRuntimeEnabled = _state.LocalGatewayRuntimeEnabled,
             EncryptedLicenseKey = GatewayStatePersistenceService.Protect(_state.LicenseKey)
@@ -1089,10 +1112,102 @@ public sealed class GatewayOrchestratorService
             LocalGatewayProtocol = LocalGatewayProtocols.VlessTcpPlain,
             LocalGatewayPortText = "443",
             LocalGatewayBindAddress = "0.0.0.0",
+            LocalGatewayRemoteAddress = string.Empty,
             LocalGatewayRemark = "OmniRelay Local Gateway",
             LocalGatewayRuntimeEnabled = true,
             EncryptedLicenseKey = state.EncryptedLicenseKey
         };
+    }
+
+    private bool IsOpenVpnLocalProtocolSelected()
+    {
+        var protocol = LocalGatewayProtocols.Normalize(_state.LocalGatewayProtocol);
+        return string.Equals(protocol, LocalGatewayProtocols.OpenVpnTcp, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<OperationResult> WaitForLocalGatewayActivationAsync(
+        string operation,
+        Action<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(180));
+        var token = timeoutCts.Token;
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var response = await _gatewayClient.GetStatusAsync(token);
+                if (response?.Success == true)
+                {
+                    var payload = IpcJson.Deserialize<StatusResponse>(response.JsonPayload);
+                    var status = payload?.Status;
+                    if (status is not null)
+                    {
+                        _state.Status = status;
+                        _state.GatewayType = GatewayTypes.Normalize(status.GatewayType);
+
+                        var phase = BuildLocalGatewayPhaseMessage(status);
+                        progress?.Invoke(phase);
+
+                        if (string.Equals(status.LocalGatewayState, "active", StringComparison.OrdinalIgnoreCase))
+                        {
+                            await RefreshStatusAsync(cancellationToken);
+                            return SetAction(true, $"Local gateway {operation} completed.");
+                        }
+
+                        if (string.Equals(status.LocalGatewayState, "unhealthy", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(status.LocalGatewayState, "unsupported", StringComparison.OrdinalIgnoreCase))
+                        {
+                            await RefreshStatusAsync(cancellationToken);
+                            var reason = string.IsNullOrWhiteSpace(status.LocalGatewayHealthReason)
+                                ? "unknown reason"
+                                : status.LocalGatewayHealthReason!;
+                            return SetAction(false, $"Local gateway {operation} failed: {reason}");
+                        }
+                    }
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(1), token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Timeout branch below.
+        }
+
+        await RefreshStatusAsync(cancellationToken);
+        return SetAction(false, $"Local gateway {operation} timed out after 180 seconds.");
+    }
+
+    private static string BuildLocalGatewayPhaseMessage(GatewayStatus status)
+    {
+        if (string.Equals(status.LocalGatewayState, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Local OpenVPN runtime is active.";
+        }
+
+        if (string.Equals(status.LocalGatewayState, "activating", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(status.LocalGatewayHealthReason, "openvpn_installing", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Installing OpenVPN runtime/driver...";
+            }
+
+            if (string.Equals(status.LocalGatewayHealthReason, "openvpn_starting", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Starting OpenVPN runtime...";
+            }
+
+            return "Activating local OpenVPN runtime...";
+        }
+
+        if (string.Equals(status.LocalGatewayState, "unhealthy", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Local OpenVPN failed: {status.LocalGatewayHealthReason ?? "unknown reason"}";
+        }
+
+        return $"Local gateway state: {status.LocalGatewayState}";
     }
 
     private static string NormalizePanelSslModeOrDefault(string? value, string fallback)

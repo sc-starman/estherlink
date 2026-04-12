@@ -17,6 +17,17 @@ public static class ServicePaths
     public static string LocalGatewayXrayConfigPath { get; } = Path.Combine(LocalGatewayDirectory, "xray.config.json");
     public static string LocalGatewayXrayStdoutLogPath { get; } = Path.Combine(LocalGatewayDirectory, "xray.stdout.log");
     public static string LocalGatewayXrayStderrLogPath { get; } = Path.Combine(LocalGatewayDirectory, "xray.stderr.log");
+    public static string LocalGatewayOpenVpnDirectory { get; } = Path.Combine(LocalGatewayDirectory, "openvpn");
+    public static string LocalGatewayOpenVpnServerConfigPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "server.conf");
+    public static string LocalGatewayOpenVpnAuthFilePath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "openvpn.auth.txt");
+    public static string LocalGatewayOpenVpnAuthScriptPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "auth-verify.ps1");
+    public static string LocalGatewayOpenVpnAuthCmdPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "auth-verify.cmd");
+    public static string LocalGatewayOpenVpnCaPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "ca.crt");
+    public static string LocalGatewayOpenVpnServerCertPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "server.crt");
+    public static string LocalGatewayOpenVpnServerKeyPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "server.key");
+    public static string LocalGatewayOpenVpnTlsCryptKeyPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "ta.key");
+    public static string LocalGatewayOpenVpnStdoutLogPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "openvpn.stdout.log");
+    public static string LocalGatewayOpenVpnStderrLogPath { get; } = Path.Combine(LocalGatewayOpenVpnDirectory, "openvpn.stderr.log");
     public static string LocalGatewayFirewallRuleName { get; } = "OmniRelay Local Gateway";
 
     public static string ResolveXrayExecutablePath()
@@ -36,10 +47,58 @@ public static class ServicePaths
         return bundled;
     }
 
+    public static string ResolveOpenVpnExecutablePath()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "OpenVPN", "bin", "openvpn.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "OpenVPN", "bin", "openvpn.exe"),
+            Path.Combine(AppContext.BaseDirectory, "openvpn", "openvpn.exe"),
+            Path.Combine(AppContext.BaseDirectory, "openvpn.exe")
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return candidates[0];
+    }
+
+    public static string ResolveOpenVpnDriverInstallerPath()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "openvpn", "OpenVPNInstaller.msi"),
+            Path.Combine(AppContext.BaseDirectory, "openvpn", "OpenVPNDriverInstaller.msi"),
+            Path.Combine(AppContext.BaseDirectory, "openvpn", "OpenVPNDriverInstaller.exe")
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return candidates[0];
+    }
+
     public static void EnsureDirectories()
     {
         Directory.CreateDirectory(RootDirectory);
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(LocalGatewayDirectory);
+        Directory.CreateDirectory(LocalGatewayOpenVpnDirectory);
+    }
+
+    public static string GetLocalGatewayClientsPath(string? protocol)
+    {
+        var normalized = OmniRelay.Core.Configuration.LocalGatewayProtocols.Normalize(protocol);
+        return Path.Combine(LocalGatewayDirectory, $"clients.{normalized}.json");
     }
 }

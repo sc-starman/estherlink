@@ -4,6 +4,7 @@ public static class LocalGatewayProtocols
 {
     public const string VlessTcpPlain = "vless_local_tcp_plain";
     public const string Shadowsocks = "shadowsocks_local";
+    public const string OpenVpnTcp = "openvpn_local_tcp";
     public const string OpenVpnComingSoon = "openvpn_local_coming_soon";
 
     public static string Normalize(string? value)
@@ -16,7 +17,12 @@ public static class LocalGatewayProtocols
 
         if (string.Equals(normalized, OpenVpnComingSoon, StringComparison.OrdinalIgnoreCase))
         {
-            return OpenVpnComingSoon;
+            return OpenVpnTcp;
+        }
+
+        if (string.Equals(normalized, OpenVpnTcp, StringComparison.OrdinalIgnoreCase))
+        {
+            return OpenVpnTcp;
         }
 
         return VlessTcpPlain;
@@ -26,6 +32,7 @@ public static class LocalGatewayProtocols
     {
         var normalized = Normalize(value);
         return string.Equals(normalized, VlessTcpPlain, StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(normalized, Shadowsocks, StringComparison.OrdinalIgnoreCase);
+               string.Equals(normalized, Shadowsocks, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, OpenVpnTcp, StringComparison.OrdinalIgnoreCase);
     }
 }

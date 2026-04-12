@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Licensing;
@@ -14,6 +16,8 @@ public sealed class GatewayRuntime
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true
     };
+    private static readonly object LegacyClientsMigrationSync = new();
+    private static bool LegacyClientsMigrated;
 
     private readonly object _sync = new();
     private readonly ConfigStore _configStore;
@@ -49,7 +53,7 @@ public sealed class GatewayRuntime
         _whitelistIndex = PolicyAddressIndex.Build([]);
         _blacklistIndex = PolicyAddressIndex.Build([]);
         _status = new GatewayStatus();
-        _localGatewayClients = LoadLocalGatewayClients();
+        _localGatewayClients = LoadLocalGatewayClients(_config.LocalGateway.Protocol);
         _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
 
         var policySnapshot = _policyStore.Load();
@@ -120,6 +124,11 @@ public sealed class GatewayRuntime
             }
 
             var protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
+            var existingUsernames = _localGatewayClients
+                .Select(x => x.Username)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var created = new LocalGatewayClient
             {
                 Id = Guid.NewGuid().ToString(),
@@ -127,6 +136,7 @@ public sealed class GatewayRuntime
                 Enabled = true,
                 Remark = string.IsNullOrWhiteSpace(remark) ? normalizedEmail : remark.Trim(),
                 Protocol = protocol,
+                Username = CreateLocalGatewayUsername(normalizedEmail, existingUsernames),
                 Secret = CreateLocalGatewaySecret(protocol),
                 CreatedAtUtc = DateTimeOffset.UtcNow
             };
@@ -184,6 +194,16 @@ public sealed class GatewayRuntime
             {
                 existing.Secret = client.Secret.Trim();
             }
+            if (string.IsNullOrWhiteSpace(existing.Username))
+            {
+                var existingUsernames = _localGatewayClients
+                    .Where(x => !string.Equals(x.Id, id, StringComparison.Ordinal))
+                    .Select(x => x.Username)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                existing.Username = CreateLocalGatewayUsername(existing.Email, existingUsernames);
+            }
 
             PersistLocalGatewayClientsLocked();
             _localGatewayRestartRequested = true;
@@ -220,7 +240,7 @@ public sealed class GatewayRuntime
         }
     }
 
-    public bool TryBuildLocalGatewayClientUri(string clientId, out string uri, out string title, out string? error)
+    public bool TryBuildLocalGatewayClientConfig(string clientId, out LocalGatewayClientConfigPayload payload, out string? error)
     {
         lock (_sync)
         {
@@ -228,22 +248,12 @@ public sealed class GatewayRuntime
             var client = _localGatewayClients.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
             if (client is null)
             {
-                uri = string.Empty;
-                title = string.Empty;
+                payload = LocalGatewayClientConfigPayload.Empty;
                 error = "Client not found.";
                 return false;
             }
 
-            var host = (_status.WhitelistAdapterIp ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(host))
-            {
-                host = (_status.DefaultAdapterIp ?? string.Empty).Trim();
-            }
-
-            if (string.IsNullOrWhiteSpace(host))
-            {
-                host = "127.0.0.1";
-            }
+            var host = ResolveLocalGatewayHostLocked();
 
             var protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
             var port = _config.LocalGateway.Port;
@@ -255,15 +265,64 @@ public sealed class GatewayRuntime
                     .TrimEnd('=')
                     .Replace('+', '-')
                     .Replace('/', '_');
-                uri = $"ss://{userInfo}@{host}:{port}#{Uri.EscapeDataString(display)}";
-                title = "Shadowsocks Config";
+                payload = new LocalGatewayClientConfigPayload
+                {
+                    Mode = "uri",
+                    Uri = $"ss://{userInfo}@{host}:{port}#{Uri.EscapeDataString(display)}",
+                    Title = "Shadowsocks Config"
+                };
+                error = null;
+                return true;
+            }
+            if (string.Equals(protocol, LocalGatewayProtocols.OpenVpnTcp, StringComparison.OrdinalIgnoreCase))
+            {
+                var username = string.IsNullOrWhiteSpace(client.Username)
+                    ? CreateLocalGatewayUsername(client.Email, new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+                    : client.Username.Trim();
+                if (string.IsNullOrWhiteSpace(username))
+                {
+                    payload = LocalGatewayClientConfigPayload.Empty;
+                    error = "OpenVPN username is missing.";
+                    return false;
+                }
+
+                if (!File.Exists(ServicePaths.LocalGatewayOpenVpnCaPath))
+                {
+                    payload = LocalGatewayClientConfigPayload.Empty;
+                    error = "OpenVPN CA material was not generated yet. Start local OpenVPN runtime first.";
+                    return false;
+                }
+
+                if (!File.Exists(ServicePaths.LocalGatewayOpenVpnTlsCryptKeyPath))
+                {
+                    payload = LocalGatewayClientConfigPayload.Empty;
+                    error = "OpenVPN TLS key material was not generated yet. Start local OpenVPN runtime first.";
+                    return false;
+                }
+
+                var ovpn = BuildOpenVpnClientProfile(host, port);
+                var safeStem = ToSafeFileStem(display);
+                payload = new LocalGatewayClientConfigPayload
+                {
+                    Mode = "openvpn_bundle",
+                    Title = "OpenVPN Client Bundle",
+                    Uri = ovpn.Trim(),
+                    Username = username,
+                    Password = client.Secret,
+                    OvpnFileName = $"{safeStem}-{client.Id[..Math.Min(8, client.Id.Length)]}.ovpn",
+                    OvpnContent = ovpn
+                };
                 error = null;
                 return true;
             }
 
             var query = "type=tcp&security=none&encryption=none";
-            uri = $"vless://{client.Id}@{host}:{port}?{query}#{Uri.EscapeDataString(display)}";
-            title = "VLESS Config";
+            payload = new LocalGatewayClientConfigPayload
+            {
+                Mode = "uri",
+                Uri = $"vless://{client.Id}@{host}:{port}?{query}#{Uri.EscapeDataString(display)}",
+                Title = "VLESS Config"
+            };
             error = null;
             return true;
         }
@@ -307,13 +366,20 @@ public sealed class GatewayRuntime
         lock (_sync)
         {
             var previous = CloneConfig(_config);
+            var previousProtocol = LocalGatewayProtocols.Normalize(previous.LocalGateway.Protocol);
             _config = CloneConfig(config);
             _config.GatewayType = GatewayTypes.Normalize(_config.GatewayType);
             _config.LocalGateway.Protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
+            var currentProtocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
+            if (!string.Equals(previousProtocol, currentProtocol, StringComparison.OrdinalIgnoreCase))
+            {
+                _localGatewayClients = LoadLocalGatewayClients(currentProtocol);
+            }
             _status.ProxyListenPort = _config.LocalProxyListenPort;
             _status.GatewayType = _config.GatewayType;
             _status.LocalGatewayProtocol = _config.LocalGateway.Protocol;
             _status.LocalGatewayPort = _config.LocalGateway.Port;
+            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
             _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
 
             if (string.Equals(_config.GatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
@@ -328,8 +394,11 @@ public sealed class GatewayRuntime
                 _status.HealthReasonCode = null;
             }
 
-            _localGatewayRestartRequested = true;
-            _localGatewayRequestVersion++;
+            if (RequiresLocalGatewayRestart(previous, _config))
+            {
+                _localGatewayRestartRequested = true;
+                _localGatewayRequestVersion++;
+            }
 
             PersistLocked();
         }
@@ -375,17 +444,29 @@ public sealed class GatewayRuntime
                 error = "Bind address must be 0.0.0.0 or a valid IPv4/IPv6 address.";
                 return false;
             }
+            var remoteAddress = (config.RemoteAddress ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(remoteAddress))
+            {
+                var hostType = Uri.CheckHostName(remoteAddress);
+                if (hostType == UriHostNameType.Unknown)
+                {
+                    error = "Remote address must be empty, a hostname, or an IP address.";
+                    return false;
+                }
+            }
+
+            var previousProtocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
 
             _config.GatewayType = GatewayTypes.Local;
             _config.LocalGateway.Protocol = protocol;
             _config.LocalGateway.Port = config.Port;
             _config.LocalGateway.BindAddress = bindAddress;
+            _config.LocalGateway.RemoteAddress = remoteAddress;
             _config.LocalGateway.Remark = string.IsNullOrWhiteSpace(config.Remark) ? "OmniRelay Local Gateway" : config.Remark.Trim();
             _config.LocalGateway.RuntimeEnabled = config.RuntimeEnabled;
-
-            foreach (var client in _localGatewayClients)
+            if (!string.Equals(previousProtocol, protocol, StringComparison.OrdinalIgnoreCase))
             {
-                client.Protocol = protocol;
+                _localGatewayClients = LoadLocalGatewayClients(protocol);
             }
 
             _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
@@ -396,7 +477,6 @@ public sealed class GatewayRuntime
             _status.LocalGatewayPort = _config.LocalGateway.Port;
             _status.LocalGatewayClientsCount = _localGatewayClients.Count;
             _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
-            PersistLocalGatewayClientsLocked();
             PersistLocked();
             error = null;
             return true;
@@ -875,24 +955,148 @@ public sealed class GatewayRuntime
                 Protocol = LocalGatewayProtocols.Normalize(config.LocalGateway?.Protocol),
                 Port = config.LocalGateway?.Port is > 0 and <= 65535 ? config.LocalGateway.Port : 443,
                 BindAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.BindAddress) ? "0.0.0.0" : config.LocalGateway.BindAddress.Trim(),
+                RemoteAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.RemoteAddress) ? string.Empty : config.LocalGateway.RemoteAddress.Trim(),
                 Remark = string.IsNullOrWhiteSpace(config.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : config.LocalGateway.Remark.Trim(),
                 RuntimeEnabled = config.LocalGateway?.RuntimeEnabled ?? true
             }
         };
     }
 
-    private List<LocalGatewayClient> LoadLocalGatewayClients()
+    private static bool RequiresLocalGatewayRestart(ServiceConfig previous, ServiceConfig current)
+    {
+        var previousGatewayType = GatewayTypes.Normalize(previous.GatewayType);
+        var currentGatewayType = GatewayTypes.Normalize(current.GatewayType);
+        if (!string.Equals(previousGatewayType, currentGatewayType, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (previous.DefaultAdapterIfIndex != current.DefaultAdapterIfIndex)
+        {
+            return true;
+        }
+
+        var previousLocal = previous.LocalGateway ?? new LocalGatewayConfig();
+        var currentLocal = current.LocalGateway ?? new LocalGatewayConfig();
+        if (previousLocal.RuntimeEnabled != currentLocal.RuntimeEnabled)
+        {
+            return true;
+        }
+
+        if (!string.Equals(
+                LocalGatewayProtocols.Normalize(previousLocal.Protocol),
+                LocalGatewayProtocols.Normalize(currentLocal.Protocol),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (previousLocal.Port != currentLocal.Port)
+        {
+            return true;
+        }
+
+        if (!string.Equals(
+                (previousLocal.BindAddress ?? string.Empty).Trim(),
+                (currentLocal.BindAddress ?? string.Empty).Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.Equals(
+                (previousLocal.RemoteAddress ?? string.Empty).Trim(),
+                (currentLocal.RemoteAddress ?? string.Empty).Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private List<LocalGatewayClient> LoadLocalGatewayClients(string? protocol)
+    {
+        var normalizedProtocol = LocalGatewayProtocols.Normalize(protocol);
+        EnsureLegacyLocalClientsMigrated();
+        return LoadLocalGatewayClientsFromPath(ServicePaths.GetLocalGatewayClientsPath(normalizedProtocol), normalizedProtocol);
+    }
+
+    private static void EnsureLegacyLocalClientsMigrated()
+    {
+        lock (LegacyClientsMigrationSync)
+        {
+            if (LegacyClientsMigrated)
+            {
+                return;
+            }
+
+            LegacyClientsMigrated = true;
+            if (!File.Exists(ServicePaths.LocalGatewayClientsPath))
+            {
+                return;
+            }
+
+            try
+            {
+                var raw = File.ReadAllText(ServicePaths.LocalGatewayClientsPath);
+                var legacyClients = JsonSerializer.Deserialize<List<LocalGatewayClient>>(raw, JsonOptions) ?? [];
+                var buckets = new Dictionary<string, List<LocalGatewayClient>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var client in legacyClients)
+                {
+                    var protocol = LocalGatewayProtocols.Normalize(client.Protocol);
+                    if (!buckets.TryGetValue(protocol, out var list))
+                    {
+                        list = [];
+                        buckets[protocol] = list;
+                    }
+
+                    list.Add(client);
+                }
+
+                ServicePaths.EnsureDirectories();
+                foreach (var bucket in buckets)
+                {
+                    var path = ServicePaths.GetLocalGatewayClientsPath(bucket.Key);
+                    if (File.Exists(path))
+                    {
+                        continue;
+                    }
+
+                    var migratedRaw = JsonSerializer.Serialize(bucket.Value, JsonOptions);
+                    File.WriteAllText(path, migratedRaw);
+                }
+
+                var backupPath = $"{ServicePaths.LocalGatewayClientsPath}.migrated";
+                if (!File.Exists(backupPath))
+                {
+                    File.Move(ServicePaths.LocalGatewayClientsPath, backupPath);
+                }
+                else
+                {
+                    File.Delete(ServicePaths.LocalGatewayClientsPath);
+                }
+            }
+            catch
+            {
+                // Leave legacy file untouched; runtime can continue with current protocol defaults.
+            }
+        }
+    }
+
+    private List<LocalGatewayClient> LoadLocalGatewayClientsFromPath(string path, string normalizedProtocol)
     {
         try
         {
-            if (!File.Exists(ServicePaths.LocalGatewayClientsPath))
+            if (!File.Exists(path))
             {
                 return [];
             }
 
-            var raw = File.ReadAllText(ServicePaths.LocalGatewayClientsPath);
+            var raw = File.ReadAllText(path);
             var clients = JsonSerializer.Deserialize<List<LocalGatewayClient>>(raw, JsonOptions) ?? [];
             var normalized = new List<LocalGatewayClient>(clients.Count);
+            var usernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var client in clients)
             {
                 var id = (client.Id ?? string.Empty).Trim();
@@ -908,8 +1112,9 @@ public sealed class GatewayRuntime
                     Email = email,
                     Enabled = client.Enabled,
                     Remark = string.IsNullOrWhiteSpace(client.Remark) ? email : client.Remark.Trim(),
-                    Protocol = LocalGatewayProtocols.Normalize(client.Protocol),
-                    Secret = string.IsNullOrWhiteSpace(client.Secret) ? CreateLocalGatewaySecret(LocalGatewayProtocols.Normalize(client.Protocol)) : client.Secret.Trim(),
+                    Protocol = normalizedProtocol,
+                    Username = CreateLocalGatewayUsername(client.Username, email, usernames),
+                    Secret = string.IsNullOrWhiteSpace(client.Secret) ? CreateLocalGatewaySecret(normalizedProtocol) : client.Secret.Trim(),
                     CreatedAtUtc = client.CreatedAtUtc == default ? DateTimeOffset.UtcNow : client.CreatedAtUtc
                 });
             }
@@ -928,8 +1133,14 @@ public sealed class GatewayRuntime
         try
         {
             ServicePaths.EnsureDirectories();
+            var protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
+            foreach (var client in _localGatewayClients)
+            {
+                client.Protocol = protocol;
+            }
+
             var raw = JsonSerializer.Serialize(_localGatewayClients, JsonOptions);
-            File.WriteAllText(ServicePaths.LocalGatewayClientsPath, raw);
+            File.WriteAllText(ServicePaths.GetLocalGatewayClientsPath(protocol), raw);
         }
         catch (Exception ex)
         {
@@ -946,6 +1157,7 @@ public sealed class GatewayRuntime
             Enabled = client.Enabled,
             Remark = client.Remark,
             Protocol = client.Protocol,
+            Username = client.Username,
             Secret = client.Secret,
             CreatedAtUtc = client.CreatedAtUtc
         };
@@ -953,12 +1165,149 @@ public sealed class GatewayRuntime
 
     private static string CreateLocalGatewaySecret(string protocol)
     {
-        if (string.Equals(LocalGatewayProtocols.Normalize(protocol), LocalGatewayProtocols.Shadowsocks, StringComparison.OrdinalIgnoreCase))
+        var normalized = LocalGatewayProtocols.Normalize(protocol);
+        if (string.Equals(normalized, LocalGatewayProtocols.Shadowsocks, StringComparison.OrdinalIgnoreCase))
         {
             return Convert.ToHexString(Guid.NewGuid().ToByteArray());
         }
+        if (string.Equals(normalized, LocalGatewayProtocols.OpenVpnTcp, StringComparison.OrdinalIgnoreCase))
+        {
+            return CreateRandomAlphaNum(24);
+        }
 
         return Guid.NewGuid().ToString();
+    }
+
+    private string ResolveLocalGatewayHostLocked()
+    {
+        var host = (_config.LocalGateway.RemoteAddress ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(host))
+        {
+            return host;
+        }
+
+        host = (_status.WhitelistAdapterIp ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            host = (_status.DefaultAdapterIp ?? string.Empty).Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            host = "127.0.0.1";
+        }
+
+        return host;
+    }
+
+    private static string BuildOpenVpnClientProfile(string host, int port)
+    {
+        var caPem = File.ReadAllText(ServicePaths.LocalGatewayOpenVpnCaPath).Trim();
+        var tlsCrypt = File.ReadAllText(ServicePaths.LocalGatewayOpenVpnTlsCryptKeyPath).Trim();
+        var sb = new StringBuilder(2048);
+        sb.AppendLine("client");
+        sb.AppendLine("dev tun");
+        sb.AppendLine("proto tcp-client");
+        sb.AppendLine($"remote {host} {port}");
+        sb.AppendLine("nobind");
+        sb.AppendLine("persist-key");
+        sb.AppendLine("persist-tun");
+        sb.AppendLine("remote-cert-tls server");
+        sb.AppendLine("setenv CLIENT_CERT 0");
+        sb.AppendLine("auth-user-pass");
+        sb.AppendLine("auth-nocache");
+        sb.AppendLine("auth SHA256");
+        sb.AppendLine("cipher AES-256-GCM");
+        sb.AppendLine("data-ciphers AES-256-GCM:AES-128-GCM");
+        sb.AppendLine("data-ciphers-fallback AES-256-GCM");
+        sb.AppendLine("verb 3");
+        sb.AppendLine("<ca>");
+        sb.AppendLine(caPem);
+        sb.AppendLine("</ca>");
+        sb.AppendLine("<tls-crypt>");
+        sb.AppendLine(tlsCrypt);
+        sb.AppendLine("</tls-crypt>");
+        return sb.ToString().TrimEnd() + Environment.NewLine;
+    }
+
+    private static string CreateLocalGatewayUsername(string preferred, string email, ISet<string> existingUsernames)
+    {
+        var normalizedPreferred = NormalizeUsernameSeed(preferred);
+        if (!string.IsNullOrWhiteSpace(normalizedPreferred) && existingUsernames.Add(normalizedPreferred))
+        {
+            return normalizedPreferred;
+        }
+
+        var baseName = "ovpn_" + NormalizeUsernameSeed(email);
+        if (string.IsNullOrWhiteSpace(baseName) || string.Equals(baseName, "ovpn_", StringComparison.Ordinal))
+        {
+            baseName = "ovpn_client";
+        }
+
+        if (existingUsernames.Add(baseName))
+        {
+            return baseName;
+        }
+
+        for (var i = 0; i < 100; i++)
+        {
+            var candidate = $"{baseName}{CreateRandomAlphaNum(4).ToLowerInvariant()}";
+            if (existingUsernames.Add(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        var fallback = $"ovpn_{CreateRandomAlphaNum(10).ToLowerInvariant()}";
+        existingUsernames.Add(fallback);
+        return fallback;
+    }
+
+    private static string CreateLocalGatewayUsername(string email, ISet<string> existingUsernames)
+    {
+        return CreateLocalGatewayUsername(string.Empty, email, existingUsernames);
+    }
+
+    private static string NormalizeUsernameSeed(string? seed)
+    {
+        var raw = (seed ?? string.Empty).Trim().ToLowerInvariant();
+        if (raw.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var chars = raw.Where(char.IsAsciiLetterOrDigit).Take(18).ToArray();
+        return new string(chars);
+    }
+
+    private static string CreateRandomAlphaNum(int length)
+    {
+        const string alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        var bytes = RandomNumberGenerator.GetBytes(Math.Max(1, length));
+        var chars = new char[Math.Max(1, length)];
+        for (var i = 0; i < chars.Length; i++)
+        {
+            chars[i] = alphabet[bytes[i] % alphabet.Length];
+        }
+
+        return new string(chars);
+    }
+
+    private static string ToSafeFileStem(string value)
+    {
+        var safe = new string((value ?? string.Empty)
+            .Trim()
+            .ToLowerInvariant()
+            .Select(ch => char.IsAsciiLetterOrDigit(ch) ? ch : '-')
+            .Where(ch => ch != '\0')
+            .ToArray())
+            .Trim('-');
+        if (string.IsNullOrWhiteSpace(safe))
+        {
+            return "openvpn-client";
+        }
+
+        return safe.Length <= 40 ? safe : safe[..40];
     }
 
     private void ApplyPolicySnapshotLocked(PolicyStoreSnapshot snapshot)

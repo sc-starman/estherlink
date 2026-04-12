@@ -7,7 +7,7 @@ namespace OmniRelay.Service.Runtime;
 
 public sealed class ConfigStore
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -82,6 +82,13 @@ public sealed class ConfigStore
                 stored.SchemaVersion = 6;
                 migrated = true;
             }
+            if (stored.SchemaVersion < 7)
+            {
+                stored.LocalGateway ??= new PersistedLocalGatewayConfig();
+                stored.LocalGateway.RemoteAddress ??= string.Empty;
+                stored.SchemaVersion = 7;
+                migrated = true;
+            }
 
             var state = new PersistedState(
                 new ServiceConfig
@@ -108,6 +115,7 @@ public sealed class ConfigStore
                         Protocol = LocalGatewayProtocols.Normalize(stored.LocalGateway?.Protocol),
                         Port = stored.LocalGateway?.Port is > 0 and <= 65535 ? stored.LocalGateway.Port : 443,
                         BindAddress = string.IsNullOrWhiteSpace(stored.LocalGateway?.BindAddress) ? "0.0.0.0" : stored.LocalGateway.BindAddress.Trim(),
+                        RemoteAddress = string.IsNullOrWhiteSpace(stored.LocalGateway?.RemoteAddress) ? string.Empty : stored.LocalGateway.RemoteAddress.Trim(),
                         Remark = string.IsNullOrWhiteSpace(stored.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : stored.LocalGateway.Remark.Trim(),
                         RuntimeEnabled = stored.LocalGateway?.RuntimeEnabled ?? true
                     }
@@ -158,6 +166,7 @@ public sealed class ConfigStore
                     Protocol = LocalGatewayProtocols.Normalize(config.LocalGateway?.Protocol),
                     Port = config.LocalGateway?.Port is > 0 and <= 65535 ? config.LocalGateway.Port : 443,
                     BindAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.BindAddress) ? "0.0.0.0" : config.LocalGateway.BindAddress.Trim(),
+                    RemoteAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.RemoteAddress) ? string.Empty : config.LocalGateway.RemoteAddress.Trim(),
                     Remark = string.IsNullOrWhiteSpace(config.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : config.LocalGateway.Remark.Trim(),
                     RuntimeEnabled = config.LocalGateway?.RuntimeEnabled ?? true
                 },
@@ -229,6 +238,7 @@ public sealed class ConfigStore
         public string Protocol { get; set; } = LocalGatewayProtocols.VlessTcpPlain;
         public int Port { get; set; } = 443;
         public string BindAddress { get; set; } = "0.0.0.0";
+        public string RemoteAddress { get; set; } = string.Empty;
         public string Remark { get; set; } = "OmniRelay Local Gateway";
         public bool RuntimeEnabled { get; set; } = true;
     }

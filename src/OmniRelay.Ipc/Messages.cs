@@ -93,6 +93,7 @@ public sealed record LocalGatewayClientRecord(
     bool Enabled,
     string Remark,
     string Protocol,
+    string Username,
     string Secret,
     DateTimeOffset CreatedAtUtc);
 
@@ -105,7 +106,14 @@ public sealed record AddLocalGatewayClientRequest(string Email, string? Remark =
 public sealed record UpdateLocalGatewayClientRequest(LocalGatewayClientRecord Client);
 public sealed record DeleteLocalGatewayClientRequest(string ClientId);
 public sealed record BuildLocalGatewayClientConfigRequest(string ClientId);
-public sealed record LocalGatewayClientConfigResponse(string Uri, string Title);
+public sealed record LocalGatewayClientConfigResponse(
+    string Mode,
+    string Uri,
+    string Title,
+    string Username,
+    string Password,
+    string OvpnFileName,
+    string OvpnContent);
 
 public static class IpcJson
 {

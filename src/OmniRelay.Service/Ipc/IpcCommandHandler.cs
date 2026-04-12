@@ -384,6 +384,7 @@ public sealed class IpcCommandHandler
                 x.Enabled,
                 x.Remark,
                 x.Protocol,
+                x.Username,
                 x.Secret,
                 x.CreatedAtUtc))
             .ToArray();
@@ -414,6 +415,7 @@ public sealed class IpcCommandHandler
             client.Enabled,
             client.Remark,
             client.Protocol,
+            client.Username,
             client.Secret,
             client.CreatedAtUtc);
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
@@ -434,6 +436,7 @@ public sealed class IpcCommandHandler
             Enabled = payload.Client.Enabled,
             Remark = payload.Client.Remark,
             Protocol = payload.Client.Protocol,
+            Username = payload.Client.Username,
             Secret = payload.Client.Secret,
             CreatedAtUtc = payload.Client.CreatedAtUtc
         };
@@ -470,12 +473,19 @@ public sealed class IpcCommandHandler
             return new IpcResponse(false, "Invalid build-local-client-config payload.");
         }
 
-        if (!_runtime.TryBuildLocalGatewayClientUri(payload.ClientId, out var uri, out var title, out var error))
+        if (!_runtime.TryBuildLocalGatewayClientConfig(payload.ClientId, out var configPayload, out var error))
         {
             return new IpcResponse(false, error ?? "Failed building local gateway client config.");
         }
 
-        var response = new LocalGatewayClientConfigResponse(uri, title);
+        var response = new LocalGatewayClientConfigResponse(
+            configPayload.Mode,
+            configPayload.Uri,
+            configPayload.Title,
+            configPayload.Username,
+            configPayload.Password,
+            configPayload.OvpnFileName,
+            configPayload.OvpnContent);
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
     }
 

@@ -7,6 +7,7 @@ public sealed class LocalGatewayClient
     public bool Enabled { get; set; } = true;
     public string Remark { get; set; } = string.Empty;
     public string Protocol { get; set; } = string.Empty;
+    public string Username { get; set; } = string.Empty;
     public string Secret { get; set; } = string.Empty;
     public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 }

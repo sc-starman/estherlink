@@ -92,6 +92,7 @@ public sealed class GatewayLocalUiProfileModel
     public string LocalGatewayProtocol { get; set; } = LocalGatewayProtocols.VlessTcpPlain;
     public string LocalGatewayPortText { get; set; } = "443";
     public string LocalGatewayBindAddress { get; set; } = "0.0.0.0";
+    public string LocalGatewayRemoteAddress { get; set; } = string.Empty;
     public string LocalGatewayRemark { get; set; } = "OmniRelay Local Gateway";
     public bool LocalGatewayRuntimeEnabled { get; set; } = true;
     public string EncryptedLicenseKey { get; set; } = string.Empty;

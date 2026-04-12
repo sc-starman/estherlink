@@ -83,7 +83,7 @@ public partial class GatewayManagementViewModel : ObservableObject
                 return 1;
             }
 
-            if (string.Equals(protocol, LocalGatewayProtocols.OpenVpnComingSoon, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(protocol, LocalGatewayProtocols.OpenVpnTcp, StringComparison.OrdinalIgnoreCase))
             {
                 return 2;
             }
@@ -95,15 +95,9 @@ public partial class GatewayManagementViewModel : ObservableObject
             var mapped = value switch
             {
                 1 => LocalGatewayProtocols.Shadowsocks,
-                2 => LocalGatewayProtocols.OpenVpnComingSoon,
+                2 => LocalGatewayProtocols.OpenVpnTcp,
                 _ => LocalGatewayProtocols.VlessTcpPlain
             };
-            if (string.Equals(mapped, LocalGatewayProtocols.OpenVpnComingSoon, StringComparison.OrdinalIgnoreCase))
-            {
-                Feedback = "Local OpenVPN mode is coming soon and is currently unavailable.";
-                return;
-            }
-
             if (string.Equals(LocalGatewayProtocols.Normalize(State.LocalGatewayProtocol), mapped, StringComparison.OrdinalIgnoreCase))
             {
                 return;
@@ -281,10 +275,25 @@ public partial class GatewayManagementViewModel : ObservableObject
     private bool selectedLocalGatewayClientEnabled = true;
 
     [ObservableProperty]
+    private string localGatewayClientConfigMode = "uri";
+
+    [ObservableProperty]
     private string localGatewayClientConfigTitle = string.Empty;
 
     [ObservableProperty]
     private string localGatewayClientConfigUri = string.Empty;
+
+    [ObservableProperty]
+    private string localGatewayClientConfigUsername = string.Empty;
+
+    [ObservableProperty]
+    private string localGatewayClientConfigPassword = string.Empty;
+
+    [ObservableProperty]
+    private string localGatewayClientConfigOvpnFileName = "omnirelay-client.ovpn";
+
+    [ObservableProperty]
+    private string localGatewayClientConfigOvpnContent = string.Empty;
 
     [ObservableProperty]
     private string operationLog = string.Empty;
@@ -340,6 +349,13 @@ public partial class GatewayManagementViewModel : ObservableObject
 
     public string GatewayOperationPanelPasswordToggleText => IsGatewayOperationPanelPasswordVisible ? "Hide" : "Show";
     public string GatewayOperationPanelPasswordToggleIconGlyph => IsGatewayOperationPanelPasswordVisible ? "\uE8F4" : "\uE890";
+    public bool IsLocalGatewayClientConfigOpenVpn =>
+        string.Equals((LocalGatewayClientConfigMode ?? string.Empty).Trim(), "openvpn_bundle", StringComparison.OrdinalIgnoreCase);
+    public bool IsLocalGatewayProtocolOpenVpn =>
+        string.Equals(LocalGatewayProtocols.Normalize(State.LocalGatewayProtocol), LocalGatewayProtocols.OpenVpnTcp, StringComparison.OrdinalIgnoreCase);
+    public bool IsLocalGatewayProtocolXray => !IsLocalGatewayProtocolOpenVpn;
+    public bool ShowLocalGatewayClientBundle => IsLocalGatewayProtocolXray;
+    public bool ShowOpenVpnClientCredentials => IsLocalGatewayProtocolOpenVpn && IsLocalGatewayClientConfigOpenVpn;
 
     public bool CanCancelGatewayOperation => IsGatewayOperationRunning;
     public bool CanCloseGatewayOperationDialog => !IsGatewayOperationRunning && !IsGatewayOperationInstallResultVisible;
@@ -347,7 +363,8 @@ public partial class GatewayManagementViewModel : ObservableObject
 
     private bool CanRun() => !IsBusy;
     private bool CanManageSelectedLocalClient() => !IsBusy && IsLocalGatewayMode && SelectedLocalGatewayClient is not null;
-    private bool CanCopyLocalGatewayClientConfig() => IsLocalGatewayMode && !string.IsNullOrWhiteSpace(LocalGatewayClientConfigUri);
+    private bool CanCopyLocalGatewayClientConfig() => IsLocalGatewayMode && IsLocalGatewayProtocolXray && !string.IsNullOrWhiteSpace(LocalGatewayClientConfigUri);
+    private bool CanDownloadLocalGatewayClientOvpn() => IsLocalGatewayMode && IsLocalGatewayProtocolOpenVpn && IsLocalGatewayClientConfigOpenVpn && !string.IsNullOrWhiteSpace(LocalGatewayClientConfigOvpnContent);
 
     partial void OnIsBusyChanged(bool value)
     {
@@ -391,6 +408,7 @@ public partial class GatewayManagementViewModel : ObservableObject
         DeleteSelectedLocalGatewayClientCommand.NotifyCanExecuteChanged();
         BuildSelectedLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
         CopyLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+        DownloadLocalGatewayClientOvpnCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedLocalGatewayClientChanged(LocalGatewayClientRecord? value)
@@ -414,6 +432,18 @@ public partial class GatewayManagementViewModel : ObservableObject
     partial void OnLocalGatewayClientConfigUriChanged(string value)
     {
         CopyLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnLocalGatewayClientConfigModeChanged(string value)
+    {
+        OnPropertyChanged(nameof(IsLocalGatewayClientConfigOpenVpn));
+        OnPropertyChanged(nameof(ShowOpenVpnClientCredentials));
+        DownloadLocalGatewayClientOvpnCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnLocalGatewayClientConfigOvpnContentChanged(string value)
+    {
+        DownloadLocalGatewayClientOvpnCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnIsGatewayOperationPanelPasswordVisibleChanged(bool value)
@@ -600,7 +630,7 @@ public partial class GatewayManagementViewModel : ObservableObject
     {
         await RunBusyAsync(async () =>
         {
-            var result = await _orchestrator.StartLocalGatewayAsync();
+            var result = await _orchestrator.StartLocalGatewayAsync(message => Feedback = message);
             Feedback = result.Message;
             await _orchestrator.RefreshStatusAsync();
         });
@@ -622,7 +652,7 @@ public partial class GatewayManagementViewModel : ObservableObject
     {
         await RunBusyAsync(async () =>
         {
-            var result = await _orchestrator.RestartLocalGatewayAsync();
+            var result = await _orchestrator.RestartLocalGatewayAsync(message => Feedback = message);
             Feedback = result.Message;
             await _orchestrator.RefreshStatusAsync();
         });
@@ -746,8 +776,13 @@ public partial class GatewayManagementViewModel : ObservableObject
             Feedback = result.Message;
             if (result.Success)
             {
+                LocalGatewayClientConfigMode = result.Mode;
                 LocalGatewayClientConfigTitle = result.Title;
                 LocalGatewayClientConfigUri = result.Uri;
+                LocalGatewayClientConfigUsername = result.Username;
+                LocalGatewayClientConfigPassword = result.Password;
+                LocalGatewayClientConfigOvpnFileName = string.IsNullOrWhiteSpace(result.OvpnFileName) ? "omnirelay-client.ovpn" : result.OvpnFileName;
+                LocalGatewayClientConfigOvpnContent = result.OvpnContent;
             }
         });
     }
@@ -763,6 +798,30 @@ public partial class GatewayManagementViewModel : ObservableObject
 
         Clipboard.SetText(text);
         Feedback = "Local client config copied.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanDownloadLocalGatewayClientOvpn))]
+    private void DownloadLocalGatewayClientOvpn()
+    {
+        var content = LocalGatewayClientConfigOvpnContent?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return;
+        }
+
+        var picker = new SaveFileDialog
+        {
+            Title = "Save OpenVPN Profile",
+            Filter = "OpenVPN Profile (*.ovpn)|*.ovpn|All Files (*.*)|*.*",
+            FileName = string.IsNullOrWhiteSpace(LocalGatewayClientConfigOvpnFileName) ? "omnirelay-client.ovpn" : LocalGatewayClientConfigOvpnFileName
+        };
+        if (picker.ShowDialog() != true)
+        {
+            return;
+        }
+
+        File.WriteAllText(picker.FileName, content, Encoding.UTF8);
+        Feedback = $"OpenVPN profile saved to {picker.FileName}.";
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
@@ -1850,6 +1909,7 @@ public partial class GatewayManagementViewModel : ObservableObject
             DeleteSelectedLocalGatewayClientCommand.NotifyCanExecuteChanged();
             BuildSelectedLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
             CopyLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+            DownloadLocalGatewayClientOvpnCommand.NotifyCanExecuteChanged();
             if (IsLocalGatewayMode)
             {
                 _ = RefreshLocalGatewayClientsAsync();
@@ -1867,6 +1927,22 @@ public partial class GatewayManagementViewModel : ObservableObject
         if (e.PropertyName == nameof(GatewayStateStore.LocalGatewayProtocol))
         {
             OnPropertyChanged(nameof(LocalGatewayProtocolIndex));
+            OnPropertyChanged(nameof(IsLocalGatewayProtocolOpenVpn));
+            OnPropertyChanged(nameof(IsLocalGatewayProtocolXray));
+            OnPropertyChanged(nameof(ShowLocalGatewayClientBundle));
+            OnPropertyChanged(nameof(ShowOpenVpnClientCredentials));
+            CopyLocalGatewayClientConfigCommand.NotifyCanExecuteChanged();
+            DownloadLocalGatewayClientOvpnCommand.NotifyCanExecuteChanged();
+            if (IsLocalGatewayMode)
+            {
+                LocalGatewayClientConfigMode = "uri";
+                LocalGatewayClientConfigTitle = string.Empty;
+                LocalGatewayClientConfigUri = string.Empty;
+                LocalGatewayClientConfigUsername = string.Empty;
+                LocalGatewayClientConfigPassword = string.Empty;
+                LocalGatewayClientConfigOvpnContent = string.Empty;
+                _ = RefreshLocalGatewayClientsAsync();
+            }
         }
 
         if (e.PropertyName == nameof(GatewayStateStore.SelectedGatewayProtocol))

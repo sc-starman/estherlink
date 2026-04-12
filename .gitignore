@@ -224,3 +224,5 @@ FakesAssemblies/
 .env.local
 
 xray.exe
+
+OpenVPNInstaller.msi

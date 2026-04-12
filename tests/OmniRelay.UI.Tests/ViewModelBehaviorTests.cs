@@ -93,11 +93,41 @@ public class ViewModelBehaviorTests
         Assert.Equal("Settings saved.", vm.Feedback);
     }
 
+    [Fact]
+    public async Task BuildLocalGatewayClientConfig_ParsesOpenVpnBundle()
+    {
+        var state = new GatewayStateStore();
+        var gatewayClient = new FakeGatewayClientService
+        {
+            ClientConfigToReturn = new LocalGatewayClientConfigResponse(
+                "openvpn_bundle",
+                "client\nproto tcp-client\n",
+                "OpenVPN Client Bundle",
+                "ovpn_user",
+                "ovpn_pass",
+                "client.ovpn",
+                "client\nproto tcp-client\n")
+        };
+
+        var orchestrator = new GatewayOrchestratorService(state, gatewayClient, new FakeServiceControlService(), new FakeGatewayStatePersistenceService());
+        var result = await orchestrator.BuildLocalGatewayClientConfigAsync("abc");
+
+        Assert.True(result.Success);
+        Assert.Equal("openvpn_bundle", result.Mode);
+        Assert.Equal("OpenVPN Client Bundle", result.Title);
+        Assert.Equal("ovpn_user", result.Username);
+        Assert.Equal("ovpn_pass", result.Password);
+        Assert.Equal("client.ovpn", result.OvpnFileName);
+        Assert.Contains("proto tcp-client", result.OvpnContent);
+    }
+
     private sealed class FakeGatewayClientService : IGatewayClientService
     {
         public int UpdateWhitelistCallCount { get; private set; }
         public TimeSpan GetStatusDelay { get; set; } = TimeSpan.Zero;
         public GatewayStatus StatusToReturn { get; set; } = new();
+        public LocalGatewayClientConfigResponse ClientConfigToReturn { get; set; } =
+            new("uri", "vless://example", "Config", string.Empty, string.Empty, string.Empty, string.Empty);
 
         public async Task<IpcResponse?> GetStatusAsync(CancellationToken cancellationToken = default)
         {
@@ -220,6 +250,7 @@ public class ViewModelBehaviorTests
                 true,
                 remark ?? email,
                 LocalGatewayProtocols.VlessTcpPlain,
+                "ovpn_test",
                 "secret",
                 DateTimeOffset.UtcNow);
             return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, IpcJson.Serialize(record)));
@@ -237,7 +268,7 @@ public class ViewModelBehaviorTests
 
         public Task<IpcResponse?> BuildLocalGatewayClientConfigAsync(string clientId, CancellationToken cancellationToken = default)
         {
-            var payload = IpcJson.Serialize(new LocalGatewayClientConfigResponse("vless://example", "Config"));
+            var payload = IpcJson.Serialize(ClientConfigToReturn);
             return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
         }
     }

@@ -10,5 +10,10 @@ public sealed record LocalGatewayClientsResult(
 public sealed record LocalGatewayClientConfigBuildResult(
     bool Success,
     string Message,
+    string Mode,
     string Uri,
-    string Title);
+    string Title,
+    string Username,
+    string Password,
+    string OvpnFileName,
+    string OvpnContent);

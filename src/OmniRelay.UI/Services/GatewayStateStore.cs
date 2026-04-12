@@ -106,6 +106,9 @@ public partial class GatewayStateStore : ObservableObject
     private string localGatewayBindAddress = "0.0.0.0";
 
     [ObservableProperty]
+    private string localGatewayRemoteAddress = string.Empty;
+
+    [ObservableProperty]
     private string localGatewayRemark = "OmniRelay Local Gateway";
 
     [ObservableProperty]
