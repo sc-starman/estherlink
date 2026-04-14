@@ -12,6 +12,7 @@ public sealed class GatewayUiStateModel
     public string ProxyPortText { get; set; } = "19080";
     public string BootstrapSocksLocalPortText { get; set; } = "19081";
     public string BootstrapSocksRemotePortText { get; set; } = "16080";
+    public string BootstrapMode { get; set; } = GatewayBootstrapModes.Tunnel;
     public string TunnelHost { get; set; } = "vps.example.com";
     public string TunnelSshPortText { get; set; } = "22";
     public string TunnelRemotePortText { get; set; } = "15000";
@@ -57,6 +58,7 @@ public sealed class GatewayRemoteUiProfileModel
     public string ProxyPortText { get; set; } = "19080";
     public string BootstrapSocksLocalPortText { get; set; } = "19081";
     public string BootstrapSocksRemotePortText { get; set; } = "16080";
+    public string BootstrapMode { get; set; } = GatewayBootstrapModes.Tunnel;
     public string TunnelHost { get; set; } = "vps.example.com";
     public string TunnelSshPortText { get; set; } = "22";
     public string TunnelRemotePortText { get; set; } = "15000";

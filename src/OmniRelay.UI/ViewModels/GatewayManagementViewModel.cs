@@ -128,6 +128,21 @@ public partial class GatewayManagementViewModel : ObservableObject
         }
     }
 
+    public int BootstrapModeIndex
+    {
+        get => string.Equals(GatewayBootstrapModes.Normalize(State.BootstrapMode), GatewayBootstrapModes.Direct, StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        set
+        {
+            var mapped = value == 1 ? GatewayBootstrapModes.Direct : GatewayBootstrapModes.Tunnel;
+            if (string.Equals(GatewayBootstrapModes.Normalize(State.BootstrapMode), mapped, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            State.BootstrapMode = mapped;
+        }
+    }
+
     public string KeyPassphraseState =>
         string.IsNullOrWhiteSpace(State.TunnelKeyPassphrase) ? "Not set" : "Configured";
 
@@ -1713,6 +1728,7 @@ public partial class GatewayManagementViewModel : ObservableObject
         return new GatewayDeploymentRequest
         {
             Config = config,
+            BootstrapMode = GatewayBootstrapModes.Normalize(_state.BootstrapMode),
             SelectedGatewayProtocol = selectedProtocol,
             GatewayPublicPort = publicPort,
             GatewayPanelPort = panelPort,
@@ -1922,6 +1938,11 @@ public partial class GatewayManagementViewModel : ObservableObject
             OnPropertyChanged(nameof(IsPasswordAuthSelected));
             OnPropertyChanged(nameof(TunnelAuthMethodIndex));
             OnPropertyChanged(nameof(AuthenticationDetailLabel));
+        }
+
+        if (e.PropertyName == nameof(GatewayStateStore.BootstrapMode))
+        {
+            OnPropertyChanged(nameof(BootstrapModeIndex));
         }
 
         if (e.PropertyName == nameof(GatewayStateStore.LocalGatewayProtocol))

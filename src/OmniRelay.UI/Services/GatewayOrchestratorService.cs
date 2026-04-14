@@ -78,6 +78,7 @@ public sealed class GatewayOrchestratorService
             _state.ProxyPortText = NormalizeOrDefault(remoteProfile.ProxyPortText, "19080");
             _state.BootstrapSocksLocalPortText = NormalizeOrDefault(remoteProfile.BootstrapSocksLocalPortText, "19081");
             _state.BootstrapSocksRemotePortText = NormalizeOrDefault(remoteProfile.BootstrapSocksRemotePortText, "16080");
+            _state.BootstrapMode = GatewayBootstrapModes.Normalize(remoteProfile.BootstrapMode);
             _state.TunnelHost = NormalizeOrDefault(remoteProfile.TunnelHost, "vps.example.com");
             _state.TunnelSshPortText = NormalizeOrDefault(remoteProfile.TunnelSshPortText, "22");
             _state.TunnelRemotePortText = NormalizeOrDefault(remoteProfile.TunnelRemotePortText, "15000");
@@ -959,6 +960,7 @@ public sealed class GatewayOrchestratorService
             ProxyPortText = _state.ProxyPortText,
             BootstrapSocksLocalPortText = _state.BootstrapSocksLocalPortText,
             BootstrapSocksRemotePortText = _state.BootstrapSocksRemotePortText,
+            BootstrapMode = GatewayBootstrapModes.Normalize(_state.BootstrapMode),
             TunnelHost = _state.TunnelHost,
             TunnelSshPortText = _state.TunnelSshPortText,
             TunnelRemotePortText = _state.TunnelRemotePortText,
@@ -1008,6 +1010,7 @@ public sealed class GatewayOrchestratorService
             ProxyPortText = _state.ProxyPortText,
             BootstrapSocksLocalPortText = _state.BootstrapSocksLocalPortText,
             BootstrapSocksRemotePortText = _state.BootstrapSocksRemotePortText,
+            BootstrapMode = GatewayBootstrapModes.Normalize(_state.BootstrapMode),
             TunnelHost = _state.TunnelHost,
             TunnelSshPortText = _state.TunnelSshPortText,
             TunnelRemotePortText = _state.TunnelRemotePortText,
@@ -1069,6 +1072,7 @@ public sealed class GatewayOrchestratorService
             ProxyPortText = state.ProxyPortText,
             BootstrapSocksLocalPortText = state.BootstrapSocksLocalPortText,
             BootstrapSocksRemotePortText = state.BootstrapSocksRemotePortText,
+            BootstrapMode = GatewayBootstrapModes.Normalize(state.BootstrapMode),
             TunnelHost = state.TunnelHost,
             TunnelSshPortText = state.TunnelSshPortText,
             TunnelRemotePortText = state.TunnelRemotePortText,

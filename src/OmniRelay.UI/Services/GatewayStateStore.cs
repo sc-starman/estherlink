@@ -34,6 +34,9 @@ public partial class GatewayStateStore : ObservableObject
     private string bootstrapSocksRemotePortText = "16080";
 
     [ObservableProperty]
+    private string bootstrapMode = GatewayBootstrapModes.Tunnel;
+
+    [ObservableProperty]
     private string tunnelHost = "vps.example.com";
 
     [ObservableProperty]

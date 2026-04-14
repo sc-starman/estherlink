@@ -10,6 +10,7 @@ PANEL_PORT=2054
 BACKEND_PORT=15000
 SSH_PORT=22
 BOOTSTRAP_SOCKS_PORT=16080
+BOOTSTRAP_MODE="tunnel"
 PROXY_CHECK_URL="https://deb.debian.org/"
 VPS_IP=""
 CAMOUFLAGE_SERVER="www.apple.com:443"
@@ -38,6 +39,7 @@ SINGBOX_DIR="${METADATA_DIR}/singbox"
 SINGBOX_CONFIG_FILE="${SINGBOX_DIR}/config.json"
 OMNIPANEL_APP_DIR="/opt/omnirelay/omni-gateway"
 OMNIPANEL_COMMON_SCRIPT="/tmp/omnirelay-omnipanel-common.sh"
+BOOTSTRAP_COMMON_SCRIPT="/tmp/omnirelay-bootstrap-common.sh"
 SHADOWTLS_CLIENTS_FILE="${OMNIPANEL_APP_DIR}/shadowtls_clients.json"
 PANEL_AUTH_FILE="${OMNIPANEL_APP_DIR}/panel-auth.json"
 SINGBOX_SERVICE="omnirelay-singbox"
@@ -63,6 +65,7 @@ Usage: sudo ./${SCRIPT_NAME} <install|uninstall|start|stop|get-protocol|status|h
 --backend-port <port>
 --ssh-port <port>
 --bootstrap-socks-port <port>
+--bootstrap-mode <tunnel|direct>
 --proxy-check-url <url>
 --camouflage-server <host:port>
 --dns-mode <hybrid|doh|udp>
@@ -112,21 +115,36 @@ load_omnipanel_common(){
   die "Shared OmniPanel helper script not found. Expected ${OMNIPANEL_COMMON_SCRIPT}."
 }
 
-configure_proxy(){
-  local proxy_url
-  proxy_url="socks5h://127.0.0.1:${BOOTSTRAP_SOCKS_PORT}"
-  export ALL_PROXY="$proxy_url"
-  export HTTPS_PROXY="$proxy_url"
-  export HTTP_PROXY="$proxy_url"
-  export NO_PROXY="127.0.0.1,localhost"
+load_bootstrap_common(){
+  local candidate
+  for candidate in "$BOOTSTRAP_COMMON_SCRIPT" "/usr/local/lib/omnirelay/bootstrap-common.sh" "$(dirname "$0")/setup_omnirelay_gateway_bootstrap_common.sh"; do
+    if [[ -f "$candidate" ]]; then
+      # shellcheck disable=SC1090
+      source "$candidate"
+      return 0
+    fi
+  done
+  die "Shared bootstrap helper script not found. Expected ${BOOTSTRAP_COMMON_SCRIPT}."
 }
-clear_proxy(){ unset ALL_PROXY HTTPS_PROXY HTTP_PROXY NO_PROXY || true; }
+
+ensure_bootstrap_common_loaded(){
+  if ! declare -F omnirelay_bootstrap_normalize_mode >/dev/null 2>&1; then
+    load_bootstrap_common
+  fi
+}
+
+configure_proxy(){
+  ensure_bootstrap_common_loaded
+  omnirelay_bootstrap_configure_proxy_env "$BOOTSTRAP_MODE" "$BOOTSTRAP_SOCKS_PORT"
+}
+clear_proxy(){
+  ensure_bootstrap_common_loaded
+  omnirelay_bootstrap_disable_proxy_env
+}
 
 configure_apt_proxy(){
-  cat > "$APT_PROXY_FILE" <<EOF
-Acquire::http::Proxy "socks5h://127.0.0.1:${BOOTSTRAP_SOCKS_PORT}";
-Acquire::https::Proxy "socks5h://127.0.0.1:${BOOTSTRAP_SOCKS_PORT}";
-EOF
+  ensure_bootstrap_common_loaded
+  omnirelay_bootstrap_configure_apt_proxy "$BOOTSTRAP_MODE" "$BOOTSTRAP_SOCKS_PORT" "$APT_PROXY_FILE"
 }
 
 resolve_node_bin(){
@@ -149,41 +167,21 @@ detect_node_major(){
 }
 
 sync_time_via_bootstrap_socks(){
-  local date_header remote_epoch now_epoch delta abs_delta was_ntp
-  was_ntp=""
-  configure_proxy
-  date_header="$(curl --silent --show-error --insecure --max-time 20 --connect-timeout 10 --retry 0 --socks5-hostname "127.0.0.1:${BOOTSTRAP_SOCKS_PORT}" -I "$PROXY_CHECK_URL" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')"
-  [[ -n "$date_header" ]] || return 1
-  remote_epoch="$(date -u -d "$date_header" +%s 2>/dev/null || true)"
-  [[ -n "$remote_epoch" ]] || return 1
-  now_epoch="$(date -u +%s 2>/dev/null || echo 0)"
-  delta=$(( remote_epoch - now_epoch ))
-  abs_delta=$delta
-  (( abs_delta < 0 )) && abs_delta=$(( -abs_delta ))
-  if (( abs_delta <= 5 )); then
-    log "Clock skew via SOCKS is ${abs_delta}s; no clock adjustment needed."
-    return 0
-  fi
-  if command -v timedatectl >/dev/null 2>&1; then
-    was_ntp="$(timedatectl show -p NTP --value 2>/dev/null || true)"
-    [[ "$was_ntp" == "yes" ]] && timedatectl set-ntp false >/dev/null 2>&1 || true
-  fi
-  if ! date -u -s "@${remote_epoch}" >/dev/null 2>&1; then
-    [[ "$was_ntp" == "yes" ]] && timedatectl set-ntp true >/dev/null 2>&1 || true
-    return 1
-  fi
-  command -v hwclock >/dev/null 2>&1 && hwclock --systohc >/dev/null 2>&1 || true
-  [[ "$was_ntp" == "yes" ]] && timedatectl set-ntp true >/dev/null 2>&1 || true
-  log "Adjusted system clock by ${delta}s via SOCKS-backed HTTPS date (${date_header})."
-  return 0
+  ensure_bootstrap_common_loaded
+  omnirelay_bootstrap_sync_clock "$BOOTSTRAP_MODE" "$BOOTSTRAP_SOCKS_PORT" "$PROXY_CHECK_URL"
 }
 
 install_packages(){
   progress 12 "Installing required packages"
   configure_apt_proxy
   configure_proxy
-  progress 14 "Syncing VPS clock over SOCKS bootstrap (if needed)"
-  sync_time_via_bootstrap_socks || log "Clock sync over SOCKS skipped/failed; continuing."
+  if [[ "$BOOTSTRAP_MODE" == "direct" ]]; then
+    progress 14 "Syncing VPS clock over direct network (if needed)"
+    sync_time_via_bootstrap_socks || log "Clock sync over direct network skipped/failed; continuing."
+  else
+    progress 14 "Syncing VPS clock over SOCKS bootstrap (if needed)"
+    sync_time_via_bootstrap_socks || log "Clock sync over SOCKS skipped/failed; continuing."
+  fi
   apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -y
   apt-get install -y curl jq tar gzip ca-certificates openssl nginx
   clear_proxy
@@ -485,10 +483,24 @@ install_cmd(){
   systemctl daemon-reload
 
   ensure_meta
-  install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
   install -d -m 0755 /usr/local/lib/omnirelay
+  if [[ -f "$BOOTSTRAP_COMMON_SCRIPT" ]]; then
+    install -m 0755 "$BOOTSTRAP_COMMON_SCRIPT" /usr/local/lib/omnirelay/bootstrap-common.sh
+  fi
   if [[ -f "$OMNIPANEL_COMMON_SCRIPT" ]]; then
     install -m 0755 "$OMNIPANEL_COMMON_SCRIPT" /usr/local/lib/omnirelay/omnipanel-common.sh
+  fi
+  install -m 0755 "$0" /usr/local/sbin/omnirelay-gatewayctl
+  if [[ "$BOOTSTRAP_MODE" == "direct" ]]; then
+    progress 8 "Checking direct VPS internet egress"
+  else
+    progress 8 "Checking bootstrap SOCKS endpoint"
+  fi
+  if ! omnirelay_bootstrap_verify_egress "$BOOTSTRAP_MODE" "$BOOTSTRAP_SOCKS_PORT" "$PROXY_CHECK_URL" 24 5; then
+    if [[ "$BOOTSTRAP_MODE" == "direct" ]]; then
+      die "Direct VPS egress check failed against ${PROXY_CHECK_URL}."
+    fi
+    die "Bootstrap SOCKS endpoint is not reachable or egress failed on 127.0.0.1:${BOOTSTRAP_SOCKS_PORT}."
   fi
   install_packages
   ensure_nodejs_runtime
@@ -530,7 +542,7 @@ uninstall_cmd(){
   systemctl disable --now ipsec xl2tpd strongswan-starter 2>/dev/null || true
   rm -f "/etc/systemd/system/${OMNIPANEL_SERVICE}.service" "/etc/systemd/system/${SINGBOX_SERVICE}.service" /etc/systemd/system/omnirelay-openvpn.service /etc/systemd/system/omnirelay-openvpn-accounting.service /etc/systemd/system/omnirelay-openvpn-accounting.timer /etc/systemd/system/omnirelay-redsocks.service /etc/systemd/system/omnirelay-ipsec-rules.service /etc/systemd/system/omnirelay-ipsec-accounting.service /etc/systemd/system/omnirelay-ipsec-accounting.timer
   rm -f /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf
-  rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /usr/local/sbin/omnirelay-gatewayctl /usr/local/lib/omnirelay/omnipanel-common.sh
+  rm -f /etc/sudoers.d/omnigateway-singbox /etc/sudoers.d/omnigateway-openvpn /etc/sudoers.d/omnigateway-ipsec /usr/local/sbin/omnirelay-gatewayctl /usr/local/lib/omnirelay/omnipanel-common.sh /usr/local/lib/omnirelay/bootstrap-common.sh
   rm -f /etc/sysctl.d/99-omnirelay-openvpn.conf /etc/sysctl.d/99-omnirelay-ipsec.conf
   rm -f /etc/ppp/ip-up.d/99-omnirelay-accounting /etc/ppp/ip-down.d/99-omnirelay-accounting
   rm -f /var/log/openvpn/omnirelay-status.log
@@ -553,6 +565,7 @@ parse_args(){
       --backend-port) BACKEND_PORT="${2:-}"; shift 2 ;;
       --ssh-port) SSH_PORT="${2:-}"; shift 2 ;;
       --bootstrap-socks-port) BOOTSTRAP_SOCKS_PORT="${2:-}"; shift 2 ;;
+      --bootstrap-mode) BOOTSTRAP_MODE="${2:-}"; shift 2 ;;
       --proxy-check-url) PROXY_CHECK_URL="${2:-}"; shift 2 ;;
       --camouflage-server) CAMOUFLAGE_SERVER="${2:-}"; shift 2 ;;
       --dns-mode) DNS_MODE="${2:-}"; shift 2 ;;
@@ -581,11 +594,14 @@ parse_args(){
 
 main(){
   parse_args "$@"
+  ensure_bootstrap_common_loaded
   validate_port "$PUBLIC_PORT" "--public-port"
   validate_port "$PANEL_PORT" "--panel-port"
   validate_port "$BACKEND_PORT" "--backend-port"
   validate_port "$SSH_PORT" "--ssh-port"
   validate_port "$BOOTSTRAP_SOCKS_PORT" "--bootstrap-socks-port"
+  BOOTSTRAP_MODE="$(omnirelay_bootstrap_normalize_mode "$BOOTSTRAP_MODE" || true)"
+  [[ -n "$BOOTSTRAP_MODE" ]] || die "Invalid --bootstrap-mode value. Expected tunnel|direct."
   PANEL_DOMAIN="$(printf '%s' "$PANEL_DOMAIN" | tr -d '\r\n' | xargs)"
   PANEL_DOMAIN_ONLY="$(normalize_bool "$PANEL_DOMAIN_ONLY")"
   PANEL_SSL_ENABLED="$(normalize_bool "$PANEL_SSL_ENABLED")"

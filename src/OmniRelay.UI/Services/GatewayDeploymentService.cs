@@ -16,6 +16,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
     private const string TunnelCtlPath = "/usr/local/sbin/omnirelay-tunnelctl";
     private const string RemoteInstallScriptPath = "/tmp/omnirelay-gatewayctl.sh";
     private const string RemoteOmniPanelCommonScriptPath = "/tmp/omnirelay-omnipanel-common.sh";
+    private const string RemoteBootstrapCommonScriptPath = "/tmp/omnirelay-bootstrap-common.sh";
     private const string RemoteTunnelModuleScriptPath = "/tmp/omnirelay-tunnel-module.sh";
     private const string RemoteUploadedPanelCertPath = "/tmp/omnirelay-omnipanel-upload.crt";
     private const string RemoteUploadedPanelKeyPath = "/tmp/omnirelay-omnipanel-upload.key";
@@ -32,6 +33,17 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             ValidateRequest(request);
             EnsureSudoPassword(sudoPassword);
+
+            if (!IsTunnelBootstrapMode(request))
+            {
+                progress?.Report(new DeploymentProgressSnapshot
+                {
+                    Phase = DeploymentPhases.GatewayBootstrap,
+                    Percent = 100,
+                    Message = "Direct bootstrap mode selected; SOCKS bootstrap check skipped"
+                });
+                return new GatewayOperationResult(true, "Direct bootstrap mode selected; SOCKS bootstrap preflight skipped.");
+            }
 
             progress?.Report(new DeploymentProgressSnapshot
             {
@@ -144,6 +156,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             });
 
             await UploadInstallerScriptAsync(request, progress, cancellationToken);
+            await UploadBootstrapCommonScriptAsync(request, progress, cancellationToken);
             await UploadOmniPanelCommonScriptAsync(request, progress, cancellationToken);
 
             var uploadedPanelCertRemotePath = string.Empty;
@@ -462,7 +475,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             Message = $"{reason} Running strict uninstall before install"
         });
 
-        var args = BuildCommonArgs(request);
+        var args = BuildCommonArgs(request, includeBootstrapMode: true);
         var uninstallCommand =
             "set -euo pipefail; " +
             $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo 'Gateway control script not found during pre-install switch cleanup.'; exit 31; }}; " +
@@ -516,7 +529,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         CancellationToken cancellationToken)
     {
         var selectedProtocol = GatewayProtocols.Normalize(request.SelectedGatewayProtocol);
-        if (!string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        if (!IsTunnelBootstrapMode(request) ||
+            !string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -859,6 +873,15 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         await UploadFileAsync(request, localScript, RemoteOmniPanelCommonScriptPath, progress, cancellationToken);
     }
 
+    private async Task UploadBootstrapCommonScriptAsync(
+        GatewayDeploymentRequest request,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var localScript = ResolveBootstrapCommonScriptPath();
+        await UploadFileAsync(request, localScript, RemoteBootstrapCommonScriptPath, progress, cancellationToken);
+    }
+
     private async Task UploadTunnelModuleScriptAsync(
         GatewayDeploymentRequest request,
         IProgress<DeploymentProgressSnapshot>? progress,
@@ -1051,6 +1074,26 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         if (string.IsNullOrWhiteSpace(path))
         {
             throw new InvalidOperationException($"Tunnel module script not found. Expected {scriptFileName} in app GatewayScripts content.");
+        }
+
+        return path;
+    }
+
+    private static string ResolveBootstrapCommonScriptPath()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        const string scriptFileName = "setup_omnirelay_gateway_bootstrap_common.sh";
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
+            Path.Combine(baseDir, scriptFileName),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
+        };
+
+        var path = candidates.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException($"Bootstrap helper script not found. Expected {scriptFileName} in app GatewayScripts content.");
         }
 
         return path;
@@ -1277,7 +1320,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         string panelKeyRemotePath)
     {
         return
-            $"install {BuildCommonArgs(request)} {BuildProtocolArgs(request)} " +
+            $"install {BuildCommonArgs(request, includeBootstrapMode: true)} {BuildProtocolArgs(request)} " +
             $"--tunnel-auth {ShellQuote(MapTunnelAuth(request.Config))} " +
             $"--panel-user {ShellQuote(panelUser)} " +
             $"--panel-password {ShellQuote(panelPassword)} " +
@@ -1290,9 +1333,9 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             $"--panel-key-file {ShellQuote(panelKeyRemotePath)}";
     }
 
-    private static string BuildCommonArgs(GatewayDeploymentRequest request)
+    private static string BuildCommonArgs(GatewayDeploymentRequest request, bool includeBootstrapMode = false)
     {
-        return string.Join(" ", new[]
+        var args = new List<string>
         {
             "--public-port", request.GatewayPublicPort.ToString(),
             "--panel-port", request.GatewayPanelPort.ToString(),
@@ -1304,7 +1347,15 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             "--dns-mode", ShellQuote(request.GatewayDnsMode.Trim().ToLowerInvariant()),
             "--doh-endpoints", ShellQuote(request.GatewayDohEndpoints.Trim()),
             "--dns-udp-only", request.GatewayDnsUdpOnly ? "true" : "false"
-        });
+        };
+
+        if (includeBootstrapMode)
+        {
+            args.Add("--bootstrap-mode");
+            args.Add(ShellQuote(NormalizeBootstrapMode(request.BootstrapMode)));
+        }
+
+        return string.Join(" ", args);
     }
 
     private static string BuildProtocolArgs(GatewayDeploymentRequest request)
@@ -1370,6 +1421,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             throw new InvalidOperationException("Tunnel user is required.");
         }
+
+        _ = NormalizeBootstrapMode(request.BootstrapMode);
 
         if (request.GatewayPublicPort <= 0 || request.GatewayPublicPort > 65535)
         {
@@ -1704,5 +1757,21 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 DohEndpoints = baseModel.DohEndpoints
             };
         }
+    }
+
+    private static bool IsTunnelBootstrapMode(GatewayDeploymentRequest request)
+    {
+        return string.Equals(NormalizeBootstrapMode(request.BootstrapMode), GatewayBootstrapModes.Tunnel, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeBootstrapMode(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            GatewayBootstrapModes.Tunnel => GatewayBootstrapModes.Tunnel,
+            GatewayBootstrapModes.Direct => GatewayBootstrapModes.Direct,
+            _ => throw new InvalidOperationException("Bootstrap mode must be tunnel or direct.")
+        };
     }
 }

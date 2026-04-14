@@ -343,6 +343,7 @@
                                                                                         <RowDefinition Height="Auto"/>
                                                                                         <RowDefinition Height="Auto"/>
                                                                                         <RowDefinition Height="Auto"/>
+                                                                                        <RowDefinition Height="Auto"/>
 
                                                                                 </Grid.RowDefinitions>
 
@@ -457,6 +458,20 @@
                                                                                         <TextBox Width="320"
                                                                                                  Text="{Binding State.OpenVpnClientDns, UpdateSourceTrigger=PropertyChanged}"
                                                                                                  Style="{StaticResource FormTextBoxStyle}"/>
+                                                                                </StackPanel>
+
+                                                                                <TextBlock Grid.Row="4"
+                                                                                           Text="Bootstrap Mode"
+                                                                                           Style="{StaticResource FormLabelStyle}"/>
+                                                                                <StackPanel Grid.Row="4"
+                                                                                            Grid.Column="1"
+                                                                                            Orientation="Horizontal">
+                                                                                        <ComboBox Width="220"
+                                                                                                  SelectedIndex="{Binding BootstrapModeIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                                                  Style="{StaticResource FormComboBoxStyle}">
+                                                                                                <ComboBoxItem Content="Tunnel"/>
+                                                                                                <ComboBoxItem Content="Direct"/>
+                                                                                        </ComboBox>
                                                                                 </StackPanel>
                                                                         </Grid>
                                                                 </StackPanel>
