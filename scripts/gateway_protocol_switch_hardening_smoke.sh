@@ -67,6 +67,7 @@ resolve_script_path() {
   local script_name="$1"
   local candidates=(
     "${SCRIPT_DIR}/${script_name}"
+    "./src/OmniRelay.UI/scripts/${script_name}"
     "./scripts/${script_name}"
     "./${script_name}"
   )
