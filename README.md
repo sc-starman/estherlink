@@ -1,11 +1,11 @@
 # OmniRelay
 
-OmniRelay is a Windows HTTP CONNECT egress router behind a static-IP VPS ingress.
+OmniRelay is a Windows SOCKS5 egress router behind a static-IP VPS ingress.
 
 Traffic flow:
 - External client connects to VPS public TCP port (for example `443`).
 - VPS forwards TCP stream through reverse tunnel to Windows local proxy listener.
-- Windows service parses CONNECT and chooses egress adapter:
+- Windows service parses SOCKS5 CONNECT and chooses egress adapter:
   - Whitelisted destination -> IC1 (`Incoming VPS Network` adapter).
   - Non-whitelisted -> IC2 (`Outgoing Network` adapter).
 
@@ -16,7 +16,7 @@ Traffic flow:
 - `src/OmniRelay.Ipc`
   - Named pipe protocol + JSON client/server helpers.
 - `src/OmniRelay.Service`
-  - Windows Service host + CONNECT proxy engine + licensing + persistence.
+  - Windows Service host + SOCKS5 proxy engine + licensing + persistence.
 - `src/OmniRelay.UI`
   - WPF control panel for configuration, whitelist, license verify, service control.
 - `src/OmniRelay.Installer`
@@ -33,7 +33,7 @@ Traffic flow:
 Implemented:
 - Windows service host (`UseWindowsService`) with named-pipe IPC commands:
   - `set_config`, `update_whitelist`, `get_status`, `start_proxy`, `stop_proxy`, `verify_license`
-- HTTP CONNECT proxy listener on localhost (configurable port).
+- SOCKS5 proxy listener on localhost (configurable port).
 - Outbound bind-to-adapter logic:
   - Adapter selected by `IfIndex`
   - Service picks adapter primary IPv4
@@ -346,19 +346,26 @@ Runs:
 VPS must forward incoming client TCP streams to the Windows proxy listener endpoint over the reverse tunnel.
 
 Primary ingress path (current):
-- 3x-ui/Xray on VPS listens on public port `443` (client auth/profile management).
-- Xray outbound is forced to `127.0.0.1:15000` (loopback tunnel endpoint).
+- sing-box is the canonical gateway runtime on VPS for all protocols.
+- Protocol-native ingress (VLESS/SS/ShadowTLS inbound or OpenVPN/IPSec native ingress) detours through sing-box.
+- sing-box outbound is forced to `127.0.0.1:15000` (loopback tunnel endpoint).
 - Windows reverse SSH tunnel maps VPS `127.0.0.1:15000` to Windows `127.0.0.1:<proxy-listen-port>`.
 - Fail mode is fail-closed for client traffic (no direct VPS fallback).
 
 Helper setup scripts:
-- Primary control script (command-mode): `scripts/setup_omnirelay_vps_3xui_vless_reality.sh`
+- VLESS Reality: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_vless_reality.sh`
+- VLESS Plain: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_vless_plain.sh`
+- Shadowsocks: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_shadowsocks.sh`
+- ShadowTLS+SS: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_shadowtls.sh`
+- OpenVPN connector mode: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_openvpn_singbox.sh`
+- IPSec/L2TP connector mode: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_ipsec_l2tp_singbox.sh`
+- Shared connector layer: `src/OmniRelay.UI/scripts/setup_omnirelay_gateway_singbox_connector_common.sh`
 - Rollback/legacy: `scripts/setup_OmniRelay_vps.sh`
 
 Example (manual online install using SOCKS bootstrap):
 
 ```bash
-sudo bash scripts/setup_omnirelay_vps_3xui_vless_reality.sh install --public-port 443 --panel-port 2054 --backend-port 15000 --ssh-port 22 --tunnel-user OmniRelay --tunnel-auth host_key --bootstrap-socks-port 16080 --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
+sudo bash src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_vless_reality.sh install --public-port 443 --panel-port 2054 --backend-port 15000 --ssh-port 22 --tunnel-user OmniRelay --tunnel-auth host_key --bootstrap-socks-port 16080 --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
 ```
 
 DNS-through-tunnel commands:

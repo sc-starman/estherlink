@@ -6,7 +6,7 @@ public sealed class GatewayDeploymentRequest
 {
     public required ServiceConfig Config { get; init; }
     public string BootstrapMode { get; init; } = GatewayBootstrapModes.Tunnel;
-    public string SelectedGatewayProtocol { get; init; } = GatewayProtocols.VlessReality3xui;
+    public string SelectedGatewayProtocol { get; init; } = GatewayProtocols.VlessRealitySingbox;
     public int GatewayPublicPort { get; init; }
     public int GatewayPanelPort { get; init; }
     public string GatewayPanelUser { get; init; } = string.Empty;

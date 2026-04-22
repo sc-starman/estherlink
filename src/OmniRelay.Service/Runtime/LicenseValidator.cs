@@ -48,7 +48,7 @@ public sealed class LicenseValidator
         {
             if (Interlocked.Exchange(ref _diagnosticLogged, 1) == 0)
             {
-                _fileLog.Info("License validator HTTP mode: direct IC1/IC2 then proxy-aware IC1/IC2, per-attempt timeout=45s, connect-timeout=30s.");
+                _fileLog.Info("License validator HTTP mode: parallel direct/proxy-aware IC1/IC2 race, per-attempt timeout=45s, connect-timeout=30s.");
             }
 
             var now = DateTimeOffset.UtcNow;
@@ -319,21 +319,64 @@ public sealed class LicenseValidator
             return new VerifyAttempt(false, null, null, "No usable IC1/IC2 source adapter IPv4 found for license verification.");
         }
 
+        var raceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var pending = attempts
+            .Select(attempt => SendVerifyRaceAttemptAsync(attempt, verifyUrl, requestJson, raceCts.Token))
+            .ToList();
+        var allTasks = pending.ToArray();
         var errors = new List<string>();
-        foreach (var attempt in attempts)
+        VerifyAttempt? firstNonSuccessHttpResponse = null;
+
+        while (pending.Count > 0)
         {
-            var result = await SendVerifyAsync(attempt, verifyUrl, requestJson, cancellationToken);
-            if (result.Success)
+            var completed = await Task.WhenAny(pending);
+            pending.Remove(completed);
+            var outcome = await completed;
+
+            var result = outcome.Result;
+            if (result.Success && result.Response?.IsSuccessStatusCode == true)
             {
+                raceCts.Cancel();
+                _ = Task.WhenAll(allTasks).ContinueWith(
+                    static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+                    raceCts,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+
+                _fileLog.Info($"License verification succeeded via {outcome.Attempt.DisplayName}; canceled remaining parallel attempts.");
                 return result;
             }
 
+            if (result.Success && result.Response is not null)
+            {
+                firstNonSuccessHttpResponse ??= result;
+                var statusCode = (int)result.Response.StatusCode;
+                var reason = result.Response.ReasonPhrase ?? "unknown";
+                var detail = $"HTTP {statusCode}: {reason}";
+                errors.Add($"{outcome.Attempt.DisplayName}: {detail}");
+                _fileLog.Warn($"License {outcome.Attempt.DisplayName} verification attempt returned non-success status: {detail}");
+                continue;
+            }
+
             var error = result.Error ?? "unknown error";
-            errors.Add($"{attempt.DisplayName}: {error}");
-            _fileLog.Warn($"License {attempt.DisplayName} verification attempt failed: {error}");
+            errors.Add($"{outcome.Attempt.DisplayName}: {error}");
+            _fileLog.Warn($"License {outcome.Attempt.DisplayName} verification attempt failed: {error}");
         }
 
-        return new VerifyAttempt(false, null, null, $"All 4 license verify paths failed. {string.Join(" | ", errors)}");
+        raceCts.Dispose();
+        return firstNonSuccessHttpResponse
+            ?? new VerifyAttempt(false, null, null, $"All {attempts.Count} license verify paths failed. {string.Join(" | ", errors)}");
+    }
+
+    private static async Task<VerifyRaceOutcome> SendVerifyRaceAttemptAsync(
+        NetworkAttempt attempt,
+        string verifyUrl,
+        string requestJson,
+        CancellationToken cancellationToken)
+    {
+        var result = await SendVerifyAsync(attempt, verifyUrl, requestJson, cancellationToken);
+        return new VerifyRaceOutcome(attempt, result);
     }
 
     private static async Task<VerifyAttempt> SendVerifyAsync(
@@ -380,25 +423,55 @@ public sealed class LicenseValidator
             return null;
         }
 
-        foreach (var attempt in attempts)
-        {
-            try
-            {
-                var response = await FetchPublicKeysAsync(attempt, verifyUrl, cancellationToken);
-                if (response is not null)
-                {
-                    return response;
-                }
+        var raceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var pending = attempts
+            .Select(attempt => FetchPublicKeysRaceAttemptAsync(attempt, verifyUrl, raceCts.Token))
+            .ToList();
+        var allTasks = pending.ToArray();
 
-                _fileLog.Warn($"Public keys fetch returned non-success status via {attempt.DisplayName}.");
-            }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        while (pending.Count > 0)
+        {
+            var completed = await Task.WhenAny(pending);
+            pending.Remove(completed);
+            var outcome = await completed;
+
+            if (outcome.Response is not null)
             {
-                _fileLog.Warn($"Public keys fetch failed via {attempt.DisplayName}: {ex.Message}");
+                raceCts.Cancel();
+                _ = Task.WhenAll(allTasks).ContinueWith(
+                    static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+                    raceCts,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+
+                _fileLog.Info($"Public keys fetch succeeded via {outcome.Attempt.DisplayName}; canceled remaining parallel attempts.");
+                return outcome.Response;
             }
+
+            _fileLog.Warn($"Public keys fetch failed via {outcome.Attempt.DisplayName}: {outcome.Error ?? "HTTP non-success status."}");
         }
 
+        raceCts.Dispose();
         return null;
+    }
+
+    private static async Task<PublicKeysRaceOutcome> FetchPublicKeysRaceAttemptAsync(
+        NetworkAttempt attempt,
+        string verifyUrl,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await FetchPublicKeysAsync(attempt, verifyUrl, cancellationToken);
+            return response is not null
+                ? new PublicKeysRaceOutcome(attempt, response, null)
+                : new PublicKeysRaceOutcome(attempt, null, "HTTP non-success status.");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return new PublicKeysRaceOutcome(attempt, null, ex.Message);
+        }
     }
 
     private static bool VerifyResponseSignature(
@@ -649,6 +722,8 @@ public sealed class LicenseValidator
     }
 
     private sealed record VerifyAttempt(bool Success, HttpResponseMessage? Response, string? ResponseBody, string? Error);
+    private sealed record VerifyRaceOutcome(NetworkAttempt Attempt, VerifyAttempt Result);
+    private sealed record PublicKeysRaceOutcome(NetworkAttempt Attempt, LicensePublicKeysResponse? Response, string? Error);
 
     private static async ValueTask<Stream> ConnectWithIpv4PreferenceAsync(
         SocketsHttpConnectionContext context,

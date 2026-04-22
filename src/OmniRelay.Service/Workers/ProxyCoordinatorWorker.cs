@@ -11,7 +11,7 @@ public sealed class ProxyCoordinatorWorker : BackgroundService
 
     private readonly GatewayRuntime _runtime;
     private readonly LicenseValidator _licenseValidator;
-    private readonly HttpConnectProxyEngine _proxyEngine;
+    private readonly Socks5ProxyEngine _proxyEngine;
     private readonly Socks5BootstrapProxyEngine _socksEngine;
     private readonly FileLogWriter _fileLog;
     private readonly ILogger<ProxyCoordinatorWorker> _logger;
@@ -27,7 +27,7 @@ public sealed class ProxyCoordinatorWorker : BackgroundService
     public ProxyCoordinatorWorker(
         GatewayRuntime runtime,
         LicenseValidator licenseValidator,
-        HttpConnectProxyEngine proxyEngine,
+        Socks5ProxyEngine proxyEngine,
         Socks5BootstrapProxyEngine socksEngine,
         FileLogWriter fileLog,
         ILogger<ProxyCoordinatorWorker> logger)
@@ -105,9 +105,13 @@ public sealed class ProxyCoordinatorWorker : BackgroundService
                     continue;
                 }
 
-                await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, stoppingToken);
+                var activeProxyPort = await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, stoppingToken);
+                if (activeProxyPort != config.LocalProxyListenPort)
+                {
+                    config = _runtime.GetConfigSnapshot();
+                }
                 await _socksEngine.EnsureRunningAsync(config.BootstrapSocksLocalPort, stoppingToken);
-                _runtime.SetProxyRunning(true, config.LocalProxyListenPort);
+                _runtime.SetProxyRunning(true, activeProxyPort);
                 var runningStatus = _runtime.GetStatusSnapshot();
                 _runtime.SetBootstrapSocksStatus(
                     true,

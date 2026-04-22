@@ -16,7 +16,7 @@
         <DockPanel Grid.Row="0" Margin="0,0,0,12" LastChildFill="False">
             <StackPanel DockPanel.Dock="Left">
                 <TextBlock Text="Policy Lists" Style="{StaticResource SectionTitleTextStyle}"/>
-                <TextBlock Text="Manage whitelist (route via IC1) and blacklist (block with HTTP 403). Supports TXT/CSV import." Style="{StaticResource MutedTextStyle}"/>
+                <TextBlock Text="Manage whitelist (route via IC1) and blacklist (deny with SOCKS policy response). Supports TXT/CSV import." Style="{StaticResource MutedTextStyle}"/>
             </StackPanel>
             <Button DockPanel.Dock="Right"
                     Content="Refresh"

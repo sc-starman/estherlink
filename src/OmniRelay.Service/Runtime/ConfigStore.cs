@@ -62,7 +62,7 @@ public sealed class ConfigStore
 
             if (stored.SchemaVersion < 4)
             {
-                stored.BootstrapSocksLocalPort = 19081;
+                stored.BootstrapSocksLocalPort = 24081;
                 stored.BootstrapSocksRemotePort = 16080;
                 stored.GatewayOnlineInstallEnabled = true;
                 stored.SchemaVersion = 4;
@@ -95,7 +95,7 @@ public sealed class ConfigStore
                 {
                     SchemaVersion = CurrentSchemaVersion,
                     LocalProxyListenPort = stored.LocalProxyListenPort,
-                    BootstrapSocksLocalPort = stored.BootstrapSocksLocalPort <= 0 ? 19081 : stored.BootstrapSocksLocalPort,
+                    BootstrapSocksLocalPort = stored.BootstrapSocksLocalPort <= 0 ? 24081 : stored.BootstrapSocksLocalPort,
                     BootstrapSocksRemotePort = stored.BootstrapSocksRemotePort <= 0 ? 16080 : stored.BootstrapSocksRemotePort,
                     GatewayOnlineInstallEnabled = stored.GatewayOnlineInstallEnabled,
                     GatewayType = GatewayTypes.Normalize(stored.GatewayType),
@@ -212,8 +212,8 @@ public sealed class ConfigStore
     private sealed class PersistedConfig
     {
         public int SchemaVersion { get; set; }
-        public int LocalProxyListenPort { get; set; } = 19080;
-        public int BootstrapSocksLocalPort { get; set; } = 19081;
+        public int LocalProxyListenPort { get; set; } = 24080;
+        public int BootstrapSocksLocalPort { get; set; } = 24081;
         public int BootstrapSocksRemotePort { get; set; } = 16080;
         public bool GatewayOnlineInstallEnabled { get; set; } = true;
         public string GatewayType { get; set; } = GatewayTypes.Remote;

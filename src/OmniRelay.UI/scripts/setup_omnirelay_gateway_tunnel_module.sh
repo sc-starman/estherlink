@@ -145,17 +145,6 @@ def probe_socks5():
     except Exception:
         return False
 
-def probe_http_connect():
-    try:
-        s = socket.create_connection((host, port), timeout=4)
-        s.settimeout(4)
-        s.sendall(b"GET / HTTP/1.1\r\nHost: omnirelay-probe.local\r\n\r\n")
-        data = s.recv(32)
-        s.close()
-        return data.startswith(b"HTTP/1.")
-    except Exception:
-        return False
-
 # quick reachability test first
 try:
     sock = socket.create_connection((host, port), timeout=3)
@@ -166,8 +155,6 @@ except Exception:
 
 if probe_socks5():
     print("socks5")
-elif probe_http_connect():
-    print("http-connect")
 else:
     print("unknown")
 PY
@@ -178,9 +165,6 @@ probe_egress() {
   case "$protocol" in
     socks5)
       curl --silent --show-error --fail --max-time "$PROBE_TIMEOUT_SECONDS" --connect-timeout 6 --socks5-hostname "${BACKEND_HOST}:${BACKEND_PORT}" "$PROBE_URL" >/dev/null
-      ;;
-    http-connect)
-      curl --silent --show-error --fail --max-time "$PROBE_TIMEOUT_SECONDS" --connect-timeout 6 --proxy "http://${BACKEND_HOST}:${BACKEND_PORT}" --proxytunnel "$PROBE_URL" >/dev/null
       ;;
     *)
       return 1
@@ -203,7 +187,7 @@ run_probe() {
   message=""
 
   case "$protocol" in
-    socks5|http-connect)
+    socks5)
       if probe_egress "$protocol"; then
         ok=true
         egress_ok=true
@@ -223,8 +207,8 @@ run_probe() {
       message="python3 is required for backend protocol detection."
       ;;
     *)
-      reason="backend_protocol_unknown"
-      message="Backend endpoint responded with unknown protocol."
+      reason="backend_protocol_not_socks5"
+      message="Backend endpoint is reachable but is not SOCKS5."
       ;;
   esac
 

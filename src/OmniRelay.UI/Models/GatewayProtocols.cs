@@ -2,21 +2,21 @@ namespace OmniRelay.UI.Models;
 
 public static class GatewayProtocols
 {
-    public const string VlessReality3xui = "vless_reality_3xui";
-    public const string VlessPlain3xui = "vless_plain_3xui";
-    public const string Shadowsocks3xui = "shadowsocks_3xui";
+    public const string VlessRealitySingbox = "vless_reality_singbox";
+    public const string VlessPlainSingbox = "vless_plain_singbox";
+    public const string ShadowsocksSingbox = "shadowsocks_singbox";
     public const string ShadowTlsV3ShadowsocksSingbox = "shadowtls_v3_shadowsocks_singbox";
-    public const string OpenVpnTcpRelay = "openvpn_tcp_relay";
-    public const string IpsecL2tpHwdsl2 = "ipsec_l2tp_hwdsl2";
+    public const string OpenVpnTcpSingbox = "openvpn_tcp_singbox";
+    public const string IpsecL2tpSingbox = "ipsec_l2tp_singbox";
 
     public static IReadOnlyList<(string Value, string Label)> All { get; } =
     [
-        (VlessReality3xui, "VLESS Reality (3x-ui)"),
-        (VlessPlain3xui, "VLESS (3x-ui, no TLS)"),
-        (Shadowsocks3xui, "Shadowsocks (3x-ui)"),
-        (ShadowTlsV3ShadowsocksSingbox, "ShadowTLS v3 + Shadowsocks (sing-box)"),
-        (OpenVpnTcpRelay, "OpenVPN (TCP, cert + user/pass)"),
-        (IpsecL2tpHwdsl2, "IPSec/L2TP (hwdsl2)")
+        (VlessRealitySingbox, "VLESS Reality"),
+        (VlessPlainSingbox, "VLESS (plain, no TLS)"),
+        (ShadowsocksSingbox, "Shadowsocks"),
+        (ShadowTlsV3ShadowsocksSingbox, "ShadowTLS v3 + Shadowsocks"),
+        (OpenVpnTcpSingbox, "OpenVPN"),
+        (IpsecL2tpSingbox, "IPSec/L2TP")
     ];
 
     public static string Normalize(string? value)
@@ -27,27 +27,27 @@ public static class GatewayProtocols
             return ShadowTlsV3ShadowsocksSingbox;
         }
 
-        if (string.Equals(normalized, Shadowsocks3xui, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase))
         {
-            return Shadowsocks3xui;
+            return ShadowsocksSingbox;
         }
 
-        if (string.Equals(normalized, VlessPlain3xui, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, VlessPlainSingbox, StringComparison.OrdinalIgnoreCase))
         {
-            return VlessPlain3xui;
+            return VlessPlainSingbox;
         }
 
-        if (string.Equals(normalized, OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
         {
-            return OpenVpnTcpRelay;
+            return OpenVpnTcpSingbox;
         }
 
-        if (string.Equals(normalized, IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase))
         {
-            return IpsecL2tpHwdsl2;
+            return IpsecL2tpSingbox;
         }
 
-        return VlessReality3xui;
+        return VlessRealitySingbox;
     }
 
     public static string ToLabel(string? value)

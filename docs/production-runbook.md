@@ -34,7 +34,7 @@
 ### Tunnel Instability (Windows)
 1. Inspect service status via UI `TunnelConnected/TunnelLastError`.
 2. Validate SSH binary availability and key path.
-3. Validate VPS `sshd` + `x-ui` listeners and firewall.
+3. Validate VPS `sshd` + `omnirelay-singbox` listeners and firewall.
 4. Confirm remote port forwarding is accepted for `OmniRelay` user.
 
 ### Gateway Deployment Failures (VPS from UI)
@@ -48,7 +48,10 @@
 6. Validate gateway status/health directly:
    - `sudo /usr/local/sbin/omnirelay-gatewayctl status --json`
    - `sudo /usr/local/sbin/omnirelay-gatewayctl health --json`
-7. If gateway install fails before service creation, rerun `Gateway Bootstrap Check` then retry install.
+7. Confirm legacy stack is absent:
+   - `systemctl is-active x-ui || true`
+   - `systemctl is-active omnirelay-redsocks || true`
+8. If gateway install fails before service creation, rerun `Gateway Bootstrap Check` then retry install.
 
 ### Gateway Protocol Switch Behavior
 1. Install path is strict on protocol changes:

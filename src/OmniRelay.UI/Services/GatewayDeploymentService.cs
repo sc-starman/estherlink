@@ -17,6 +17,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
     private const string RemoteInstallScriptPath = "/tmp/omnirelay-gatewayctl.sh";
     private const string RemoteOmniPanelCommonScriptPath = "/tmp/omnirelay-omnipanel-common.sh";
     private const string RemoteBootstrapCommonScriptPath = "/tmp/omnirelay-bootstrap-common.sh";
+    private const string RemoteSingBoxConnectorCommonScriptPath = "/tmp/omnirelay-singbox-connector-common.sh";
     private const string RemoteTunnelModuleScriptPath = "/tmp/omnirelay-tunnel-module.sh";
     private const string RemoteUploadedPanelCertPath = "/tmp/omnirelay-omnipanel-upload.crt";
     private const string RemoteUploadedPanelKeyPath = "/tmp/omnirelay-omnipanel-upload.key";
@@ -158,6 +159,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             await UploadInstallerScriptAsync(request, progress, cancellationToken);
             await UploadBootstrapCommonScriptAsync(request, progress, cancellationToken);
             await UploadOmniPanelCommonScriptAsync(request, progress, cancellationToken);
+            await UploadSingBoxConnectorCommonScriptAsync(request, progress, cancellationToken);
 
             var uploadedPanelCertRemotePath = string.Empty;
             var uploadedPanelKeyRemotePath = string.Empty;
@@ -369,7 +371,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         var args = BuildCommonArgs(request) + " --json";
         var command =
             "set -euo pipefail; " +
-            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"activeProtocol\":\"vless_reality_3xui\",\"sshState\":\"missing\",\"xuiState\":\"missing\",\"singBoxState\":\"missing\",\"openVpnState\":\"missing\",\"ipsecState\":\"missing\",\"xl2tpdState\":\"missing\",\"omniPanelState\":\"missing\",\"nginxState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"omniPanelInternalPort\":0,\"xuiPanelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"omniPanelInternalListener\":false,\"inboundId\":\"\",\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false}}'; exit 0; }}; " +
+            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"activeProtocol\":\"vless_reality_singbox\",\"sshState\":\"missing\",\"singBoxState\":\"missing\",\"openVpnState\":\"missing\",\"ipsecState\":\"missing\",\"xl2tpdState\":\"missing\",\"omniPanelState\":\"missing\",\"nginxState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"omniPanelInternalPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"omniPanelInternalListener\":false,\"inboundId\":\"\",\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false,\"tunnelHealthy\":false,\"tunnelReason\":\"missing\",\"tunnelBackendProtocol\":\"unknown\",\"tunnelEgressReachable\":false}}'; exit 0; }}; " +
             $"{ShellQuote(GatewayCtlPath)} status {args}";
 
         var result = await ExecuteCommandAsync(request.Config, command, sudoPassword, null, cancellationToken);
@@ -379,7 +381,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             return new GatewayServiceStatus
             {
                 SshState = result.Success ? "unknown" : "error",
-                XuiState = result.Success ? "unknown" : "error",
                 Fail2BanState = result.Success ? "unknown" : "error"
             };
         }
@@ -400,7 +401,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         var args = BuildCommonArgs(request) + " --json";
         var command =
             "set -euo pipefail; " +
-            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"healthy\":false,\"activeProtocol\":\"vless_reality_3xui\",\"sshState\":\"missing\",\"xuiState\":\"missing\",\"singBoxState\":\"missing\",\"openVpnState\":\"missing\",\"ipsecState\":\"missing\",\"xl2tpdState\":\"missing\",\"omniPanelState\":\"missing\",\"nginxState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"omniPanelInternalPort\":0,\"xuiPanelPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"omniPanelInternalListener\":false,\"inboundId\":\"\",\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false}}'; exit 0; }}; " +
+            $"[ -x {ShellQuote(GatewayCtlPath)} ] || {{ echo '{{\"healthy\":false,\"activeProtocol\":\"vless_reality_singbox\",\"sshState\":\"missing\",\"singBoxState\":\"missing\",\"openVpnState\":\"missing\",\"ipsecState\":\"missing\",\"xl2tpdState\":\"missing\",\"omniPanelState\":\"missing\",\"nginxState\":\"missing\",\"fail2banState\":\"disabled\",\"backendPort\":0,\"publicPort\":0,\"panelPort\":0,\"omniPanelInternalPort\":0,\"backendListener\":false,\"publicListener\":false,\"panelListener\":false,\"omniPanelInternalListener\":false,\"inboundId\":\"\",\"dnsConfigPresent\":false,\"dnsRuleActive\":false,\"dohReachableViaTunnel\":false,\"udp53PathReady\":false,\"dnsPathHealthy\":false,\"tunnelHealthy\":false,\"tunnelReason\":\"missing\",\"tunnelBackendProtocol\":\"unknown\",\"tunnelEgressReachable\":false}}'; exit 0; }}; " +
             $"{ShellQuote(GatewayCtlPath)} health {args}";
 
         var result = await ExecuteCommandAsync(
@@ -528,9 +529,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress,
         CancellationToken cancellationToken)
     {
-        var selectedProtocol = GatewayProtocols.Normalize(request.SelectedGatewayProtocol);
-        if (!IsTunnelBootstrapMode(request) ||
-            !string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        if (!IsTunnelBootstrapMode(request))
         {
             return;
         }
@@ -560,22 +559,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             "        return False\n" +
             "    return len(data) == 2 and data[0] == 0x05 and data[1] in (0x00, 0x02)\n" +
             "\n" +
-            "def probe_http_connect() -> bool:\n" +
-            "    req = b\"CONNECT 1.1.1.1:443 HTTP/1.1\\r\\nHost: 1.1.1.1:443\\r\\nProxy-Connection: keep-alive\\r\\n\\r\\n\"\n" +
-            "    try:\n" +
-            "        with socket.create_connection((\"127.0.0.1\", port), timeout=4) as s:\n" +
-            "            s.settimeout(4)\n" +
-            "            s.sendall(req)\n" +
-            "            data = s.recv(64)\n" +
-            "    except Exception:\n" +
-            "        return False\n" +
-            "    return data.startswith(b\"HTTP/1.0 \") or data.startswith(b\"HTTP/1.1 \")\n" +
-            "\n" +
             "if probe_socks():\n" +
             "    print(f\"Runtime backend probe passed on 127.0.0.1:{port} (mode=socks5).\")\n" +
-            "    raise SystemExit(0)\n" +
-            "if probe_http_connect():\n" +
-            "    print(f\"Runtime backend probe passed on 127.0.0.1:{port} (mode=http-connect).\")\n" +
             "    raise SystemExit(0)\n" +
             "try:\n" +
             "    with socket.create_connection((\"127.0.0.1\", port), timeout=4) as s:\n" +
@@ -583,7 +568,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             "except Exception as ex:\n" +
             "    print(f\"Runtime backend probe failed on 127.0.0.1:{port}: {ex}\")\n" +
             "    raise SystemExit(44)\n" +
-            "print(f\"Runtime backend probe failed on 127.0.0.1:{port}: unsupported proxy protocol (expected socks5 or http-connect)\")\n" +
+            "print(f\"Runtime backend probe failed on 127.0.0.1:{port}: unsupported proxy protocol (expected socks5)\")\n" +
             "raise SystemExit(44)\n" +
             "PY";
 
@@ -891,6 +876,15 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         await UploadFileAsync(request, localScript, RemoteTunnelModuleScriptPath, progress, cancellationToken);
     }
 
+    private async Task UploadSingBoxConnectorCommonScriptAsync(
+        GatewayDeploymentRequest request,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var localScript = ResolveSingBoxConnectorCommonScriptPath();
+        await UploadFileAsync(request, localScript, RemoteSingBoxConnectorCommonScriptPath, progress, cancellationToken);
+    }
+
     private async Task EnsureTunnelModuleInstalledAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
@@ -1016,12 +1010,12 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         var normalizedProtocol = GatewayProtocols.Normalize(selectedGatewayProtocol);
         var scriptFileName = normalizedProtocol switch
         {
-            var protocol when string.Equals(protocol, GatewayProtocols.VlessPlain3xui, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_3xui_vless_plain.sh",
-            var protocol when string.Equals(protocol, GatewayProtocols.Shadowsocks3xui, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_3xui_shadowsocks.sh",
+            var protocol when string.Equals(protocol, GatewayProtocols.VlessPlainSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_singbox_vless_plain.sh",
+            var protocol when string.Equals(protocol, GatewayProtocols.ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_singbox_shadowsocks.sh",
             var protocol when string.Equals(protocol, GatewayProtocols.ShadowTlsV3ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_singbox_shadowtls.sh",
-            var protocol when string.Equals(protocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_openvpn.sh",
-            var protocol when string.Equals(protocol, GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_ipsec_l2tp.sh",
-            _ => "setup_omnirelay_vps_3xui_vless_reality.sh"
+            var protocol when string.Equals(protocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_openvpn_singbox.sh",
+            var protocol when string.Equals(protocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_ipsec_l2tp_singbox.sh",
+            _ => "setup_omnirelay_vps_singbox_vless_reality.sh"
         };
         var candidates = new[]
         {
@@ -1094,6 +1088,26 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         if (string.IsNullOrWhiteSpace(path))
         {
             throw new InvalidOperationException($"Bootstrap helper script not found. Expected {scriptFileName} in app GatewayScripts content.");
+        }
+
+        return path;
+    }
+
+    private static string ResolveSingBoxConnectorCommonScriptPath()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        const string scriptFileName = "setup_omnirelay_gateway_singbox_connector_common.sh";
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
+            Path.Combine(baseDir, scriptFileName),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
+        };
+
+        var path = candidates.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException($"Sing-box connector helper script not found. Expected {scriptFileName} in app GatewayScripts content.");
         }
 
         return path;
@@ -1366,18 +1380,18 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             return $"--camouflage-server {ShellQuote(request.ShadowTlsCamouflageServer.Trim())}";
         }
 
-        if (string.Equals(selectedProtocol, GatewayProtocols.Shadowsocks3xui, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(selectedProtocol, GatewayProtocols.VlessPlain3xui, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(selectedProtocol, GatewayProtocols.ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(selectedProtocol, GatewayProtocols.VlessPlainSingbox, StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
         }
 
-        if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
         }
 
-        if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
         {
             var openVpnClientDns = request.OpenVpnClientDns?.Trim() ?? string.Empty;
             return
@@ -1476,7 +1490,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         }
 
         var selectedProtocol = GatewayProtocols.Normalize(request.SelectedGatewayProtocol);
-        if (string.Equals(selectedProtocol, GatewayProtocols.VlessReality3xui, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(selectedProtocol, GatewayProtocols.VlessRealitySingbox, StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(request.GatewaySni))
             {
@@ -1495,7 +1509,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 throw new InvalidOperationException("ShadowTLS camouflage server is required.");
             }
         }
-        else if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase)
+        else if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase)
                  && string.IsNullOrWhiteSpace(request.OpenVpnNetwork))
         {
             throw new InvalidOperationException("OpenVPN tunnel network is required.");
@@ -1651,9 +1665,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
     private class GatewayStatusDto
     {
-        public string ActiveProtocol { get; set; } = GatewayProtocols.VlessReality3xui;
+        public string ActiveProtocol { get; set; } = GatewayProtocols.VlessRealitySingbox;
         public string SshState { get; set; } = "unknown";
-        public string XuiState { get; set; } = "unknown";
         public string SingBoxState { get; set; } = "unknown";
         public string OpenVpnState { get; set; } = "unknown";
         public string IpsecState { get; set; } = "unknown";
@@ -1665,7 +1678,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         public int PublicPort { get; set; }
         public int PanelPort { get; set; }
         public int OmniPanelInternalPort { get; set; }
-        public int XuiPanelPort { get; set; }
         public bool BackendListener { get; set; }
         public bool PublicListener { get; set; }
         public bool PanelListener { get; set; }
@@ -1679,12 +1691,15 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         public string DnsMode { get; set; } = "unknown";
         public bool DnsUdpOnly { get; set; }
         public string DohEndpoints { get; set; } = string.Empty;
+        public bool TunnelHealthy { get; set; }
+        public string TunnelReason { get; set; } = string.Empty;
+        public string TunnelBackendProtocol { get; set; } = string.Empty;
+        public bool TunnelEgressReachable { get; set; }
 
         public GatewayServiceStatus ToModel() => new()
         {
             ActiveProtocol = ActiveProtocol,
             SshState = SshState,
-            XuiState = XuiState,
             SingBoxState = SingBoxState,
             OpenVpnState = OpenVpnState,
             IpsecState = IpsecState,
@@ -1696,7 +1711,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             PublicPort = PublicPort,
             PanelPort = PanelPort,
             OmniPanelInternalPort = OmniPanelInternalPort,
-            XuiPanelPort = XuiPanelPort,
             BackendListener = BackendListener,
             PublicListener = PublicListener,
             PanelListener = PanelListener,
@@ -1709,7 +1723,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             DnsPathHealthy = DnsPathHealthy,
             DnsMode = DnsMode,
             DnsUdpOnly = DnsUdpOnly,
-            DohEndpoints = DohEndpoints
+            DohEndpoints = DohEndpoints,
+            TunnelHealthy = TunnelHealthy,
+            TunnelReason = TunnelReason,
+            TunnelBackendProtocol = TunnelBackendProtocol,
+            TunnelEgressReachable = TunnelEgressReachable
         };
     }
 
@@ -1729,7 +1747,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 CheckedAtUtc = DateTimeOffset.UtcNow,
                 ActiveProtocol = baseModel.ActiveProtocol,
                 SshState = baseModel.SshState,
-                XuiState = baseModel.XuiState,
                 SingBoxState = baseModel.SingBoxState,
                 OpenVpnState = baseModel.OpenVpnState,
                 IpsecState = baseModel.IpsecState,
@@ -1741,7 +1758,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 PublicPort = baseModel.PublicPort,
                 PanelPort = baseModel.PanelPort,
                 OmniPanelInternalPort = baseModel.OmniPanelInternalPort,
-                XuiPanelPort = baseModel.XuiPanelPort,
                 BackendListener = baseModel.BackendListener,
                 PublicListener = baseModel.PublicListener,
                 PanelListener = baseModel.PanelListener,
@@ -1754,7 +1770,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 DnsPathHealthy = baseModel.DnsPathHealthy,
                 DnsMode = baseModel.DnsMode,
                 DnsUdpOnly = baseModel.DnsUdpOnly,
-                DohEndpoints = baseModel.DohEndpoints
+                DohEndpoints = baseModel.DohEndpoints,
+                TunnelHealthy = baseModel.TunnelHealthy,
+                TunnelReason = baseModel.TunnelReason,
+                TunnelBackendProtocol = baseModel.TunnelBackendProtocol,
+                TunnelEgressReachable = baseModel.TunnelEgressReachable
             };
         }
     }

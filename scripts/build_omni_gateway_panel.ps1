@@ -13,6 +13,20 @@ if (-not (Test-Path -LiteralPath $projectFullPath)) {
 
 Push-Location $projectFullPath
 try {
+    Write-Host "Incrementing OmniPanel patch version..." -ForegroundColor Cyan
+    npm version patch --no-git-tag-version
+    if ($LASTEXITCODE -ne 0) {
+        throw "npm version patch failed with exit code $LASTEXITCODE."
+    }
+
+    $packageJsonPath = Join-Path $projectFullPath "package.json"
+    $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
+    $panelVersion = [string]$packageJson.version
+    if ([string]::IsNullOrWhiteSpace($panelVersion)) {
+        throw "Failed to resolve OmniPanel version after patch increment."
+    }
+    Write-Host "OmniPanel version: v$panelVersion" -ForegroundColor Yellow
+
     if (-not (Test-Path -LiteralPath (Join-Path $projectFullPath "package-lock.json"))) {
         throw "package-lock.json not found. Run npm install once in $projectFullPath."
     }
@@ -71,6 +85,7 @@ if (Test-Path -LiteralPath $envExamplePath) {
 $buildInfo = @{
     builtAtUtc = [DateTimeOffset]::UtcNow.ToString("o")
     sourceProject = $ProjectPath
+    version = $panelVersion
 }
 $buildInfo | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $stageDir "omni-gateway.build.json") -Encoding UTF8
 
@@ -91,3 +106,4 @@ Write-Host "OmniPanel artifact created:" -ForegroundColor Green
 Write-Host "  Path: $artifactPath"
 Write-Host "  Size: $fileSize bytes"
 Write-Host "  SHA-256: $hash"
+Write-Host "  Version: v$panelVersion"

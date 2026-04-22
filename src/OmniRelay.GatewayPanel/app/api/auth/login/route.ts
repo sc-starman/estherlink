@@ -24,7 +24,6 @@ export async function POST(request: Request) {
 
   session.isAuthenticated = true;
   session.username = username;
-  session.xuiCookie = undefined;
   await session.save();
   return NextResponse.json({ ok: true });
 }

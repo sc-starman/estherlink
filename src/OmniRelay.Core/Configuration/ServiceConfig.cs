@@ -4,8 +4,8 @@ public sealed class ServiceConfig
 {
     public int SchemaVersion { get; set; } = 4;
     public string GatewayType { get; set; } = GatewayTypes.Remote;
-    public int LocalProxyListenPort { get; set; } = 19080;
-    public int BootstrapSocksLocalPort { get; set; } = 19081;
+    public int LocalProxyListenPort { get; set; } = 24080;
+    public int BootstrapSocksLocalPort { get; set; } = 24081;
     public int BootstrapSocksRemotePort { get; set; } = 16080;
     public bool GatewayOnlineInstallEnabled { get; set; } = true;
     public int WhitelistAdapterIfIndex { get; set; } = -1;

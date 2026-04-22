@@ -187,22 +187,22 @@ public partial class GatewayManagementViewModel : ObservableObject
     }
 
     public bool IsVlessProtocolSelected =>
-        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.VlessReality3xui, StringComparison.OrdinalIgnoreCase);
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.VlessRealitySingbox, StringComparison.OrdinalIgnoreCase);
 
-    public bool IsVlessPlain3xuiProtocolSelected =>
-        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.VlessPlain3xui, StringComparison.OrdinalIgnoreCase);
+    public bool IsVlessPlainSingboxProtocolSelected =>
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.VlessPlainSingbox, StringComparison.OrdinalIgnoreCase);
 
     public bool IsShadowTlsProtocolSelected =>
         string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.ShadowTlsV3ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase);
 
-    public bool IsShadowsocks3xuiProtocolSelected =>
-        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.Shadowsocks3xui, StringComparison.OrdinalIgnoreCase);
+    public bool IsShadowsocksSingboxProtocolSelected =>
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase);
 
     public bool IsOpenVpnProtocolSelected =>
-        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase);
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase);
 
     public bool IsIpsecL2tpProtocolSelected =>
-        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase);
+        string.Equals(GatewayProtocols.Normalize(State.SelectedGatewayProtocol), GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase);
 
     public bool ShowEditableProtocolPort => !IsIpsecL2tpProtocolSelected;
 
@@ -211,9 +211,9 @@ public partial class GatewayManagementViewModel : ObservableObject
     public string ProtocolPortLabel =>
         IsVlessProtocolSelected
             ? "VLESS Reality Port"
-            : IsVlessPlain3xuiProtocolSelected
+            : IsVlessPlainSingboxProtocolSelected
                 ? "VLESS (no TLS) Port"
-            : IsShadowsocks3xuiProtocolSelected
+            : IsShadowsocksSingboxProtocolSelected
                 ? "Shadowsocks Port"
             : IsShadowTlsProtocolSelected
                 ? "ShadowTLS Port"
@@ -1390,19 +1390,19 @@ public partial class GatewayManagementViewModel : ObservableObject
                 return;
             }
 
-            if (string.Equals(GatewayProtocols.Normalize(status.ActiveProtocol), GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(GatewayProtocols.Normalize(status.ActiveProtocol), GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
             {
                 GatewayServiceState = $"protocol={activeProtocolLabel}, openvpn={status.OpenVpnState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
                 return;
             }
 
-            if (string.Equals(GatewayProtocols.Normalize(status.ActiveProtocol), GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(GatewayProtocols.Normalize(status.ActiveProtocol), GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase))
             {
                 GatewayServiceState = $"protocol={activeProtocolLabel}, ipsec={status.IpsecState}, xl2tpd={status.Xl2tpdState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
                 return;
             }
 
-            GatewayServiceState = $"protocol={activeProtocolLabel}, x-ui={status.XuiState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
+            GatewayServiceState = $"protocol={activeProtocolLabel}, sing-box={status.SingBoxState}, omni-panel={status.OmniPanelState}, nginx={status.NginxState}, sshd={status.SshState}";
         }
         catch (Exception ex)
         {
@@ -1527,7 +1527,7 @@ public partial class GatewayManagementViewModel : ObservableObject
                 failures.Add($"sing-box={report.SingBoxState}");
             }
         }
-        else if (string.Equals(protocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(protocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
         {
             if (!string.Equals(report.OpenVpnState, "active", StringComparison.OrdinalIgnoreCase))
             {
@@ -1539,7 +1539,7 @@ public partial class GatewayManagementViewModel : ObservableObject
                 failures.Add("openvpn-accounting=unhealthy");
             }
         }
-        else if (string.Equals(protocol, GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(protocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase))
         {
             if (!string.Equals(report.IpsecState, "active", StringComparison.OrdinalIgnoreCase))
             {
@@ -1556,9 +1556,9 @@ public partial class GatewayManagementViewModel : ObservableObject
                 failures.Add("ipsec-accounting=unhealthy");
             }
         }
-        else if (!string.Equals(report.XuiState, "active", StringComparison.OrdinalIgnoreCase))
+        else if (!string.Equals(report.SingBoxState, "active", StringComparison.OrdinalIgnoreCase))
         {
-            failures.Add($"x-ui={report.XuiState}");
+            failures.Add($"sing-box={report.SingBoxState}");
         }
 
         if (!string.Equals(report.OmniPanelState, "active", StringComparison.OrdinalIgnoreCase))
@@ -1648,7 +1648,7 @@ public partial class GatewayManagementViewModel : ObservableObject
 
         var selectedProtocol = GatewayProtocols.Normalize(_state.SelectedGatewayProtocol);
         var publicPort = 0;
-        if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpHwdsl2, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase))
         {
             publicPort = 1701;
         }
@@ -1657,7 +1657,7 @@ public partial class GatewayManagementViewModel : ObservableObject
             throw new InvalidOperationException("Gateway public port must be a positive integer.");
         }
 
-        if (string.Equals(selectedProtocol, GatewayProtocols.VlessReality3xui, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(selectedProtocol, GatewayProtocols.VlessRealitySingbox, StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(_state.GatewaySni))
             {
@@ -1676,7 +1676,7 @@ public partial class GatewayManagementViewModel : ObservableObject
                 throw new InvalidOperationException("Camouflage server is required for ShadowTLS.");
             }
         }
-        else if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpRelay, StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(_state.OpenVpnNetwork))
             {
@@ -1970,8 +1970,8 @@ public partial class GatewayManagementViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(SelectedGatewayProtocolIndex));
             OnPropertyChanged(nameof(IsVlessProtocolSelected));
-            OnPropertyChanged(nameof(IsVlessPlain3xuiProtocolSelected));
-            OnPropertyChanged(nameof(IsShadowsocks3xuiProtocolSelected));
+            OnPropertyChanged(nameof(IsVlessPlainSingboxProtocolSelected));
+            OnPropertyChanged(nameof(IsShadowsocksSingboxProtocolSelected));
             OnPropertyChanged(nameof(IsShadowTlsProtocolSelected));
             OnPropertyChanged(nameof(IsOpenVpnProtocolSelected));
             OnPropertyChanged(nameof(IsIpsecL2tpProtocolSelected));

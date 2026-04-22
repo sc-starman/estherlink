@@ -2,9 +2,8 @@ namespace OmniRelay.UI.Models;
 
 public class GatewayServiceStatus
 {
-    public string ActiveProtocol { get; set; } = GatewayProtocols.VlessReality3xui;
+    public string ActiveProtocol { get; set; } = GatewayProtocols.VlessRealitySingbox;
     public string SshState { get; set; } = "unknown";
-    public string XuiState { get; set; } = "unknown";
     public string SingBoxState { get; set; } = "unknown";
     public string OpenVpnState { get; set; } = "unknown";
     public string IpsecState { get; set; } = "unknown";
@@ -16,7 +15,6 @@ public class GatewayServiceStatus
     public int PublicPort { get; set; }
     public int PanelPort { get; set; }
     public int OmniPanelInternalPort { get; set; }
-    public int XuiPanelPort { get; set; }
     public bool BackendListener { get; set; }
     public bool PublicListener { get; set; }
     public bool PanelListener { get; set; }
@@ -30,4 +28,8 @@ public class GatewayServiceStatus
     public string DnsMode { get; set; } = "unknown";
     public bool DnsUdpOnly { get; set; }
     public string DohEndpoints { get; set; } = string.Empty;
+    public bool TunnelHealthy { get; set; }
+    public string TunnelReason { get; set; } = string.Empty;
+    public string TunnelBackendProtocol { get; set; } = string.Empty;
+    public bool TunnelEgressReachable { get; set; }
 }

@@ -1,7 +1,5 @@
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
-import { exec as execCallback } from "node:child_process";
-import { promisify } from "node:util";
 import { randomBytes, randomUUID } from "node:crypto";
 import QRCode from "qrcode";
 import { type OmniSession } from "@/lib/session";
@@ -13,43 +11,22 @@ import {
   type GatewayProtocolProvider,
   resolveGatewayHost
 } from "@/lib/providers/types";
-
-const UNSUPPORTED_ACCOUNTING_CAPABILITIES = {
-  supportsTrafficLimit: false,
-  supportsDurationLimit: false,
-  supportsUsageAccounting: false
-} as const;
-
-const exec = promisify(execCallback);
-const DEFAULT_RELOAD_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
+import {
+  SINGBOX_ACCOUNTING_CAPABILITIES,
+  normalizeClientOptions,
+  readUsageByClientIds,
+  runGatewaySync
+} from "@/lib/providers/singbox-shared";
 
 interface ShadowTlsClientRecord extends GatewayClientRecord {
   ssPassword: string;
   shadowTlsPassword: string;
-}
-
-function randomToken(length: number): string {
-  return randomBytes(length)
-    .toString("base64")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, length);
-}
-
-function randomBase64(length: number): string {
-  return randomBytes(length).toString("base64");
-}
-
-function normalizeEmail(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function parsePort(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt((value ?? "").trim(), 10);
-  return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
+  totalGB: number;
+  expiryTime: number;
 }
 
 function getClientsFilePath(): string {
-  return process.env.SHADOWTLS_CLIENTS_FILE?.trim() || "/etc/omnirelay/gateway/shadowtls_clients.json";
+  return process.env.SHADOWTLS_CLIENTS_FILE?.trim() || "/opt/omnirelay/omni-gateway/shadowtls_clients.json";
 }
 
 function getCamouflageServer(): string {
@@ -57,20 +34,12 @@ function getCamouflageServer(): string {
 }
 
 function getPublicPort(): number {
-  return parsePort(process.env.SHADOWTLS_PUBLIC_PORT, 443);
+  const parsed = Number.parseInt((process.env.SHADOWTLS_PUBLIC_PORT ?? process.env.SINGBOX_PUBLIC_PORT ?? "443").trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 443;
 }
 
-function normalizeSudoCommand(command: string): string {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-
-  if (/(^|\s)-n(\s|$)/.test(trimmed)) {
-    return trimmed;
-  }
-
-  return trimmed.replace(/^(\S*sudo)\s+/, "$1 -n ");
+function randomToken(length: number): string {
+  return randomBytes(length).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, length);
 }
 
 async function readClients(): Promise<ShadowTlsClientRecord[]> {
@@ -81,14 +50,15 @@ async function readClients(): Promise<ShadowTlsClientRecord[]> {
     if (!Array.isArray(payload)) {
       return [];
     }
-
     return payload
       .map((item) => ({
         id: String((item as Record<string, unknown>).id ?? ""),
         email: String((item as Record<string, unknown>).email ?? ""),
         enable: Boolean((item as Record<string, unknown>).enable ?? true),
         ssPassword: String((item as Record<string, unknown>).ssPassword ?? ""),
-        shadowTlsPassword: String((item as Record<string, unknown>).shadowTlsPassword ?? "")
+        shadowTlsPassword: String((item as Record<string, unknown>).shadowTlsPassword ?? ""),
+        totalGB: Number((item as Record<string, unknown>).totalGB ?? 0) || 0,
+        expiryTime: Number((item as Record<string, unknown>).expiryTime ?? 0) || 0
       }))
       .filter((item) => item.id && item.email && item.ssPassword && item.shadowTlsPassword);
   } catch {
@@ -105,34 +75,12 @@ async function writeClients(clients: ShadowTlsClientRecord[]): Promise<void> {
   await fs.rename(tempPath, filePath);
 }
 
-async function reloadSingBox(): Promise<void> {
-  const command = normalizeSudoCommand(process.env.SINGBOX_RELOAD_COMMAND?.trim() || DEFAULT_RELOAD_COMMAND);
-  if (!command) {
-    return;
-  }
-
-  try {
-    await exec(command);
-  } catch (error) {
-    const failure = error as { message?: string; stdout?: string; stderr?: string };
-    const detail = [failure.message, failure.stderr, failure.stdout]
-      .map((part) => String(part ?? "").trim())
-      .filter((part) => part.length > 0)
-      .join("\n");
-    const lower = detail.toLowerCase();
-    if (lower.includes("a password is required") || lower.includes("a terminal is required") || lower.includes("not allowed to run sudo")) {
-      throw new Error(`Gateway sync-clients failed: sudo permission issue for omnipanel user.\n${detail}`);
-    }
-
-    throw new Error(detail ? `Gateway sync-clients failed:\n${detail}` : "Gateway sync-clients failed.");
-  }
-}
-
 export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
   public readonly protocolId = "shadowtls_v3_shadowsocks_singbox";
 
   public async getInbound(_session: OmniSession): Promise<GatewayInboundSnapshot> {
     const clients = await readClients();
+    const usage = await readUsageByClientIds(clients.map((item) => item.id));
     return {
       inbound: {
         id: 1,
@@ -145,40 +93,36 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
         id: item.id,
         email: item.email,
         enable: item.enable,
-        totalGB: 0,
-        expiryTime: 0,
-        usedBytes: null
+        totalGB: item.totalGB,
+        expiryTime: item.expiryTime,
+        usedBytes: usage.get(item.id) ?? 0
       })),
-      capabilities: UNSUPPORTED_ACCOUNTING_CAPABILITIES
+      capabilities: SINGBOX_ACCOUNTING_CAPABILITIES
     };
   }
 
-  public async addClient(_session: OmniSession, email: string, _options?: GatewayClientCreateOptions): Promise<GatewayClientRecord> {
-    const clients = await readClients();
-    const normalizedEmail = normalizeEmail(email);
+  public async addClient(_session: OmniSession, email: string, options?: GatewayClientCreateOptions): Promise<GatewayClientRecord> {
+    const normalizedEmail = String(email ?? "").trim();
     if (!normalizedEmail) {
       throw new Error("Client email is required.");
     }
 
+    const normalized = normalizeClientOptions(options);
+    const clients = await readClients();
     const client: ShadowTlsClientRecord = {
       id: randomUUID(),
       email: normalizedEmail,
       enable: true,
-      ssPassword: randomBase64(16),
-      shadowTlsPassword: randomToken(32)
+      ssPassword: randomToken(24),
+      shadowTlsPassword: randomToken(32),
+      totalGB: normalized.totalGB,
+      expiryTime: normalized.expiryTime
     };
 
     clients.push(client);
     await writeClients(clients);
-    await reloadSingBox();
-    return {
-      id: client.id,
-      email: client.email,
-      enable: client.enable,
-      totalGB: 0,
-      expiryTime: 0,
-      usedBytes: null
-    };
+    await runGatewaySync();
+    return { ...client, usedBytes: 0 };
   }
 
   public async updateClient(_session: OmniSession, client: GatewayClientRecord): Promise<void> {
@@ -193,31 +137,32 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
       throw new Error("Client not found.");
     }
 
-    const existing = clients[index];
     clients[index] = {
-      ...existing,
-      email: normalizeEmail(client.email) || existing.email,
-      enable: Boolean(client.enable)
+      ...clients[index],
+      email: String(client.email ?? clients[index].email).trim() || clients[index].email,
+      enable: Boolean(client.enable),
+      totalGB: Number(client.totalGB ?? clients[index].totalGB) || 0,
+      expiryTime: Number(client.expiryTime ?? clients[index].expiryTime) || 0
     };
 
     await writeClients(clients);
-    await reloadSingBox();
+    await runGatewaySync();
   }
 
   public async deleteClient(_session: OmniSession, clientId: string): Promise<void> {
-    const trimmed = clientId.trim();
+    const trimmed = String(clientId ?? "").trim();
     if (!trimmed) {
       throw new Error("Client id is required.");
     }
 
     const clients = await readClients();
     const filtered = clients.filter((item) => item.id !== trimmed);
-    if (filtered.length == clients.length) {
+    if (filtered.length === clients.length) {
       throw new Error("Client not found.");
     }
 
     await writeClients(filtered);
-    await reloadSingBox();
+    await runGatewaySync();
   }
 
   public async buildClientConfig(_session: OmniSession, request: Request, clientId: string): Promise<ClientConfigPayload> {
@@ -233,17 +178,8 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
     const camouflageHost = camouflage.includes(":") ? camouflage.slice(0, camouflage.lastIndexOf(":")) : camouflage;
 
     const config = {
-      log: {
-        level: "warn"
-      },
-      inbounds: [
-        {
-          type: "socks",
-          tag: "socks-in",
-          listen: "127.0.0.1",
-          listen_port: 10808
-        }
-      ],
+      log: { level: "warn" },
+      inbounds: [{ type: "socks", tag: "socks-in", listen: "127.0.0.1", listen_port: 10808 }],
       outbounds: [
         {
           type: "shadowsocks",
@@ -261,19 +197,11 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
           server_port: publicPort,
           version: 3,
           password: client.shadowTlsPassword,
-          tls: {
-            enabled: true,
-            server_name: camouflageHost
-          }
+          tls: { enabled: true, server_name: camouflageHost }
         },
-        {
-          type: "direct",
-          tag: "direct"
-        }
+        { type: "direct", tag: "direct" }
       ],
-      route: {
-        final: "proxy"
-      }
+      route: { final: "proxy" }
     };
 
     const uri = JSON.stringify(config, null, 2);

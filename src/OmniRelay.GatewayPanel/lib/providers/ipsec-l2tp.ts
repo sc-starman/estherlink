@@ -17,7 +17,8 @@ const exec = promisify(execCallback);
 const DEFAULT_SYNC_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
 const DEFAULT_CLIENTS_FILE = "/opt/omnirelay/omni-gateway/ipsec_l2tp_clients.json";
 const DEFAULT_PSK_FILE = "/etc/omnirelay/gateway/ipsec/shared_psk";
-const DEFAULT_ACCOUNTING_DB = "/etc/omnirelay/gateway/ipsec/accounting.db";
+const DEFAULT_ACCOUNTING_DB = "/etc/omnirelay/gateway/connector/accounting.db";
+const LEGACY_ACCOUNTING_DB = "/etc/omnirelay/gateway/ipsec/accounting.db";
 const IPSEC_ACCOUNTING_CAPABILITIES = {
   supportsTrafficLimit: true,
   supportsDurationLimit: true,
@@ -46,10 +47,24 @@ class LocalSqliteIpsecL2tpAccountingSource implements IpsecL2tpAccountingSource 
       return new Map();
     }
 
-    const dbPath = getAccountingDbPath();
-    try {
-      await fs.access(dbPath);
-    } catch {
+    const dbCandidates = [
+      process.env.IPSEC_L2TP_ACCOUNTING_DB?.trim() || "",
+      DEFAULT_ACCOUNTING_DB,
+      LEGACY_ACCOUNTING_DB
+    ].filter((item, index, array) => item && array.indexOf(item) === index);
+
+    let dbPath = "";
+    for (const candidate of dbCandidates) {
+      try {
+        await fs.access(candidate);
+        dbPath = candidate;
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    if (!dbPath) {
       return new Map();
     }
 
@@ -63,7 +78,7 @@ class LocalSqliteIpsecL2tpAccountingSource implements IpsecL2tpAccountingSource 
 
     try {
       const { stdout } = await exec(
-        `sqlite3 -csv -noheader -cmd ".timeout 5000" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
+        `sqlite3 -csv -noheader -cmd ".timeout 5000" -cmd "PRAGMA query_only=ON;" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
       );
       const usageMap = new Map<string, number>();
       for (const line of stdout.split(/\r?\n/)) {
@@ -106,10 +121,6 @@ function getClientsFilePath(): string {
 
 function getPskFilePath(): string {
   return process.env.IPSEC_L2TP_PSK_FILE?.trim() || DEFAULT_PSK_FILE;
-}
-
-function getAccountingDbPath(): string {
-  return process.env.IPSEC_L2TP_ACCOUNTING_DB?.trim() || DEFAULT_ACCOUNTING_DB;
 }
 
 function escapeSqlLiteral(value: string): string {
@@ -242,7 +253,7 @@ async function syncIpsecL2tp(): Promise<void> {
 }
 
 export class IpsecL2tpProvider implements GatewayProtocolProvider {
-  public readonly protocolId = "ipsec_l2tp_hwdsl2";
+  public readonly protocolId = "ipsec_l2tp_singbox";
   private readonly accountingSource: IpsecL2tpAccountingSource;
 
   public constructor(accountingSource: IpsecL2tpAccountingSource = new LocalSqliteIpsecL2tpAccountingSource()) {

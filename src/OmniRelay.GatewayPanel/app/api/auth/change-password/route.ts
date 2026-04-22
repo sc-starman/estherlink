@@ -28,7 +28,6 @@ export async function POST(request: Request) {
   try {
     await changePanelCredentials(oldUsername, oldPassword, newUsername, newPassword);
     session.username = newUsername;
-    session.xuiCookie = undefined;
     await session.save();
     return NextResponse.json({ ok: true });
   } catch (error) {

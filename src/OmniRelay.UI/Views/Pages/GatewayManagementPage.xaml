@@ -358,12 +358,12 @@
                                                                                                   Width="320"
                                                                                                   SelectedIndex="{Binding SelectedGatewayProtocolIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                                                                   Style="{StaticResource FormComboBoxStyle}">
-                                                                                                <ComboBoxItem Content="VLESS Reality (3x-ui)"/>
-                                                                                                <ComboBoxItem Content="VLESS (3x-ui, no TLS)"/>
-                                                                                                <ComboBoxItem Content="Shadowsocks (3x-ui)"/>
-                                                                                                <ComboBoxItem Content="ShadowTLS v3 + Shadowsocks (sing-box)"/>
-                                                                                                <ComboBoxItem Content="OpenVPN (TCP, cert + user/pass)"/>
-                                                                                                <ComboBoxItem Content="IPSec/L2TP (hwdsl2)"/>
+                                                                                                <ComboBoxItem Content="VLESS Reality"/>
+                                                                                                <ComboBoxItem Content="VLESS (Plain, no TLS)"/>
+                                                                                                <ComboBoxItem Content="Shadowsocks"/>
+                                                                                                <ComboBoxItem Content="ShadowTLS v3 + Shadowsocks"/>
+                                                                                                <ComboBoxItem Content="OpenVPN"/>
+                                                                                                <ComboBoxItem Content="IPSec/L2TP"/>
                                                                                         </ComboBox>
                                                                                 </StackPanel>
 

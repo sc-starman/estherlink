@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "@/app/globals.css";
+import packageJson from "@/package.json";
 
 const displayFont = Space_Grotesk({
   subsets: ["latin"],
@@ -19,6 +20,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const year = new Date().getFullYear();
+  const panelVersion = String(packageJson.version ?? "").trim() || "0.0.0";
 
   return (
     <html lang="en">
@@ -35,6 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             >
               OmniRelay.net
             </a>
+            <span className="ml-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">OmniPanel v{panelVersion}</span>
           </footer>
         </div>
       </body>

@@ -1,8 +1,7 @@
-
 {
   "name": "omni-gateway-panel",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.9",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

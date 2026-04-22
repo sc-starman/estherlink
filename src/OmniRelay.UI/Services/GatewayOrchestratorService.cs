@@ -75,8 +75,8 @@ public sealed class GatewayOrchestratorService
                 _state.OutgoingAdapter = null;
             }
 
-            _state.ProxyPortText = NormalizeOrDefault(remoteProfile.ProxyPortText, "19080");
-            _state.BootstrapSocksLocalPortText = NormalizeOrDefault(remoteProfile.BootstrapSocksLocalPortText, "19081");
+            _state.ProxyPortText = NormalizeOrDefault(remoteProfile.ProxyPortText, "24080");
+            _state.BootstrapSocksLocalPortText = NormalizeOrDefault(remoteProfile.BootstrapSocksLocalPortText, "24081");
             _state.BootstrapSocksRemotePortText = NormalizeOrDefault(remoteProfile.BootstrapSocksRemotePortText, "16080");
             _state.BootstrapMode = GatewayBootstrapModes.Normalize(remoteProfile.BootstrapMode);
             _state.TunnelHost = NormalizeOrDefault(remoteProfile.TunnelHost, "vps.example.com");

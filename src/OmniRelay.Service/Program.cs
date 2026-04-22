@@ -15,7 +15,7 @@ builder.Services.AddSingleton<GatewayRuntime>();
 builder.Services.AddSingleton<LicenseValidator>();
 builder.Services.AddSingleton<TunnelConnectionTester>();
 builder.Services.AddSingleton<IpcCommandHandler>();
-builder.Services.AddSingleton<HttpConnectProxyEngine>();
+builder.Services.AddSingleton<Socks5ProxyEngine>();
 builder.Services.AddSingleton<Socks5BootstrapProxyEngine>();
 builder.Services.AddHostedService<IpcServerWorker>();
 builder.Services.AddHostedService<LocalGatewayRuntimeWorker>();

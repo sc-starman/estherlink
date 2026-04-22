@@ -34,6 +34,13 @@ interface InboundResponse {
   capabilities?: ProtocolCapabilities;
 }
 
+interface ShadowsocksDecodedConfig {
+  method: string;
+  password: string;
+  server: string;
+  port: number;
+}
+
 type ConfigPayload =
   | {
       mode: "qr";
@@ -145,6 +152,124 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function decodeBase64Url(input: string): string | null {
+  const normalized = input.trim().replace(/-/g, "+").replace(/_/g, "/").replace(/\s+/g, "");
+  if (!normalized) {
+    return null;
+  }
+
+  const padLength = (4 - (normalized.length % 4)) % 4;
+  const padded = `${normalized}${"=".repeat(padLength)}`;
+  try {
+    return atob(padded);
+  } catch {
+    return null;
+  }
+}
+
+function safeDecodeURIComponent(input: string): string {
+  try {
+    return decodeURIComponent(input);
+  } catch {
+    return input;
+  }
+}
+
+function parseEndpoint(endpoint: string): { server: string; port: number } | null {
+  const trimmed = endpoint.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    if (end <= 1) {
+      return null;
+    }
+    const server = trimmed.slice(0, end + 1);
+    const portPart = trimmed.slice(end + 1);
+    if (!portPart.startsWith(":")) {
+      return null;
+    }
+    const port = Number.parseInt(portPart.slice(1), 10);
+    if (!Number.isFinite(port) || port <= 0) {
+      return null;
+    }
+    return { server, port };
+  }
+
+  const idx = trimmed.lastIndexOf(":");
+  if (idx <= 0) {
+    return null;
+  }
+  const server = trimmed.slice(0, idx);
+  const port = Number.parseInt(trimmed.slice(idx + 1), 10);
+  if (!server || !Number.isFinite(port) || port <= 0) {
+    return null;
+  }
+  return { server, port };
+}
+
+function parseShadowsocksUri(uri: string): ShadowsocksDecodedConfig | null {
+  if (!uri.startsWith("ss://")) {
+    return null;
+  }
+
+  const withoutScheme = uri.slice(5);
+  const withoutFragment = withoutScheme.split("#", 1)[0] ?? "";
+  if (!withoutFragment) {
+    return null;
+  }
+
+  // SIP002 form: ss://BASE64(method:password)@host:port
+  if (withoutFragment.includes("@")) {
+    const atIndex = withoutFragment.indexOf("@");
+    const userInfoRaw = withoutFragment.slice(0, atIndex);
+    const endpointRaw = withoutFragment.slice(atIndex + 1).split(/[/?]/, 1)[0] ?? "";
+    const endpoint = parseEndpoint(endpointRaw);
+    if (!endpoint) {
+      return null;
+    }
+    const userInfoDecoded = safeDecodeURIComponent(userInfoRaw);
+    const decoded = decodeBase64Url(userInfoDecoded) ?? userInfoDecoded;
+    const colonIndex = decoded.indexOf(":");
+    if (colonIndex <= 0) {
+      return null;
+    }
+    const method = decoded.slice(0, colonIndex);
+    const password = decoded.slice(colonIndex + 1);
+    if (!method || !password) {
+      return null;
+    }
+    return { method, password, server: endpoint.server, port: endpoint.port };
+  }
+
+  // Legacy form: ss://BASE64(method:password@host:port)
+  const decodedLegacy = decodeBase64Url(safeDecodeURIComponent(withoutFragment));
+  if (!decodedLegacy) {
+    return null;
+  }
+  const atIndex = decodedLegacy.lastIndexOf("@");
+  if (atIndex <= 0) {
+    return null;
+  }
+  const credentials = decodedLegacy.slice(0, atIndex);
+  const endpoint = parseEndpoint(decodedLegacy.slice(atIndex + 1));
+  if (!endpoint) {
+    return null;
+  }
+  const colonIndex = credentials.indexOf(":");
+  if (colonIndex <= 0) {
+    return null;
+  }
+  const method = credentials.slice(0, colonIndex);
+  const password = credentials.slice(colonIndex + 1);
+  if (!method || !password) {
+    return null;
+  }
+  return { method, password, server: endpoint.server, port: endpoint.port };
+}
+
 function normalizeConfigPayload(raw: unknown): ConfigPayload {
   if (!isRecord(raw)) {
     throw new Error("Invalid client config payload.");
@@ -235,6 +360,12 @@ export function PanelClient() {
   }, []);
 
   const activeClients = useMemo(() => clients.filter((client) => client.enable).length, [clients]);
+  const decodedShadowsocksConfig = useMemo(() => {
+    if (!selectedConfig || selectedConfig.mode !== "qr") {
+      return null;
+    }
+    return parseShadowsocksUri(selectedConfig.uri);
+  }, [selectedConfig]);
   const editingClient = useMemo(
     () => clients.find((item) => item.id === editingClientId) ?? null,
     [clients, editingClientId]
@@ -709,6 +840,31 @@ export function PanelClient() {
                     <p className="text-sm text-slate-600">QR code is not available for this config.</p>
                   )}
                 </div>
+                {decodedShadowsocksConfig ? (
+                  <div className="mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Decoded Shadowsocks Credentials</p>
+                    <div className="grid gap-2 sm:grid-cols-[120px_1fr_auto] sm:items-center">
+                      <p className="font-medium text-slate-600">Method</p>
+                      <p className="font-[var(--font-mono)] break-all">{decodedShadowsocksConfig.method}</p>
+                      <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(decodedShadowsocksConfig.method, "Failed to copy method.")}>Copy</button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-[120px_1fr_auto] sm:items-center">
+                      <p className="font-medium text-slate-600">Password</p>
+                      <p className="font-[var(--font-mono)] break-all">{decodedShadowsocksConfig.password}</p>
+                      <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(decodedShadowsocksConfig.password, "Failed to copy password.")}>Copy</button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-[120px_1fr_auto] sm:items-center">
+                      <p className="font-medium text-slate-600">Server</p>
+                      <p className="font-[var(--font-mono)] break-all">{decodedShadowsocksConfig.server}</p>
+                      <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(decodedShadowsocksConfig.server, "Failed to copy server.")}>Copy</button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-[120px_1fr_auto] sm:items-center">
+                      <p className="font-medium text-slate-600">Port</p>
+                      <p className="font-[var(--font-mono)]">{decodedShadowsocksConfig.port}</p>
+                      <button className="rounded-lg border border-slate-300 px-2 py-1 text-xs" onClick={() => void copyText(String(decodedShadowsocksConfig.port), "Failed to copy port.")}>Copy</button>
+                    </div>
+                  </div>
+                ) : null}
               </>
             ) : null}
 

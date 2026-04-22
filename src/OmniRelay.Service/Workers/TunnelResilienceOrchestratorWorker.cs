@@ -30,7 +30,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
 
     private readonly GatewayRuntime _runtime;
     private readonly LicenseValidator _licenseValidator;
-    private readonly HttpConnectProxyEngine _proxyEngine;
+    private readonly Socks5ProxyEngine _proxyEngine;
     private readonly Socks5BootstrapProxyEngine _socksEngine;
     private readonly FileLogWriter _fileLog;
     private readonly ILogger<TunnelResilienceOrchestratorWorker> _logger;
@@ -73,7 +73,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     public TunnelResilienceOrchestratorWorker(
         GatewayRuntime runtime,
         LicenseValidator licenseValidator,
-        HttpConnectProxyEngine proxyEngine,
+        Socks5ProxyEngine proxyEngine,
         Socks5BootstrapProxyEngine socksEngine,
         FileLogWriter fileLog,
         ILogger<TunnelResilienceOrchestratorWorker> logger)
@@ -140,9 +140,13 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                     continue;
                 }
 
-                await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, stoppingToken);
+                var activeProxyPort = await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, stoppingToken);
+                if (activeProxyPort != config.LocalProxyListenPort)
+                {
+                    config = _runtime.GetConfigSnapshot();
+                }
                 await _socksEngine.EnsureRunningAsync(config.BootstrapSocksLocalPort, stoppingToken);
-                _runtime.SetProxyRunning(true, config.LocalProxyListenPort);
+                _runtime.SetProxyRunning(true, activeProxyPort);
                 _bootstrapSocksListening = await IsLoopbackTcpListeningAsync(config.BootstrapSocksLocalPort, stoppingToken);
 
                 if (_process is null || _process.HasExited)
@@ -562,7 +566,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                     await _socksEngine.StopAsync(cancellationToken);
                     await StopTunnelProcessAsync();
                     await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
-                    await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, cancellationToken);
+                    _ = await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, cancellationToken);
                     await _socksEngine.EnsureRunningAsync(config.BootstrapSocksLocalPort, cancellationToken);
                     attemptedRecovery = true;
                     break;
@@ -584,7 +588,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                     await _socksEngine.StopAsync(cancellationToken);
                     await StopTunnelProcessAsync();
                     await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
-                    await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, cancellationToken);
+                    _ = await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, cancellationToken);
                     await _socksEngine.EnsureRunningAsync(config.BootstrapSocksLocalPort, cancellationToken);
                     attemptedRecovery = true;
                     break;
@@ -646,17 +650,12 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             return (false, "unknown", "backend_listener_down");
         }
 
-        if (await ProbeHttpConnectEndpointAsync(port, cancellationToken))
-        {
-            return (true, "http-connect", string.Empty);
-        }
-
         if (await ProbeSocks5EndpointAsync(port, cancellationToken))
         {
             return (true, "socks5", string.Empty);
         }
 
-        return (false, "unknown", "backend_protocol_unknown");
+        return (false, "unknown", "backend_protocol_not_socks5");
     }
 
     private static async Task<bool> ProbeSocks5EndpointAsync(int port, CancellationToken cancellationToken)
@@ -674,52 +673,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             var reply = new byte[2];
             await ReadExactAsync(stream, reply, timeoutCts.Token);
             return reply[0] == 0x05 && reply[1] == 0x00;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static async Task<bool> ProbeHttpConnectEndpointAsync(int port, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
-
-            using var client = new TcpClient();
-            await client.ConnectAsync(IPAddress.Loopback, port, timeoutCts.Token);
-            using var stream = client.GetStream();
-            // Use method/protocol validation only, independent from egress reachability.
-            const string request = "GET / HTTP/1.1\r\nHost: omnirelay-probe.local\r\n\r\n";
-            var requestBytes = System.Text.Encoding.ASCII.GetBytes(request);
-            await stream.WriteAsync(requestBytes, timeoutCts.Token);
-
-            var response = new byte[64];
-            var offset = 0;
-            while (offset < response.Length)
-            {
-                var read = await stream.ReadAsync(response.AsMemory(offset, response.Length - offset), timeoutCts.Token);
-                if (read <= 0)
-                {
-                    break;
-                }
-
-                offset += read;
-                if (offset >= 7)
-                {
-                    break;
-                }
-            }
-
-            if (offset <= 0)
-            {
-                return false;
-            }
-
-            var text = System.Text.Encoding.ASCII.GetString(response, 0, offset);
-            return text.StartsWith("HTTP/1.", StringComparison.OrdinalIgnoreCase);
         }
         catch
         {
@@ -1515,7 +1468,8 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             return false;
         }
 
-        return reasonCode.Equals("backend_protocol_unknown", StringComparison.OrdinalIgnoreCase) ||
+        return reasonCode.Equals("backend_protocol_not_socks5", StringComparison.OrdinalIgnoreCase) ||
+               reasonCode.Equals("backend_protocol_unknown", StringComparison.OrdinalIgnoreCase) ||
                reasonCode.Equals("backend_unreachable", StringComparison.OrdinalIgnoreCase) ||
                reasonCode.Equals("backend_listener_down", StringComparison.OrdinalIgnoreCase) ||
                reasonCode.Equals("backend_endpoint_unresponsive", StringComparison.OrdinalIgnoreCase) ||

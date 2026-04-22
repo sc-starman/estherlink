@@ -4,7 +4,6 @@ import { getIronSession, type SessionOptions } from "iron-session";
 export interface OmniSession {
   isAuthenticated: boolean;
   username?: string;
-  xuiCookie?: string;
 }
 
 const fallbackPassword = "dev-only-change-me-session-password-32chars";
@@ -28,7 +27,9 @@ function parseBoolean(value: string | undefined): boolean | null {
 }
 
 const sessionCookieSecure =
-  parseBoolean(process.env.OMNIPANEL_SESSION_SECURE) ?? (process.env.NODE_ENV === "production");
+  parseBoolean(process.env.OMNIPANEL_SESSION_SECURE) ??
+  parseBoolean(process.env.PANEL_SSL_ENABLED) ??
+  false;
 
 if (sessionPassword.length < 32) {
   throw new Error("SESSION_SECRET must be at least 32 characters.");

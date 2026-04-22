@@ -1,55 +1,71 @@
-# Gateway Protocol Switch Smoke Test (VLESS Reality <-> VLESS Plain <-> 3x-ui SS <-> ShadowTLS <-> IPSec/L2TP)
+﻿# Gateway Protocol Switch Smoke Test (Sing-box Unified)
 
-This is a focused runtime checklist to validate:
-- protocol switching (`vless_reality_3xui` -> `vless_plain_3xui` -> `shadowsocks_3xui` -> `shadowtls_v3_shadowsocks_singbox` -> `ipsec_l2tp_hwdsl2` -> `vless_reality_3xui`)
-- gateway status/health JSON contract
-- OmniPanel login + client CRUD for all protocol variants
-- universal protocol discovery (`gatewayctl get-protocol`) before/after each switch
+This smoke test validates end-to-end protocol switching on a VPS with the new sing-box connector architecture:
+- strict uninstall-before-install switching
+- `gatewayctl get-protocol` consistency
+- status/health contract (`singBoxState`, tunnel probe fields)
+- OmniPanel CRUD and sync hooks
+- no `x-ui`/`redsocks` residue
+
+## Supported protocol IDs
+- `vless_reality_singbox`
+- `vless_plain_singbox`
+- `shadowsocks_singbox`
+- `shadowtls_v3_shadowsocks_singbox`
+- `openvpn_tcp_singbox`
+- `ipsec_l2tp_singbox`
 
 ## 1) Preconditions
 - VPS reachable over SSH.
-- Bootstrap SOCKS is already running on VPS loopback (default `127.0.0.1:16080`).
-- Both scripts are available on VPS (or uploaded before each install):
-  - `/tmp/setup_omnirelay_vps_3xui_vless_reality.sh`
-  - `/tmp/setup_omnirelay_vps_3xui_vless_plain.sh`
-  - `/tmp/setup_omnirelay_vps_3xui_shadowsocks.sh`
+- Bootstrap SOCKS on VPS loopback is available (default `127.0.0.1:16080`).
+- Upload scripts to VPS:
+  - `/tmp/setup_omnirelay_vps_singbox_vless_reality.sh`
+  - `/tmp/setup_omnirelay_vps_singbox_vless_plain.sh`
+  - `/tmp/setup_omnirelay_vps_singbox_shadowsocks.sh`
   - `/tmp/setup_omnirelay_vps_singbox_shadowtls.sh`
-  - `/tmp/setup_omnirelay_vps_ipsec_l2tp.sh`
+  - `/tmp/setup_omnirelay_vps_openvpn_singbox.sh`
+  - `/tmp/setup_omnirelay_vps_ipsec_l2tp_singbox.sh`
+  - `/tmp/setup_omnirelay_gateway_singbox_connector_common.sh`
+  - `/tmp/setup_omnirelay_gateway_bootstrap_common.sh`
+  - `/tmp/setup_omnirelay_gateway_tunnel_module.sh`
+  - `/tmp/setup_omnirelay_omnipanel_common.sh`
 
 Optional upload from local repo root:
 
 ```powershell
-scp scripts/setup_omnirelay_vps_3xui_vless_reality.sh root@<VPS_IP>:/tmp/
-scp scripts/setup_omnirelay_vps_3xui_vless_plain.sh root@<VPS_IP>:/tmp/
-scp scripts/setup_omnirelay_vps_3xui_shadowsocks.sh root@<VPS_IP>:/tmp/
-scp scripts/setup_omnirelay_vps_singbox_shadowtls.sh root@<VPS_IP>:/tmp/
-scp scripts/setup_omnirelay_vps_ipsec_l2tp.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_vless_reality.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_vless_plain.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_shadowsocks.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_shadowtls.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_vps_openvpn_singbox.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_vps_ipsec_l2tp_singbox.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_gateway_singbox_connector_common.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_gateway_bootstrap_common.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_gateway_tunnel_module.sh root@<VPS_IP>:/tmp/
+scp src/OmniRelay.UI/scripts/setup_omnirelay_omnipanel_common.sh root@<VPS_IP>:/tmp/
 scp scripts/gateway_protocol_switch_hardening_smoke.sh root@<VPS_IP>:/tmp/
 ```
 
-## 1.1) Automated Shortcut (Strict Switch Guard Smoke)
-
-If you want a single command to verify:
-- `gatewayctl get-protocol`
-- strict uninstall-before-install on protocol change
-- post-install service-state sanity per protocol
-
-run this on VPS:
+## 2) Automated sequence smoke
 
 ```bash
 chmod +x /tmp/gateway_protocol_switch_hardening_smoke.sh
 sudo /tmp/gateway_protocol_switch_hardening_smoke.sh \
-  vless_reality_3xui \
+  vless_reality_singbox \
+  vless_plain_singbox \
+  shadowsocks_singbox \
   shadowtls_v3_shadowsocks_singbox \
-  vless_plain_3xui
+  openvpn_tcp_singbox \
+  ipsec_l2tp_singbox \
+  vless_reality_singbox
 ```
 
-Notes:
-- Default `SCRIPT_DIR` is `/tmp`; override with `SCRIPT_DIR=/path`.
-- You can pass any sequence of supported protocol ids.
-- If uninstall fails during a switch, the script exits immediately.
+Expected:
+- each switch uninstalls previous protocol first
+- each install finishes with healthy status
+- no script fallback to old protocol ids
 
-## 2) Common test variables (on VPS)
+## 3) Manual validation variables
 
 ```bash
 export VPS_IP="<VPS_IP>"
@@ -64,26 +80,23 @@ export DOH_ENDPOINTS="https://1.1.1.1/dns-query,https://8.8.8.8/dns-query"
 export DNS_UDP_ONLY="true"
 ```
 
-Sanity check bootstrap SOCKS:
+Sanity checks:
 
 ```bash
 ss -lnt '( sport = :16080 )'
 curl -fsS --socks5-hostname 127.0.0.1:16080 https://deb.debian.org/ >/dev/null && echo "SOCKS OK"
-```
-
-Check current installed protocol (if any):
-
-```bash
 if [ -x /usr/local/sbin/omnirelay-gatewayctl ]; then
   sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol || true
 fi
 ```
 
-## 3) Install VLESS protocol and validate
+## 4) Per-protocol install probes
+
+Example for VLESS Reality:
 
 ```bash
-chmod +x /tmp/setup_omnirelay_vps_3xui_vless_reality.sh
-sudo /tmp/setup_omnirelay_vps_3xui_vless_reality.sh install \
+chmod +x /tmp/setup_omnirelay_vps_singbox_vless_reality.sh
+sudo /tmp/setup_omnirelay_vps_singbox_vless_reality.sh install \
   --public-port "$PUBLIC_PORT" \
   --panel-port "$PANEL_PORT" \
   --backend-port "$BACKEND_PORT" \
@@ -99,7 +112,7 @@ sudo /tmp/setup_omnirelay_vps_3xui_vless_reality.sh install \
   --gateway-target "www.apple.com:443"
 ```
 
-Check status/health contract:
+Run this after every install:
 
 ```bash
 sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
@@ -107,12 +120,19 @@ sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
 sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
 ```
 
-Expected:
-- `.activeProtocol == "vless_reality_3xui"`
-- `.xuiState == "active"`
-- `.singBoxState == "inactive"`
+Assertions for all protocols:
+- `.singBoxState == "active"`
+- `.tunnelHealthy` exists
+- `.tunnelReason` exists
+- `.tunnelBackendProtocol` exists
+- `.tunnelEgressReachable` exists
 
-## 4) OmniPanel API smoke (works for current active protocol)
+Additional assertions:
+- OpenVPN: `.activeProtocol == "openvpn_tcp_singbox"` and `.openVpnState == "active"`
+- IPSec/L2TP: `.activeProtocol == "ipsec_l2tp_singbox"` and `.ipsecState == "active"` and `.xl2tpdState == "active"`
+- VLESS/SS/ShadowTLS: protocol id matches expected `*_singbox` id
+
+## 5) OmniPanel CRUD + policy smoke
 
 ```bash
 panel_user="$(jq -r '.username' /opt/omnirelay/omni-gateway/panel-auth.json)"
@@ -124,11 +144,9 @@ curl -sk -c /tmp/omni.cookies \
   -d "{\"username\":\"${panel_user}\",\"password\":\"${panel_pass}\"}" \
   "https://127.0.0.1:${panel_port}/api/auth/login"
 
-curl -sk -b /tmp/omni.cookies "https://127.0.0.1:${panel_port}/api/inbound" | jq
-
 add_json="$(curl -sk -b /tmp/omni.cookies \
   -H 'Content-Type: application/json' \
-  -d '{"email":"smoke-vless@local"}' \
+  -d '{"email":"smoke-client@local","limitIp":0,"totalGB":1,"expiryTime":0}' \
   "https://127.0.0.1:${panel_port}/api/client/add")"
 echo "$add_json" | jq
 cid="$(echo "$add_json" | jq -r '.client.id')"
@@ -138,167 +156,27 @@ curl -sk -b /tmp/omni.cookies \
 
 curl -sk -b /tmp/omni.cookies \
   -H 'Content-Type: application/json' \
+  -d "{\"uuid\":\"${cid}\",\"enable\":false}" \
+  "https://127.0.0.1:${panel_port}/api/client/update" | jq
+
+curl -sk -b /tmp/omni.cookies \
+  -H 'Content-Type: application/json' \
   -d "{\"uuid\":\"${cid}\"}" \
   "https://127.0.0.1:${panel_port}/api/client/delete" | jq
 ```
 
-## 5) Switch to ShadowTLS + Shadowsocks and validate
+Quota/expiry checks:
+- create a low-traffic-cap user (`totalGB` small), generate traffic, verify auto-disable
+- create near-expiry user (`expiryTime` close), verify disable after expiry
+- restart sing-box and verify usage counters persist
+
+## 6) Negative checks (must stay removed)
 
 ```bash
-chmod +x /tmp/setup_omnirelay_vps_singbox_shadowtls.sh
-sudo /tmp/setup_omnirelay_vps_singbox_shadowtls.sh install \
-  --public-port "$PUBLIC_PORT" \
-  --panel-port "$PANEL_PORT" \
-  --backend-port "$BACKEND_PORT" \
-  --ssh-port "$SSH_PORT" \
-  --tunnel-user "$TUNNEL_USER" \
-  --tunnel-auth host_key \
-  --bootstrap-socks-port "$BOOTSTRAP_SOCKS_PORT" \
-  --dns-mode "$DNS_MODE" \
-  --doh-endpoints "$DOH_ENDPOINTS" \
-  --dns-udp-only "$DNS_UDP_ONLY" \
-  --vps-ip "$VPS_IP" \
-  --camouflage-server "www.apple.com:443"
+systemctl is-active x-ui || true
+systemctl is-active omnirelay-redsocks || true
+test -f /etc/systemd/system/x-ui.service && echo "unexpected x-ui service file"
+test -f /etc/systemd/system/omnirelay-redsocks.service && echo "unexpected redsocks service file"
 ```
 
-Check status/health:
-
-```bash
-sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
-sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
-sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
-```
-
-Expected:
-- `.activeProtocol == "shadowtls_v3_shadowsocks_singbox"`
-- `.singBoxState == "active"`
-- `.xuiState == "inactive"`
-
-Run OmniPanel CRUD smoke again (same block as section 4), e.g. with `smoke-shadowtls@local`.
-
-## 6) Switch to 3x-ui VLESS plain (no TLS / no Reality) and validate
-
-```bash
-chmod +x /tmp/setup_omnirelay_vps_3xui_vless_plain.sh
-sudo /tmp/setup_omnirelay_vps_3xui_vless_plain.sh install \
-  --public-port "$PUBLIC_PORT" \
-  --panel-port "$PANEL_PORT" \
-  --backend-port "$BACKEND_PORT" \
-  --ssh-port "$SSH_PORT" \
-  --tunnel-user "$TUNNEL_USER" \
-  --tunnel-auth host_key \
-  --bootstrap-socks-port "$BOOTSTRAP_SOCKS_PORT" \
-  --dns-mode "$DNS_MODE" \
-  --doh-endpoints "$DOH_ENDPOINTS" \
-  --dns-udp-only "$DNS_UDP_ONLY" \
-  --vps-ip "$VPS_IP"
-```
-
-Check status/health:
-
-```bash
-sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
-sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
-sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
-```
-
-Expected:
-- `.activeProtocol == "vless_plain_3xui"`
-- `.xuiState == "active"`
-- `.singBoxState == "inactive"`
-
-Run OmniPanel CRUD smoke again (same block as section 4), e.g. with `smoke-vless-plain@local`.
-
-## 7) Switch to 3x-ui Shadowsocks and validate
-
-```bash
-chmod +x /tmp/setup_omnirelay_vps_3xui_shadowsocks.sh
-sudo /tmp/setup_omnirelay_vps_3xui_shadowsocks.sh install \
-  --public-port "$PUBLIC_PORT" \
-  --panel-port "$PANEL_PORT" \
-  --backend-port "$BACKEND_PORT" \
-  --ssh-port "$SSH_PORT" \
-  --tunnel-user "$TUNNEL_USER" \
-  --tunnel-auth host_key \
-  --bootstrap-socks-port "$BOOTSTRAP_SOCKS_PORT" \
-  --dns-mode "$DNS_MODE" \
-  --doh-endpoints "$DOH_ENDPOINTS" \
-  --dns-udp-only "$DNS_UDP_ONLY" \
-  --vps-ip "$VPS_IP"
-```
-
-Check status/health:
-
-```bash
-sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
-sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
-sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
-```
-
-Expected:
-- `.activeProtocol == "shadowsocks_3xui"`
-- `.xuiState == "active"`
-- `.singBoxState == "inactive"`
-
-Run OmniPanel CRUD smoke again (same block as section 4), e.g. with `smoke-3xui-ss@local`.
-
-## 8) Switch to IPSec/L2TP (hwdsl2) and validate
-
-```bash
-chmod +x /tmp/setup_omnirelay_vps_ipsec_l2tp.sh
-sudo /tmp/setup_omnirelay_vps_ipsec_l2tp.sh install \
-  --public-port "$PUBLIC_PORT" \
-  --panel-port "$PANEL_PORT" \
-  --backend-port "$BACKEND_PORT" \
-  --ssh-port "$SSH_PORT" \
-  --tunnel-user "$TUNNEL_USER" \
-  --tunnel-auth host_key \
-  --bootstrap-socks-port "$BOOTSTRAP_SOCKS_PORT" \
-  --dns-mode "$DNS_MODE" \
-  --doh-endpoints "$DOH_ENDPOINTS" \
-  --dns-udp-only "$DNS_UDP_ONLY" \
-  --vps-ip "$VPS_IP"
-```
-
-Check status/health:
-
-```bash
-sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
-sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
-sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
-```
-
-Expected:
-- `.activeProtocol == "ipsec_l2tp_hwdsl2"`
-- `.ipsecState == "active"`
-- `.xl2tpdState == "active"`
-- `.publicListener == true`
-
-Run OmniPanel CRUD smoke again (same block as section 4), e.g. with `smoke-ipsec@local`.
-
-## 9) Switch back to VLESS Reality and re-validate
-
-Run the VLESS install command again (section 3), then:
-
-```bash
-sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol
-sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq
-sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
-```
-
-Expected:
-- `.activeProtocol == "vless_reality_3xui"`
-- `.xuiState == "active"`
-- `.singBoxState == "inactive"`
-
-## 10) Quick failure triage
-
-```bash
-sudo systemctl --no-pager --full status omnirelay-omnipanel
-sudo journalctl -u omnirelay-omnipanel -n 120 --no-pager
-sudo systemctl --no-pager --full status x-ui || true
-sudo systemctl --no-pager --full status omnirelay-singbox || true
-sudo systemctl --no-pager --full status ipsec || sudo systemctl --no-pager --full status strongswan-starter || true
-sudo systemctl --no-pager --full status xl2tpd || true
-sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq
-```
+Expected: no active/service files for x-ui or redsocks.

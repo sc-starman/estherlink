@@ -25,10 +25,10 @@ public partial class GatewayStateStore : ObservableObject
     private AdapterChoiceModel? outgoingAdapter;
 
     [ObservableProperty]
-    private string proxyPortText = "19080";
+    private string proxyPortText = "24080";
 
     [ObservableProperty]
-    private string bootstrapSocksLocalPortText = "19081";
+    private string bootstrapSocksLocalPortText = "24081";
 
     [ObservableProperty]
     private string bootstrapSocksRemotePortText = "16080";
@@ -46,7 +46,7 @@ public partial class GatewayStateStore : ObservableObject
     private string tunnelRemotePortText = "15000";
 
     [ObservableProperty]
-    private string selectedGatewayProtocol = GatewayProtocols.VlessReality3xui;
+    private string selectedGatewayProtocol = GatewayProtocols.VlessRealitySingbox;
 
     [ObservableProperty]
     private string gatewayType = GatewayTypes.Remote;

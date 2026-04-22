@@ -20,7 +20,8 @@ const OPENVPN_ACCOUNTING_CAPABILITIES = {
 
 const exec = promisify(execCallback);
 const DEFAULT_SYNC_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
-const DEFAULT_ACCOUNTING_DB = "/etc/omnirelay/gateway/openvpn/accounting.db";
+const DEFAULT_ACCOUNTING_DB = "/etc/omnirelay/gateway/connector/accounting.db";
+const LEGACY_ACCOUNTING_DB = "/etc/omnirelay/gateway/openvpn/accounting.db";
 const DEFAULT_STATUS_FILE = "/var/log/openvpn/omnirelay-status.log";
 
 interface OpenVpnClientRecord extends GatewayClientRecord {
@@ -45,10 +46,24 @@ class LocalSqliteOpenVpnAccountingSource implements OpenVpnAccountingSource {
       return new Map();
     }
 
-    const dbPath = getAccountingDbPath();
-    try {
-      await fs.access(dbPath);
-    } catch {
+    const dbCandidates = [
+      process.env.OPENVPN_ACCOUNTING_DB?.trim() || "",
+      DEFAULT_ACCOUNTING_DB,
+      LEGACY_ACCOUNTING_DB
+    ].filter((item, index, array) => item && array.indexOf(item) === index);
+
+    let dbPath = "";
+    for (const candidate of dbCandidates) {
+      try {
+        await fs.access(candidate);
+        dbPath = candidate;
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    if (!dbPath) {
       return new Map();
     }
 
@@ -62,7 +77,7 @@ class LocalSqliteOpenVpnAccountingSource implements OpenVpnAccountingSource {
 
     try {
       const { stdout } = await exec(
-        `sqlite3 -csv -noheader -cmd ".timeout 5000" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
+        `sqlite3 -csv -noheader -cmd ".timeout 5000" -cmd "PRAGMA query_only=ON;" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
       );
       const usageMap = new Map<string, number>();
       for (const line of stdout.split(/\r?\n/)) {
@@ -110,10 +125,6 @@ function getPublicPort(): number {
   return parsePort(process.env.OPENVPN_PUBLIC_PORT, 443);
 }
 
-function getAccountingDbPath(): string {
-  return process.env.OPENVPN_ACCOUNTING_DB?.trim() || DEFAULT_ACCOUNTING_DB;
-}
-
 function getStatusFilePath(): string {
   return process.env.OPENVPN_STATUS_FILE?.trim() || DEFAULT_STATUS_FILE;
 }
@@ -127,33 +138,151 @@ async function readLiveUsageByUsername(): Promise<Map<string, number>> {
   try {
     const raw = await fs.readFile(statusFile, "utf8");
     const usageByUsername = new Map<string, number>();
-    for (const line of raw.split(/\r?\n/)) {
-      if (!line.startsWith("CLIENT_LIST,")) {
-        continue;
-      }
+    let inClientTable = false;
+    let tableHeaders: string[] = [];
 
-      const parts = line.split(",");
-      if (parts.length < 10) {
-        continue;
+    const parseCounter = (value: string | undefined): number => {
+      const parsed = Number.parseInt((value ?? "").trim(), 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    };
+    const isUnsigned = (value: string | undefined): boolean => /^\d+$/.test((value ?? "").trim());
+    const splitStatusFields = (line: string): string[] => {
+      if (line.includes(",")) {
+        return line.split(",").map((part) => part.trim());
       }
+      if (line.includes("\t")) {
+        return line.split("\t").map((part) => part.trim());
+      }
+      return line.trim().split(/\s{2,}/).map((part) => part.trim());
+    };
 
-      const bytesRx = Number.parseInt(parts[5] ?? "", 10);
-      const bytesTx = Number.parseInt(parts[6] ?? "", 10);
-      const userField = (parts[9] ?? "").trim();
-      const commonName = (parts[1] ?? "").trim();
+    const addUsage = (commonNameRaw: string, usernameRaw: string, rxRaw: string, txRaw: string): void => {
+      const commonName = commonNameRaw.trim();
+      const userField = usernameRaw.trim();
       const username = userField && userField !== "UNDEF" ? userField : commonName;
       if (!username) {
-        continue;
+        return;
       }
 
-      const rx = Number.isFinite(bytesRx) && bytesRx > 0 ? bytesRx : 0;
-      const tx = Number.isFinite(bytesTx) && bytesTx > 0 ? bytesTx : 0;
-      const total = rx + tx;
+      const total = parseCounter(rxRaw) + parseCounter(txRaw);
       if (total <= 0) {
-        continue;
+        return;
       }
 
       usageByUsername.set(username, (usageByUsername.get(username) ?? 0) + total);
+    };
+
+    for (const rawLine of raw.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      const upperLine = line.toUpperCase();
+
+      if (upperLine.startsWith("CLIENT_LIST")) {
+        const fields = splitStatusFields(line);
+        if (fields.length === 0 || fields[0].toUpperCase() !== "CLIENT_LIST") {
+          continue;
+        }
+        const payload = fields.slice(1);
+        if (payload.length === 0) {
+          continue;
+        }
+
+        const commonName = payload[0] ?? "";
+        const username = payload[8] ?? payload[9] ?? payload[7] ?? "";
+        const pairs: Array<[number, number]> = [[4, 5], [2, 3], [5, 6], [3, 4]];
+        let rxRaw = "0";
+        let txRaw = "0";
+        for (const [rxIndex, txIndex] of pairs) {
+          if (payload.length > Math.max(rxIndex, txIndex)) {
+            const rxCandidate = payload[rxIndex] ?? "0";
+            const txCandidate = payload[txIndex] ?? "0";
+            if (isUnsigned(rxCandidate) && isUnsigned(txCandidate)) {
+              rxRaw = rxCandidate;
+              txRaw = txCandidate;
+              break;
+            }
+          }
+        }
+
+        addUsage(commonName, username, rxRaw, txRaw);
+        continue;
+      }
+
+      if (upperLine.startsWith("OPENVPN CLIENT LIST")) {
+        inClientTable = true;
+        tableHeaders = [];
+        continue;
+      }
+
+      if (
+        upperLine.startsWith("ROUTING TABLE") ||
+        upperLine.startsWith("ROUTING_TABLE") ||
+        upperLine.startsWith("GLOBAL STATS") ||
+        upperLine.startsWith("GLOBAL_STATS") ||
+        upperLine === "END"
+      ) {
+        inClientTable = false;
+        tableHeaders = [];
+        continue;
+      }
+
+      const parts = splitStatusFields(line);
+      if (parts.length < 2) {
+        continue;
+      }
+
+      if (parts[0]?.toUpperCase() === "HEADER") {
+        const headerKind = (parts[1] ?? "").toUpperCase();
+        if (headerKind === "CLIENT_LIST") {
+          inClientTable = true;
+          tableHeaders = parts.slice(2).map((part) => part.toLowerCase());
+          continue;
+        }
+        if (headerKind === "ROUTING_TABLE" || headerKind === "GLOBAL_STATS") {
+          inClientTable = false;
+          tableHeaders = [];
+          continue;
+        }
+      }
+
+      const normalized = parts.map((part) => part.toLowerCase());
+      if (
+        normalized.includes("common name") &&
+        normalized.includes("bytes received") &&
+        normalized.includes("bytes sent")
+      ) {
+        inClientTable = true;
+        tableHeaders = normalized;
+        continue;
+      }
+
+      if (!inClientTable) {
+        continue;
+      }
+
+      const row = new Map<string, string>();
+      if (tableHeaders.length > 0) {
+        for (let i = 0; i < tableHeaders.length && i < parts.length; i += 1) {
+          row.set(tableHeaders[i], parts[i]);
+        }
+      }
+
+      const commonName = row.get("common name") ?? parts[0] ?? "";
+      const username = row.get("username") ?? "";
+      let rxRaw = row.get("bytes received") ?? "";
+      let txRaw = row.get("bytes sent") ?? "";
+      if (!rxRaw && !txRaw) {
+        if (parts.length > 5) {
+          rxRaw = parts[4] ?? "";
+          txRaw = parts[5] ?? "";
+        } else {
+          rxRaw = parts[2] ?? "";
+          txRaw = parts[3] ?? "";
+        }
+      }
+      addUsage(commonName, username, rxRaw, txRaw);
     }
 
     return usageByUsername;
@@ -190,6 +319,13 @@ function toSafeFileStem(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 48);
   return safe || "openvpn-client";
+}
+
+function openVpnCnFromClientId(clientId: string): string {
+  const sanitized = String(clientId ?? "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 40);
+  return sanitized ? `ovpn-${sanitized}` : "";
 }
 
 function normalizeTotalGB(value: unknown): number {
@@ -296,7 +432,7 @@ async function syncOpenVpn(): Promise<void> {
 }
 
 export class OpenVpnProvider implements GatewayProtocolProvider {
-  public readonly protocolId = "openvpn_tcp_relay";
+  public readonly protocolId = "openvpn_tcp_singbox";
   private readonly accountingSource: OpenVpnAccountingSource;
 
   public constructor(accountingSource: OpenVpnAccountingSource = new LocalSqliteOpenVpnAccountingSource()) {
@@ -318,7 +454,11 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       },
       clients: clients.map((item) => ({
         // Persisted accounting is the source of truth; live status is a fallback for active sessions.
-        usedBytes: Math.max(usageByClientId.get(item.id) ?? 0, liveUsageByUsername.get(item.username) ?? 0),
+        usedBytes: Math.max(
+          usageByClientId.get(item.id) ?? 0,
+          liveUsageByUsername.get(item.username) ?? 0,
+          liveUsageByUsername.get(openVpnCnFromClientId(item.id)) ?? 0
+        ),
         id: item.id,
         email: item.email,
         enable: item.enable,
@@ -419,6 +559,18 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
     } catch {
       await syncOpenVpn();
       profile = await fs.readFile(profilePath, "utf8");
+    }
+
+    // Older gateway scripts generated minimal profiles without embedded CA/TLS material.
+    // Retry a sync once, then fail with a clear operator-facing error.
+    if (!profile.includes("<ca>")) {
+      await syncOpenVpn();
+      profile = await fs.readFile(profilePath, "utf8");
+    }
+    if (!profile.includes("<ca>")) {
+      throw new Error(
+        "OpenVPN profile is missing embedded CA certificate. Upgrade gateway script and run sync-clients, then retry."
+      );
     }
 
     const fileStem = toSafeFileStem(client.email);

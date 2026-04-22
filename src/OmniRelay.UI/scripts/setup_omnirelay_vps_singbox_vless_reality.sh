@@ -4,16 +4,18 @@ IFS=$'\n\t'
 
 SCRIPT_NAME="$(basename "$0")"
 GATEWAYCTL_SOURCE="${BASH_SOURCE[0]:-$0}"
-PROTOCOL_ID="shadowtls_v3_shadowsocks_singbox"
+PROTOCOL_ID="vless_reality_singbox"
 CONNECTOR_MODE="full_tunnel"
 
-PROTOCOL_CLIENTS_FILE="/opt/omnirelay/omni-gateway/shadowtls_clients.json"
-PROTOCOL_RUNTIME_FILE="${GATEWAY_ROOT_DIR:-/etc/omnirelay/gateway}/shadowtls_runtime.json"
-PROTOCOL_ENV_FILE="${GATEWAY_ROOT_DIR:-/etc/omnirelay/gateway}/shadowtls_panel.env"
-CAMOUFLAGE_SERVER=""
+PROTOCOL_CLIENTS_FILE="/opt/omnirelay/omni-gateway/vless_reality_clients.json"
+PROTOCOL_RUNTIME_FILE="${GATEWAY_ROOT_DIR:-/etc/omnirelay/gateway}/vless_reality_runtime.json"
+PROTOCOL_ENV_FILE="${GATEWAY_ROOT_DIR:-/etc/omnirelay/gateway}/vless_reality_panel.env"
+
+GATEWAY_SNI=""
+GATEWAY_TARGET=""
+PANEL_BASE_PATH=""
 OUTPUT_JSON="false"
 COMMAND=""
-PANEL_BASE_PATH=""
 
 load_connector_common() {
   local candidate
@@ -72,9 +74,9 @@ parse_args() {
       --dns-mode) require_value "$1" "${2:-}"; DNS_MODE="$2"; shift 2 ;;
       --doh-endpoints) require_value "$1" "${2:-}"; DOH_ENDPOINTS="$2"; shift 2 ;;
       --dns-udp-only) require_value "$1" "${2:-}"; DNS_UDP_ONLY="$2"; shift 2 ;;
-      --camouflage-server) require_value "$1" "${2:-}"; CAMOUFLAGE_SERVER="$2"; shift 2 ;;
-      --gateway-sni) require_value "$1" "${2:-}"; shift 2 ;;
-      --gateway-target) require_value "$1" "${2:-}"; shift 2 ;;
+      --gateway-sni) require_value "$1" "${2:-}"; GATEWAY_SNI="$2"; shift 2 ;;
+      --gateway-target) require_value "$1" "${2:-}"; GATEWAY_TARGET="$2"; shift 2 ;;
+      --camouflage-server) require_value "$1" "${2:-}"; shift 2 ;;
       --openvpn-network) require_value "$1" "${2:-}"; shift 2 ;;
       --openvpn-client-dns) require_value "$1" "${2:-}"; shift 2 ;;
       --) shift; break ;;
@@ -84,96 +86,123 @@ parse_args() {
 }
 
 protocol_validate_install_args() {
-  [[ -n "$CAMOUFLAGE_SERVER" ]] || die "--camouflage-server is required for ${PROTOCOL_ID}"
+  [[ -n "$GATEWAY_SNI" ]] || die "--gateway-sni is required for ${PROTOCOL_ID}"
+  [[ -n "$GATEWAY_TARGET" ]] || die "--gateway-target is required for ${PROTOCOL_ID}"
 }
 
 protocol_seed_clients() {
   install -d -m 0755 "$(dirname "$PROTOCOL_CLIENTS_FILE")"
   if [[ ! -f "$PROTOCOL_CLIENTS_FILE" ]]; then
-    jq -n \
-      --arg id "$(connector_random_uuid)" \
-      --arg ssPassword "$(connector_random_string 24)" \
-      --arg shadowTlsPassword "$(connector_random_string 32)" \
-      '[{id:$id,email:"omni-client@local",enable:true,totalGB:0,expiryTime:0,ssPassword:$ssPassword,shadowTlsPassword:$shadowTlsPassword}]' > "$PROTOCOL_CLIENTS_FILE"
+    jq -n --arg id "$(connector_random_uuid)" '[{id:$id,email:"omni-client@local",enable:true,totalGB:0,expiryTime:0,flow:"xtls-rprx-vision"}]' > "$PROTOCOL_CLIENTS_FILE"
     chmod 0640 "$PROTOCOL_CLIENTS_FILE" || true
   fi
 }
 
+protocol_generate_reality_keypair() {
+  local out private_key public_key
+  out="$("$CONNECTOR_BIN" generate reality-keypair 2>/dev/null || true)"
+  private_key="$(awk -F': ' '/[Pp]rivate/{print $2; exit}' <<<"$out" | tr -d '\r')"
+  public_key="$(awk -F': ' '/[Pp]ublic/{print $2; exit}' <<<"$out" | tr -d '\r')"
+  [[ -n "$private_key" && -n "$public_key" ]] || die "Failed to generate sing-box REALITY keypair"
+  printf '%s\n%s\n' "$private_key" "$public_key"
+}
+
 protocol_ensure_runtime() {
-  local stored_camouflage server_password
+  local current_sni current_target pair private_key public_key short_id
   install -d -m 0755 "$(dirname "$PROTOCOL_RUNTIME_FILE")"
 
   if [[ -f "$PROTOCOL_RUNTIME_FILE" ]]; then
-    stored_camouflage="$(jq -r '.camouflageServer // empty' "$PROTOCOL_RUNTIME_FILE" 2>/dev/null || true)"
-    server_password="$(jq -r '.ssServerPassword // empty' "$PROTOCOL_RUNTIME_FILE" 2>/dev/null || true)"
+    current_sni="$(jq -r '.serverName // empty' "$PROTOCOL_RUNTIME_FILE" 2>/dev/null || true)"
+    current_target="$(jq -r '.target // empty' "$PROTOCOL_RUNTIME_FILE" 2>/dev/null || true)"
   else
-    stored_camouflage=""
-    server_password=""
+    current_sni=""
+    current_target=""
   fi
 
-  [[ -n "$CAMOUFLAGE_SERVER" ]] || CAMOUFLAGE_SERVER="$stored_camouflage"
-  [[ -n "$CAMOUFLAGE_SERVER" ]] || CAMOUFLAGE_SERVER="www.cloudflare.com:443"
-  [[ -n "$server_password" ]] || server_password="$(connector_random_string 32)"
+  [[ -n "$GATEWAY_SNI" ]] || GATEWAY_SNI="$current_sni"
+  [[ -n "$GATEWAY_TARGET" ]] || GATEWAY_TARGET="$current_target"
+  [[ -n "$GATEWAY_SNI" ]] || GATEWAY_SNI="www.cloudflare.com"
+  [[ -n "$GATEWAY_TARGET" ]] || GATEWAY_TARGET="www.cloudflare.com:443"
+
+  if [[ -f "$PROTOCOL_RUNTIME_FILE" ]]; then
+    private_key="$(jq -r '.realityPrivateKey // empty' "$PROTOCOL_RUNTIME_FILE" 2>/dev/null || true)"
+    public_key="$(jq -r '.realityPublicKey // empty' "$PROTOCOL_RUNTIME_FILE" 2>/dev/null || true)"
+    short_id="$(jq -r '.realityShortId // empty' "$PROTOCOL_RUNTIME_FILE" 2>/dev/null || true)"
+  else
+    private_key=""
+    public_key=""
+    short_id=""
+  fi
+
+  if [[ -z "$private_key" || -z "$public_key" ]]; then
+    pair="$(protocol_generate_reality_keypair)"
+    private_key="$(sed -n '1p' <<<"$pair")"
+    public_key="$(sed -n '2p' <<<"$pair")"
+  fi
+
+  [[ -n "$short_id" ]] || short_id="$(openssl rand -hex 8 2>/dev/null || echo "$(connector_random_string 16)")"
 
   jq -n \
-    --arg camouflageServer "$CAMOUFLAGE_SERVER" \
-    --arg ssServerPassword "$server_password" \
-    '{camouflageServer:$camouflageServer,ssServerPassword:$ssServerPassword,updatedAtUtc:(now|todate)}' > "$PROTOCOL_RUNTIME_FILE"
+    --arg serverName "$GATEWAY_SNI" \
+    --arg target "$GATEWAY_TARGET" \
+    --arg realityPrivateKey "$private_key" \
+    --arg realityPublicKey "$public_key" \
+    --arg realityShortId "$short_id" \
+    '{serverName:$serverName,target:$target,realityPrivateKey:$realityPrivateKey,realityPublicKey:$realityPublicKey,realityShortId:$realityShortId,updatedAtUtc:(now|todate)}' > "$PROTOCOL_RUNTIME_FILE"
   chmod 0600 "$PROTOCOL_RUNTIME_FILE" || true
 }
 
 protocol_build_config_json() {
-  local shadowtls_users shadowsocks_users runtime camouflage_host camouflage_port server_password backend_outbound
-  shadowtls_users='[]'
-  shadowsocks_users='[]'
+  local users_json runtime target_host target_port server_name private_key short_id backend_outbound
+  users_json='[]'
 
   while IFS= read -r row; do
-    local ss_password shadowtls_password client_id
-    ss_password="$(jq -r '.ssPassword // empty' <<<"$row")"
-    shadowtls_password="$(jq -r '.shadowTlsPassword // empty' <<<"$row")"
+    local client_id
     client_id="$(jq -r '.id // empty' <<<"$row")"
-    [[ -n "$ss_password" && -n "$shadowtls_password" && -n "$client_id" ]] || continue
-    shadowtls_users="$(jq -c --arg clientId "$client_id" --arg password "$shadowtls_password" '. + [{name:$clientId,password:$password}]' <<<"$shadowtls_users")"
-    shadowsocks_users="$(jq -c --arg clientId "$client_id" --arg password "$ss_password" '. + [{name:$clientId,password:$password}]' <<<"$shadowsocks_users")"
+    [[ -n "$client_id" ]] || continue
+    users_json="$(jq -c \
+      --arg id "$client_id" \
+      '. + [{uuid:$id,name:$id,flow:"xtls-rprx-vision"}]' <<<"$users_json")"
   done < <(jq -c '.[] | select((.enable // true) == true)' "$PROTOCOL_CLIENTS_FILE" 2>/dev/null || true)
 
   runtime="$(cat "$PROTOCOL_RUNTIME_FILE")"
-  camouflage_host="$(jq -r '.camouflageServer // "www.cloudflare.com:443"' <<<"$runtime")"
-  camouflage_port="${camouflage_host##*:}"
-  camouflage_host="${camouflage_host%:*}"
-  [[ "$camouflage_port" =~ ^[0-9]+$ ]] || camouflage_port=443
-  server_password="$(jq -r '.ssServerPassword' <<<"$runtime")"
+  server_name="$(jq -r '.serverName // "www.cloudflare.com"' <<<"$runtime")"
+  private_key="$(jq -r '.realityPrivateKey // empty' <<<"$runtime")"
+  short_id="$(jq -r '.realityShortId // empty' <<<"$runtime")"
+  target_host="$(jq -r '.target // "www.cloudflare.com:443"' <<<"$runtime")"
+  target_port="${target_host##*:}"
+  target_host="${target_host%:*}"
+  [[ "$target_port" =~ ^[0-9]+$ ]] || target_port=443
   backend_outbound="$(connector_backend_outbound_json auto)"
 
   jq -c -n \
     --argjson publicPort "$PUBLIC_PORT" \
     --argjson backendOutbound "$backend_outbound" \
-    --argjson camouflagePort "$camouflage_port" \
-    --arg camouflageHost "$camouflage_host" \
-    --arg serverPassword "$server_password" \
-    --argjson shadowtlsUsers "$shadowtls_users" \
-    --argjson shadowsocksUsers "$shadowsocks_users" \
+    --arg serverName "$server_name" \
+    --arg targetHost "$target_host" \
+    --argjson targetPort "$target_port" \
+    --arg privateKey "$private_key" \
+    --arg shortId "$short_id" \
+    --argjson users "$users_json" \
     '{
       log:{level:"warn"},
       inbounds:[
         {
-          type:"shadowtls",
-          tag:"shadowtls-in",
+          type:"vless",
+          tag:"vless-in",
           listen:"::",
           listen_port:$publicPort,
-          version:3,
-          users:$shadowtlsUsers,
-          handshake:{server:$camouflageHost,server_port:$camouflagePort},
-          detour:"ss-inner"
-        },
-        {
-          type:"shadowsocks",
-          tag:"ss-inner",
-          listen:"127.0.0.1",
-          listen_port:32080,
-          method:"2022-blake3-aes-128-gcm",
-          password:$serverPassword,
-          users:$shadowsocksUsers
+          users:$users,
+          tls:{
+            enabled:true,
+            server_name:$serverName,
+            reality:{
+              enabled:true,
+              handshake:{server:$targetHost,server_port:$targetPort},
+              private_key:$privateKey,
+              short_id:[$shortId]
+            }
+          }
         }
       ],
       outbounds:[
@@ -188,9 +217,11 @@ protocol_write_panel_env() {
   local runtime
   runtime="$(cat "$PROTOCOL_RUNTIME_FILE")"
   cat > "$PROTOCOL_ENV_FILE" <<EOF
-SHADOWTLS_CLIENTS_FILE=${PROTOCOL_CLIENTS_FILE}
-SHADOWTLS_CAMOUFLAGE_SERVER=$(jq -r '.camouflageServer' <<<"$runtime")
-SHADOWTLS_PUBLIC_PORT=${PUBLIC_PORT}
+SINGBOX_VLESS_REALITY_CLIENTS_FILE=${PROTOCOL_CLIENTS_FILE}
+SINGBOX_REALITY_SERVER_NAME=$(jq -r '.serverName' <<<"$runtime")
+SINGBOX_REALITY_PUBLIC_KEY=$(jq -r '.realityPublicKey' <<<"$runtime")
+SINGBOX_REALITY_SHORT_ID=$(jq -r '.realityShortId' <<<"$runtime")
+GATEWAY_SNI=$(jq -r '.serverName' <<<"$runtime")
 EOF
   chmod 0600 "$PROTOCOL_ENV_FILE" || true
 }
@@ -236,7 +267,7 @@ command_install() {
   connector_install_runtime
   connector_clean_legacy
 
-  progress 40 "Preparing ShadowTLS runtime"
+  progress 40 "Preparing VLESS Reality runtime"
   protocol_seed_clients
   protocol_ensure_runtime
   protocol_sync_clients
@@ -249,7 +280,7 @@ command_install() {
   connector_deploy_omnipanel "$PROTOCOL_ID" "$PROTOCOL_ENV_FILE"
 
   connector_write_metadata_base "$PROTOCOL_ID" "$CONNECTOR_MODE"
-  connector_merge_metadata_json "$(jq -c -n --arg clientsFile "$PROTOCOL_CLIENTS_FILE" --arg runtimeFile "$PROTOCOL_RUNTIME_FILE" '{shadowTls:{clientsFile:$clientsFile,runtimeFile:$runtimeFile},accounting:{source:"singbox_log",clientsFile:$clientsFile}}')"
+  connector_merge_metadata_json "$(jq -c -n --arg clientsFile "$PROTOCOL_CLIENTS_FILE" --arg runtimeFile "$PROTOCOL_RUNTIME_FILE" '{vlessReality:{clientsFile:$clientsFile,runtimeFile:$runtimeFile},accounting:{source:"singbox_log",clientsFile:$clientsFile}}')"
   progress 100 "${PROTOCOL_ID} install completed"
 }
 
