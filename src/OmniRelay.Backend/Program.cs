@@ -62,6 +62,9 @@ builder.Services.PostConfigure<PayKryptOptions>(options =>
     options.PriceUsd = ParseDecimalOrDefault(
         Environment.GetEnvironmentVariable("PAYKRYPT_PRICE_USD"),
         options.PriceUsd);
+    options.OriginalPrice = ParseDecimalOrDefault(
+        Environment.GetEnvironmentVariable("ORIGINAL_PRICE"),
+        options.OriginalPrice);
     options.ExpiresInMinutes = ParseIntOrDefault(
         Environment.GetEnvironmentVariable("PAYKRYPT_EXPIRES_IN_MINUTES"),
         options.ExpiresInMinutes);

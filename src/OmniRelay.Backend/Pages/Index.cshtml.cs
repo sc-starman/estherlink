@@ -9,22 +9,30 @@ namespace OmniRelay.Backend.Pages;
 public sealed class IndexModel : PageModel
 {
     private readonly IOptions<WebOptions> _webOptions;
+    private readonly IOptions<PayKryptOptions> _payKryptOptions;
     private readonly IStringLocalizer<SharedResource> _localizer;
 
     public IndexModel(
         IOptions<WebOptions> webOptions,
+        IOptions<PayKryptOptions> payKryptOptions,
         IStringLocalizer<SharedResource> localizer)
     {
         _webOptions = webOptions;
+        _payKryptOptions = payKryptOptions;
         _localizer = localizer;
     }
 
     public LandingContentOptions Landing { get; private set; } = new();
+    public decimal PriceUsd { get; private set; }
+    public decimal OriginalPrice { get; private set; }
 
     public void OnGet()
     {
         var options = _webOptions.Value;
+        var payKryptOptions = _payKryptOptions.Value;
         Landing = BuildLandingContent(options);
+        PriceUsd = payKryptOptions.PriceUsd;
+        OriginalPrice = payKryptOptions.OriginalPrice;
     }
 
     private LandingContentOptions BuildLandingContent(WebOptions options)
