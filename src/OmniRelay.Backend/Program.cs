@@ -421,6 +421,48 @@ app.MapGet("/download/omni-gateway", (
     })
     .RequireRateLimiting("public");
 
+app.MapGet("/download/connector-core/{os}/{arch}", (
+        string os,
+        string arch,
+        IInstallerStorageService installerStorageService) =>
+    {
+        var normalizedOs = (os ?? string.Empty).Trim().ToLowerInvariant();
+        var normalizedArch = (arch ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (normalizedOs != "linux")
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["os"] = ["os must be linux."]
+            });
+        }
+
+        if (normalizedArch is not ("amd64" or "arm64"))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["arch"] = ["arch must be amd64 or arm64."]
+            });
+        }
+
+        var artifactPath = installerStorageService.GetConnectorCoreArtifactPath(normalizedOs, normalizedArch);
+        if (!File.Exists(artifactPath))
+        {
+            return Results.NotFound(new
+            {
+                message = "Connector-core artifact is not available yet.",
+                os = normalizedOs,
+                arch = normalizedArch
+            });
+        }
+
+        return Results.File(
+            artifactPath,
+            "application/gzip",
+            installerStorageService.GetConnectorCoreDownloadFileName(normalizedOs, normalizedArch));
+    })
+    .RequireRateLimiting("public");
+
 app.MapMethods("/app", new[] { "GET", "HEAD" }, () =>
         Results.Redirect("/dashboard", permanent: true, preserveMethod: true))
     .AllowAnonymous();
@@ -794,6 +836,120 @@ installerApi.MapPost("/upload-omni-gateway", async (
                 sha256 = saveResult.Sha256,
                 fileSizeBytes = saveResult.FileSizeBytes,
                 downloadUrl = "/download/omni-gateway"
+            });
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Best-effort temp cleanup.
+                }
+            }
+        }
+    });
+
+installerApi.MapPost("/upload-connector-core", async (
+        HttpRequest request,
+        IInstallerStorageService installerStorageService,
+        CancellationToken cancellationToken) =>
+    {
+        if (!request.HasFormContentType)
+        {
+            return Results.BadRequest(new { message = "Content-Type must be multipart/form-data." });
+        }
+
+        var form = await request.ReadFormAsync(cancellationToken);
+        var artifact = form.Files.GetFile("artifact");
+        if (artifact is null)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["artifact"] = ["artifact (.tar.gz) file is required."]
+            });
+        }
+
+        if (artifact.Length <= 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["artifact"] = ["artifact file must not be empty."]
+            });
+        }
+
+        if (!artifact.FileName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["artifact"] = ["artifact file name must end with .tar.gz."]
+            });
+        }
+
+        if (artifact.Length > installerStorageService.MaxUploadBytes)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["artifact"] =
+                [
+                    $"artifact file exceeds max upload size of {installerStorageService.MaxUploadBytes / (1024L * 1024L)} MB."
+                ]
+            });
+        }
+
+        var os = (form["os"].FirstOrDefault() ?? "linux").Trim().ToLowerInvariant();
+        if (os != "linux")
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["os"] = ["os must be linux."]
+            });
+        }
+
+        var arch = (form["arch"].FirstOrDefault() ?? "amd64").Trim().ToLowerInvariant();
+        if (arch is not ("amd64" or "arm64"))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["arch"] = ["arch must be amd64 or arm64."]
+            });
+        }
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"omnirelay-connector-core-{os}-{arch}-{Guid.NewGuid():N}.tar.gz");
+        try
+        {
+            await using (var tempStream = new FileStream(
+                             tempPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             128 * 1024,
+                             FileOptions.Asynchronous))
+            {
+                await artifact.CopyToAsync(tempStream, cancellationToken);
+            }
+
+            if (!IsGzipFile(tempPath))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["artifact"] = ["artifact must be a valid gzip archive."]
+                });
+            }
+
+            var saveResult = await installerStorageService.SaveConnectorCoreArtifactAsync(tempPath, os, arch, cancellationToken);
+            return Results.Ok(new
+            {
+                message = "Connector-core artifact uploaded successfully.",
+                os,
+                arch,
+                sha256 = saveResult.Sha256,
+                fileSizeBytes = saveResult.FileSizeBytes,
+                downloadUrl = $"/download/connector-core/{os}/{arch}"
             });
         }
         finally
