@@ -185,6 +185,34 @@ print(str(net.netmask))
 PY
 }
 
+protocol_generate_tls_crypt_key() {
+  local openvpn_bin="$1"
+  local key_file="$2"
+  local err_log
+  err_log="$(mktemp)"
+
+  if "$openvpn_bin" --genkey secret "$key_file" > /dev/null 2>>"$err_log"; then
+    rm -f "$err_log"
+    return 0
+  fi
+  if "$openvpn_bin" --genkey tls-crypt "$key_file" > /dev/null 2>>"$err_log"; then
+    rm -f "$err_log"
+    return 0
+  fi
+  if "$openvpn_bin" --genkey tls-auth "$key_file" > /dev/null 2>>"$err_log"; then
+    rm -f "$err_log"
+    return 0
+  fi
+  if "$openvpn_bin" --genkey --secret "$key_file" > /dev/null 2>>"$err_log"; then
+    rm -f "$err_log"
+    return 0
+  fi
+
+  log "OpenVPN tls-crypt key generation error: $(tr '\n' ';' < "$err_log" | sed 's/;*$//' | cut -c1-600)"
+  rm -f "$err_log"
+  return 1
+}
+
 protocol_ensure_easyrsa_layout() {
   if [[ ! -f "${OPENVPN_EASYRSA_DIR}/easyrsa" ]]; then
     if command -v make-cadir >/dev/null 2>&1; then
@@ -251,7 +279,7 @@ protocol_setup_openvpn_pki() {
   fi
 
   if [[ ! -f "$OPENVPN_TLS_CRYPT_KEY_FILE" ]]; then
-    "$openvpn_bin" --genkey secret "$OPENVPN_TLS_CRYPT_KEY_FILE" >/dev/null 2>&1 || die "failed to generate OpenVPN tls-crypt key"
+    protocol_generate_tls_crypt_key "$openvpn_bin" "$OPENVPN_TLS_CRYPT_KEY_FILE" || die "failed to generate OpenVPN tls-crypt key"
   fi
 
   chmod 0600 "$OPENVPN_TLS_CRYPT_KEY_FILE" || true

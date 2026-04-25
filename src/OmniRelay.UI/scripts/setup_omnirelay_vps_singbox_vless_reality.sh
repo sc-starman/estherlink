@@ -280,7 +280,7 @@ command_install() {
   connector_deploy_omnipanel "$PROTOCOL_ID" "$PROTOCOL_ENV_FILE"
 
   connector_write_metadata_base "$PROTOCOL_ID" "$CONNECTOR_MODE"
-  connector_merge_metadata_json "$(jq -c -n --arg clientsFile "$PROTOCOL_CLIENTS_FILE" --arg runtimeFile "$PROTOCOL_RUNTIME_FILE" '{vlessReality:{clientsFile:$clientsFile,runtimeFile:$runtimeFile},accounting:{source:"singbox_log",clientsFile:$clientsFile}}')"
+  connector_merge_metadata_json "$(jq -c -n --arg clientsFile "$PROTOCOL_CLIENTS_FILE" --arg runtimeFile "$PROTOCOL_RUNTIME_FILE" '{vlessReality:{clientsFile:$clientsFile,runtimeFile:$runtimeFile},accounting:{source:"connector_tracker",clientsFile:$clientsFile}}')"
   progress 100 "${PROTOCOL_ID} install completed"
 }
 

@@ -34,9 +34,10 @@ CONNECTOR_DIR="${GATEWAY_ROOT_DIR}/connector"
 CONNECTOR_CONFIG_FILE="${CONNECTOR_DIR}/config.json"
 CONNECTOR_STATE_FILE="${CONNECTOR_DIR}/state.json"
 CONNECTOR_ACCOUNTING_DB="${CONNECTOR_DIR}/accounting.db"
+CONNECTOR_CORE_STATE_FILE="${CONNECTOR_DIR}/connector_core_state.json"
 CONNECTOR_ACCOUNTING_LOCK_FILE="/run/omnirelay-accounting-sync.lock"
-CONNECTOR_BIN="/usr/local/bin/sing-box"
-CONNECTOR_VERSION="1.11.8"
+CONNECTOR_BIN="/usr/local/bin/connector-core"
+CONNECTOR_CORE_VERSION="${CONNECTOR_CORE_VERSION:-0.1.0}"
 CONNECTOR_SERVICE="omnirelay-singbox"
 
 PANEL_APP_DIR="/opt/omnirelay/omni-gateway"
@@ -163,6 +164,20 @@ connector_service_state(){
   [[ -n "$out" ]] || out="inactive"
   printf '%s' "$out"
 }
+
+connector_wait_service_active(){
+  local svc="$1"
+  local timeout_sec="${2:-20}"
+  local i state
+  for i in $(seq 1 "$timeout_sec"); do
+    state="$(connector_service_state "$svc")"
+    if [[ "$state" == "active" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
 connector_load_metadata_defaults(){
   local meta_public meta_panel meta_backend config_public
   meta_public=""
@@ -200,21 +215,6 @@ connector_is_full_tunnel_singbox_protocol(){
     shadowsocks_singbox|vless_plain_singbox|vless_reality_singbox|shadowtls_v3_shadowsocks_singbox) return 0 ;;
     *) return 1 ;;
   esac
-}
-
-connector_hard_migrate_accounting_source(){
-  local protocol_id="${1:-}"
-  [[ -f "$GATEWAY_METADATA_FILE" ]] || return 0
-  connector_is_full_tunnel_singbox_protocol "$protocol_id" || return 0
-
-  local current_source
-  current_source="$(jq -r '.accounting.source // ""' "$GATEWAY_METADATA_FILE" 2>/dev/null || true)"
-  if [[ "$current_source" == "singbox_v2ray_api" ]]; then
-    jq '.accounting = ((.accounting // {}) + {source:"singbox_log"}) | .accounting |= del(.v2rayApiListen)' \
-      "$GATEWAY_METADATA_FILE" > "${GATEWAY_METADATA_FILE}.tmp"
-    mv -f "${GATEWAY_METADATA_FILE}.tmp" "$GATEWAY_METADATA_FILE"
-    chmod 0600 "$GATEWAY_METADATA_FILE" || true
-  fi
 }
 
 connector_load_bootstrap_common(){
@@ -549,7 +549,6 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -606,21 +605,10 @@ protocol_id = str(metadata.get("active_protocol") or "").strip()
 accounting = metadata.get("accounting") if isinstance(metadata.get("accounting"), dict) else {}
 source = str(accounting.get("source") or "").strip()
 client_file = str(accounting.get("clientsFile") or "").strip()
-if protocol_id in FULL_TUNNEL_SINGBOX_PROTOCOLS and source == "singbox_v2ray_api":
-    try:
-        merged_accounting = dict(accounting)
-        merged_accounting["source"] = "singbox_log"
-        merged_accounting.pop("v2rayApiListen", None)
-        metadata["accounting"] = merged_accounting
-        tmp_path = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(str(tmp_path), str(metadata_path))
-        source = "singbox_log"
-        accounting = merged_accounting
-        result["migrationApplied"] = True
-    except Exception as exc:
-        result["migrationError"] = str(exc)
-        fail(f"metadata_migration_failed:{exc}")
+if source == "singbox_v2ray_api":
+    fail("unsupported_source:singbox_v2ray_api")
+if protocol_id in FULL_TUNNEL_SINGBOX_PROTOCOLS and source == "singbox_log":
+    fail("unsupported_source:singbox_log")
 result["source"] = source or "none"
 
 conn = sqlite3.connect(str(db_path))
@@ -790,177 +778,12 @@ def resolve_openvpn_client_id(username_value: str, common_name_value: str) -> st
             return client_id
     return ""
 
-def resolve_client_id_from_log(message: str) -> str:
-    # Fast path: configured client_id appears directly in logs.
-    for client_id in client_ids:
-        if client_id and client_id in message:
-            return client_id
-
-    candidates = []
-    for pattern in (
-        r"\buser(?:name)?[=:]\s*([A-Za-z0-9._:@-]+)",
-        r"\bclient(?:_id)?[=:]\s*([A-Za-z0-9._:@-]+)",
-        r"\bname[=:]\s*([A-Za-z0-9._:@-]+)",
-        r"\buser\[([A-Za-z0-9._:@-]+)\]",
-    ):
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            candidates.append(match.group(1).strip())
-
-    for candidate in candidates:
-        client_id = (
-            client_ids.get(candidate)
-            or username_to_client.get(candidate)
-            or openvpn_cn_to_client.get(candidate)
-        )
-        if client_id:
-            return client_id
-    return ""
-
-def extract_session_key(message: str) -> str:
-    # Typical sing-box journal lines include: [<id> <elapsed>]
-    match = re.search(r"\[(\d{6,})\s+[^\]]+\]", message)
-    if match:
-        return match.group(1)
-    match = re.search(r"\bconnection(?:\s+id)?[=:]\s*([A-Za-z0-9._:-]+)", message, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    return ""
-
-def extract_counter(message: str, keys) -> int:
-    for key in keys:
-        match = re.search(rf"\b{key}\b\s*[=:]\s*(\d+)", message, re.IGNORECASE)
-        if match:
-            return parse_int(match.group(1))
-    for key in keys:
-        match = re.search(rf"\b{key}\b[^\d]*(\d+)\s*bytes\b", message, re.IGNORECASE)
-        if match:
-            return parse_int(match.group(1))
-    return -1
-
-def message_indicates_close(message: str) -> bool:
-    lower = message.lower()
-    return (
-        "upload finished" in lower
-        or "download finished" in lower
-        or "connection closed" in lower
-        or "connection reset" in lower
-        or "connection: close" in lower
-    )
-
-def update_singbox_session(session_key: str, client_id: str, upload_value: int, download_value: int, mark_closed: bool):
-    row = cur.execute(
-        "SELECT client_id, upload_bytes, download_bytes FROM sampler_sessions WHERE source=? AND session_key=?",
-        ("singbox_log", session_key),
-    ).fetchone()
-
-    prev_client_id = str(row["client_id"]) if row else ""
-    prev_upload = parse_int(row["upload_bytes"]) if row else 0
-    prev_download = parse_int(row["download_bytes"]) if row else 0
-
-    effective_client_id = client_id or prev_client_id
-    next_upload = prev_upload if upload_value < 0 else max(0, upload_value)
-    next_download = prev_download if download_value < 0 else max(0, download_value)
-
-    delta_upload = next_upload - prev_upload if next_upload >= prev_upload else next_upload
-    delta_download = next_download - prev_download if next_download >= prev_download else next_download
-    delta_total = max(0, delta_upload) + max(0, delta_download)
-    if effective_client_id and delta_total > 0:
-        add_usage(effective_client_id, delta_total)
-        active_counts[effective_client_id] = max(active_counts.get(effective_client_id, 0), 1)
-
-    closed_at = now_sec if mark_closed else 0
-    cur.execute(
-        """
-        INSERT INTO sampler_sessions(source,session_key,client_id,upload_bytes,download_bytes,last_seen_at,closed_at)
-        VALUES(?,?,?,?,?,?,?)
-        ON CONFLICT(source,session_key) DO UPDATE SET
-          client_id=excluded.client_id,
-          upload_bytes=excluded.upload_bytes,
-          download_bytes=excluded.download_bytes,
-          last_seen_at=excluded.last_seen_at,
-          closed_at=CASE WHEN excluded.closed_at > 0 THEN excluded.closed_at ELSE sampler_sessions.closed_at END
-        """,
-        ("singbox_log", session_key, effective_client_id, next_upload, next_download, now_sec, closed_at),
-    )
-
-if source == "singbox_log":
-    result["attributionMode"] = "hybrid_confidence"
-    observed_session_keys = set()
-    attributed_session_keys = set()
-
-    last_realtime_us = load_state_int("singbox_log", "last_realtime_us", 0)
-    since_sec = max(0, (last_realtime_us // 1_000_000) - 2)
-    cmd = [
-        "journalctl",
-        "-u",
-        "omnirelay-singbox",
-        "--no-pager",
-        "--output",
-        "json",
-        "--since",
-        f"@{since_sec}",
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25, check=False)
-    except Exception as exc:
-        fail(f"singbox_log_query_failed:{exc}")
-    if proc.returncode != 0:
-        stderr = (proc.stderr or "").strip()
-        fail(f"singbox_log_query_failed:{stderr[:180]}")
-
-    max_realtime_us = last_realtime_us
-    sampled_clients = set()
-    for raw_line in (proc.stdout or "").splitlines():
-        raw_line = raw_line.strip()
-        if not raw_line:
-            continue
-        try:
-            entry = json.loads(raw_line)
-        except Exception:
-            continue
-        message = str(entry.get("MESSAGE") or "")
-        if not message:
-            continue
-        realtime_us = parse_int(entry.get("__REALTIME_TIMESTAMP", 0))
-        if realtime_us <= last_realtime_us:
-            continue
-        max_realtime_us = max(max_realtime_us, realtime_us)
-
-        session_key = extract_session_key(message)
-        if not session_key:
-            continue
-        observed_session_keys.add(session_key)
-
-        client_id = resolve_client_id_from_log(message)
-        if client_id:
-            attributed_session_keys.add(session_key)
-
-        upload_value = extract_counter(message, ("upload", "uplink", "tx", "sent"))
-        download_value = extract_counter(message, ("download", "downlink", "rx", "received"))
-        update_singbox_session(session_key, client_id, upload_value, download_value, message_indicates_close(message))
-        if client_id:
-            sampled_clients.add(client_id)
-
-    if max_realtime_us > last_realtime_us:
-        save_state_int("singbox_log", "last_realtime_us", max_realtime_us)
-
-    stale_before = now_sec - 7200
-    cur.execute(
-        "DELETE FROM sampler_sessions WHERE source=? AND last_seen_at < ?",
-        ("singbox_log", stale_before),
-    )
-
-    result["sampledClients"] = len(sampled_clients)
-    result["observedSessions"] = len(observed_session_keys)
-    result["attributedSessions"] = len(attributed_session_keys)
-    if result["observedSessions"] > 0:
-        result["attributionConfidence"] = round(
-            float(result["attributedSessions"]) / float(result["observedSessions"]),
-            4,
-        )
-    else:
-        result["attributionConfidence"] = 0.0
+if source == "connector_tracker":
+    # Full-tunnel sing-box accounting/enforcement is handled by connector-core.
+    result["attributionMode"] = "strict"
+    result["attributionConfidence"] = 1.0
+    result["observedSessions"] = 0
+    result["attributedSessions"] = 0
 elif source == "openvpn_status":
     status_file = Path(str(accounting.get("openVpnStatusFile") or "/var/log/openvpn/omnirelay-status.log"))
     if status_file.exists():
@@ -1151,20 +974,14 @@ usage_rows = cur.execute(
 ).fetchall()
 
 quota_enforcement_allowed = True
-if source == "singbox_log":
-    min_attributed_sessions = 3
-    min_confidence = 0.85
-    if result["attributedSessions"] < min_attributed_sessions:
-        quota_enforcement_allowed = False
-        result["degraded"] = True
-        result["degradedReason"] = "insufficient_samples"
-    elif float(result["attributionConfidence"]) < min_confidence:
-        quota_enforcement_allowed = False
-        result["degraded"] = True
-        result["degradedReason"] = "low_attribution_confidence"
+enforcement_enabled = source in ("openvpn_status", "ipsec_ppp")
+if not enforcement_enabled:
+    quota_enforcement_allowed = False
 
 desired_enable = {}
 for row in usage_rows:
+    if not enforcement_enabled:
+        continue
     client_id = str(row["client_id"])
     enabled = int(row["enabled"] or 0)
     limit_bytes = int(row["total_bytes_limit"] or 0)
@@ -1330,7 +1147,7 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-ExecStart=${CONNECTOR_BIN} run -c ${CONNECTOR_CONFIG_FILE}
+ExecStart=${CONNECTOR_BIN} run --config ${CONNECTOR_CONFIG_FILE} --metadata ${GATEWAY_METADATA_FILE} --accounting-db ${CONNECTOR_ACCOUNTING_DB} --state-file ${CONNECTOR_CORE_STATE_FILE} --lock-file ${CONNECTOR_ACCOUNTING_LOCK_FILE} --interval-sec ${ACCOUNTING_SYNC_INTERVAL_SEC} --panel-group ${PANEL_USER_ACCOUNT}
 Restart=always
 RestartSec=3
 [Install]
@@ -1339,27 +1156,42 @@ EOF
   systemctl daemon-reload
 }
 
-connector_install_singbox_binary(){
-  progress 24 "Installing sing-box runtime"
+connector_install_connector_core_binary(){
+  progress 24 "Installing connector-core runtime"
   local arch="amd64"
   [[ "$(uname -m)" =~ ^(aarch64|arm64)$ ]] && arch="arm64"
-  local url="https://github.com/SagerNet/sing-box/releases/download/v${CONNECTOR_VERSION}/sing-box-${CONNECTOR_VERSION}-linux-${arch}.tar.gz"
-  local tmp="/tmp/sing-box-${CONNECTOR_VERSION}-${arch}.tar.gz"
-  local dir="/tmp/sing-box-${CONNECTOR_VERSION}-${arch}"
+  local artifact_url="https://omnirelay.net/download/connector-core/linux/${arch}"
+  local fallback_base_url="https://github.com/omnirelay/OmniRelay/releases/download/connector-core-v${CONNECTOR_CORE_VERSION}"
+  local fallback_url="${fallback_base_url}/connector-core-linux-${arch}.tar.gz"
+  local url="${CONNECTOR_CORE_DOWNLOAD_URL:-$artifact_url}"
+  local tmp="/tmp/connector-core-${CONNECTOR_CORE_VERSION}-${arch}.tar.gz"
+  local dir="/tmp/connector-core-${CONNECTOR_CORE_VERSION}-${arch}"
   local bin
 
   connector_configure_proxy
   if ! curl -fSL "$url" -o "$tmp"; then
-    connector_clear_proxy
-    die "failed to download sing-box release artifact"
+    if [[ -z "${CONNECTOR_CORE_DOWNLOAD_URL:-}" && "$url" != "$fallback_url" ]]; then
+      log "Primary connector-core artifact URL failed (${url}); retrying GitHub release fallback."
+      curl -fSL "$fallback_url" -o "$tmp" || {
+        connector_clear_proxy
+        die "failed to download connector-core release artifact"
+      }
+    else
+      connector_clear_proxy
+      die "failed to download connector-core release artifact"
+    fi
   fi
   connector_clear_proxy
+  if [[ ! -s "$tmp" ]]; then
+    connector_clear_proxy
+    die "failed to download connector-core release artifact"
+  fi
 
   rm -rf "$dir"
   mkdir -p "$dir"
   tar -xzf "$tmp" -C "$dir"
-  bin="$(find "$dir" -type f -name sing-box | head -n1 || true)"
-  [[ -f "${bin:-}" ]] || die "sing-box binary install failed"
+  bin="$(find "$dir" -type f -name connector-core | head -n1 || true)"
+  [[ -f "${bin:-}" ]] || die "connector-core binary install failed"
   install -m 0755 "$bin" "$CONNECTOR_BIN"
 }
 
@@ -1384,7 +1216,7 @@ connector_install_runtime(){
   DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=4 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends "${packages[@]}"
   connector_clear_proxy
   connector_ensure_node_runtime
-  connector_install_singbox_binary
+  connector_install_connector_core_binary
   connector_write_service_unit
   connector_install_clock_sync_runtime
   connector_install_accounting_runtime
@@ -1396,7 +1228,6 @@ connector_sync_accounting_db(){
   local protocol_id="$2"
   local now row id username enable total_gb expiry bytes exists enabled_value
   [[ -f "$client_file" ]] || return 0
-  connector_hard_migrate_accounting_source "$protocol_id"
   now="$(date +%s)"
   install -d -m 0755 "$(dirname "$CONNECTOR_ACCOUNTING_LOCK_FILE")"
   exec 9>"$CONNECTOR_ACCOUNTING_LOCK_FILE"
@@ -1446,10 +1277,18 @@ connector_render_apply(){
   [[ "$mode" == "full_tunnel" || "$mode" == "internal_tunnel" ]] || die "connector mode must be full_tunnel|internal_tunnel"
   jq -e 'type=="object"' >/dev/null 2>&1 <<<"$config_json" || die "Invalid connector JSON payload"
   printf '%s\n' "$config_json" > "$CONNECTOR_CONFIG_FILE"
-  "$CONNECTOR_BIN" check -c "$CONNECTOR_CONFIG_FILE" >/tmp/omnirelay-singbox-check.log 2>&1 || { sed -n '1,120p' /tmp/omnirelay-singbox-check.log >&2 || true; die "sing-box config validation failed"; }
+  "$CONNECTOR_BIN" check --config "$CONNECTOR_CONFIG_FILE" >/tmp/omnirelay-singbox-check.log 2>&1 || { sed -n '1,120p' /tmp/omnirelay-singbox-check.log >&2 || true; die "connector-core config validation failed"; }
   jq -n --arg mode "$mode" '{mode:$mode,updatedAtUtc:(now|todate)}' > "$CONNECTOR_STATE_FILE"
-  systemctl restart "$CONNECTOR_SERVICE"
-  systemctl is-active --quiet "$CONNECTOR_SERVICE" || die "sing-box is not active after apply"
+  if ! systemctl kill -s HUP "$CONNECTOR_SERVICE" >/dev/null 2>&1; then
+    systemctl restart "$CONNECTOR_SERVICE"
+  fi
+  if ! connector_wait_service_active "$CONNECTOR_SERVICE" 25; then
+    log "---- ${CONNECTOR_SERVICE} systemd status ----"
+    systemctl --no-pager --full status "$CONNECTOR_SERVICE" 2>&1 || true
+    log "---- ${CONNECTOR_SERVICE} journal (last 80 lines) ----"
+    journalctl -u "$CONNECTOR_SERVICE" -n 80 --no-pager 2>&1 || true
+    die "sing-box is not active after apply"
+  fi
 }
 
 connector_apply_internal_redirect(){
@@ -1568,19 +1407,36 @@ connector_clock_status_json(){
 }
 
 connector_accounting_status_json(){
-  local timer_state last_checked state error
-  timer_state="$(connector_service_state "$ACCOUNTING_SYNC_TIMER")"
-  if [[ ! -f "$ACCOUNTING_SYNC_STATE_FILE" ]]; then
-    printf '{"accountingTimerState":"%s","lastAccountingSyncUtc":"","accountingLastError":"state_missing"}\n' "$(connector_json_string_safe "$timer_state")"
-    return 0
-  fi
-  last_checked="$(jq -r '.checkedAtUtc // ""' "$ACCOUNTING_SYNC_STATE_FILE" 2>/dev/null || true)"
-  if [[ "$(jq -r '.ok // false' "$ACCOUNTING_SYNC_STATE_FILE" 2>/dev/null || echo false)" == "true" ]]; then
-    state="ok"
-    error=""
+  local protocol_id timer_state last_checked state error
+  protocol_id="$(connector_active_protocol)"
+  if connector_is_full_tunnel_singbox_protocol "$protocol_id"; then
+    timer_state="n/a"
+    if [[ ! -f "$CONNECTOR_CORE_STATE_FILE" ]]; then
+      printf '{"accountingTimerState":"%s","lastAccountingSyncUtc":"","accountingSyncState":"failed","accountingLastError":"state_missing"}\n' "$(connector_json_string_safe "$timer_state")"
+      return 0
+    fi
+    last_checked="$(jq -r '.lastSyncUtc // ""' "$CONNECTOR_CORE_STATE_FILE" 2>/dev/null || true)"
+    if [[ "$(jq -r '.ok // false' "$CONNECTOR_CORE_STATE_FILE" 2>/dev/null || echo false)" == "true" ]]; then
+      state="ok"
+      error=""
+    else
+      state="failed"
+      error="$(jq -r '.lastError // "unknown"' "$CONNECTOR_CORE_STATE_FILE" 2>/dev/null || echo unknown)"
+    fi
   else
-    state="failed"
-    error="$(jq -r '.syncError // .error // "unknown"' "$ACCOUNTING_SYNC_STATE_FILE" 2>/dev/null || echo unknown)"
+    timer_state="$(connector_service_state "$ACCOUNTING_SYNC_TIMER")"
+    if [[ ! -f "$ACCOUNTING_SYNC_STATE_FILE" ]]; then
+      printf '{"accountingTimerState":"%s","lastAccountingSyncUtc":"","accountingSyncState":"failed","accountingLastError":"state_missing"}\n' "$(connector_json_string_safe "$timer_state")"
+      return 0
+    fi
+    last_checked="$(jq -r '.checkedAtUtc // ""' "$ACCOUNTING_SYNC_STATE_FILE" 2>/dev/null || true)"
+    if [[ "$(jq -r '.ok // false' "$ACCOUNTING_SYNC_STATE_FILE" 2>/dev/null || echo false)" == "true" ]]; then
+      state="ok"
+      error=""
+    else
+      state="failed"
+      error="$(jq -r '.syncError // .error // "unknown"' "$ACCOUNTING_SYNC_STATE_FILE" 2>/dev/null || echo unknown)"
+    fi
   fi
   printf '{"accountingTimerState":"%s","lastAccountingSyncUtc":"%s","accountingSyncState":"%s","accountingLastError":"%s"}\n' \
     "$(connector_json_string_safe "$timer_state")" "$(connector_json_string_safe "$last_checked")" "$(connector_json_string_safe "$state")" "$(connector_json_string_safe "$error")"
@@ -1629,7 +1485,7 @@ connector_status_base_json(){
 }
 
 connector_health_base_json(){
-  local status h err backend_protocol outbound_type clock_state clock_skew clock_abs accounting_state accounting_timer_state
+  local status h err backend_protocol outbound_type clock_state clock_skew clock_abs accounting_state accounting_timer_state active_protocol
   status="${1:-$(connector_status_base_json)}"
   h=true
   err=""
@@ -1660,11 +1516,19 @@ connector_health_base_json(){
     h=false
     [[ -n "$err" ]] || err="clockSyncUnhealthy"
   fi
+  active_protocol="$(jq -r '.activeProtocol // "unknown"' <<<"$status")"
   accounting_state="$(jq -r '.accountingSyncState // "unknown"' <<<"$status")"
   accounting_timer_state="$(jq -r '.accountingTimerState // "unknown"' <<<"$status")"
-  if [[ "$accounting_timer_state" != "active" || "$accounting_state" == "failed" ]]; then
-    h=false
-    [[ -n "$err" ]] || err="accountingSyncUnhealthy"
+  if connector_is_full_tunnel_singbox_protocol "$active_protocol"; then
+    if [[ "$accounting_state" != "ok" ]]; then
+      h=false
+      [[ -n "$err" ]] || err="accountingSyncUnhealthy"
+    fi
+  else
+    if [[ "$accounting_timer_state" != "active" || "$accounting_state" == "failed" ]]; then
+      h=false
+      [[ -n "$err" ]] || err="accountingSyncUnhealthy"
+    fi
   fi
   [[ -n "$err" ]] || [[ "$(jq -r '.dnsConfigPresent' <<<"$status")" == true ]] || err="dnsConfigMissing"
   [[ -n "$err" ]] || [[ "$(jq -r '.dnsRuleActive' <<<"$status")" == true ]] || err="dnsRuleInactive"
@@ -1827,8 +1691,16 @@ connector_uninstall_runtime(){
 
 connector_install_gatewayctl(){
   local script_source="$1"
+  local dst="/usr/local/sbin/omnirelay-gatewayctl"
+  local src_real dst_real
   [[ -f "$script_source" ]] || die "gatewayctl source script not found: $script_source"
-  install -m 0755 "$script_source" /usr/local/sbin/omnirelay-gatewayctl
+  src_real="$(readlink -f "$script_source" 2>/dev/null || printf '%s' "$script_source")"
+  dst_real="$(readlink -f "$dst" 2>/dev/null || printf '%s' "$dst")"
+  if [[ "$src_real" == "$dst_real" ]]; then
+    chmod 0755 "$dst" >/dev/null 2>&1 || true
+    return 0
+  fi
+  install -m 0755 "$script_source" "$dst"
 }
 
 connector_validate_common_args(){
