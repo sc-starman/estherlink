@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { getGatewayProvider } from "@/lib/protocol";
+import { getActiveProtocol, getGatewayProvider } from "@/lib/protocol";
+import { getProtocolCapabilities } from "@/lib/protocol-capabilities";
 
 export async function GET(request: Request) {
   const session = await getSession();
@@ -15,6 +16,12 @@ export async function GET(request: Request) {
   }
 
   try {
+    const activeProtocol = getActiveProtocol();
+    const capabilities = getProtocolCapabilities(activeProtocol);
+    if (!capabilities.supportsClientLifecycle) {
+      return NextResponse.json({ message: "Client config is not available for shared-credential protocols." }, { status: 400 });
+    }
+
     const provider = getGatewayProvider();
     const payload = await provider.buildClientConfig(session, request, uuid);
 

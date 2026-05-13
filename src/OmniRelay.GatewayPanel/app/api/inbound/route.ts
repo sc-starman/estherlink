@@ -20,7 +20,10 @@ export async function GET() {
       capabilities: snapshot.capabilities ?? {
         supportsTrafficLimit: false,
         supportsDurationLimit: false,
-        supportsUsageAccounting: false
+        supportsUsageAccounting: false,
+        supportsSpeedLimit: false,
+        supportsOnlineStatus: false,
+        supportsClientLifecycle: false
       }
     });
   } catch (error) {

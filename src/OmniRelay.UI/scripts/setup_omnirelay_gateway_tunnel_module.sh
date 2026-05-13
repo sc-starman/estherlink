@@ -385,11 +385,10 @@ parse_args() {
 }
 
 main() {
-  parse_args "$@"
-
   if [[ "$COMMAND" != "install" ]]; then
     load_config
   fi
+  parse_args "$@"
 
   case "$COMMAND" in
     install)

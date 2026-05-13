@@ -19,6 +19,7 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly GatewayStateStore _state;
     private readonly IThemeService _themeService;
     private readonly IUiSettingsService _uiSettingsService;
+    private readonly IServiceControlService _serviceControl;
     private readonly DispatcherTimer _statusTimer;
 
     public MainWindowViewModel(
@@ -26,13 +27,15 @@ public partial class MainWindowViewModel : ObservableObject
         GatewayOrchestratorService orchestrator,
         GatewayStateStore state,
         IThemeService themeService,
-        IUiSettingsService uiSettingsService)
+        IUiSettingsService uiSettingsService,
+        IServiceControlService serviceControl)
     {
         _navigationService = navigationService;
         _orchestrator = orchestrator;
         _state = state;
         _themeService = themeService;
         _uiSettingsService = uiSettingsService;
+        _serviceControl = serviceControl;
 
         NavigationItems = new ObservableCollection<NavigationItemViewModel>(
             _navigationService.Items.Select(x => new NavigationItemViewModel(x)));
@@ -64,13 +67,20 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private string sidebarVersionText = $"Version {ResolveInstallerPackageVersion()}";
 
+    [ObservableProperty]
+    private bool isRelayServiceRunning;
+
+    [ObservableProperty]
+    private bool isRelayServiceActionBusy;
+
     public async Task InitializeAsync()
     {
         _orchestrator.Initialize();
         var settings = _uiSettingsService.Load();
 
         await _orchestrator.RefreshStatusAsync();
-        _navigationService.Navigate(IsLicenseActivated() ? "dashboard" : "license");
+        IsRelayServiceRunning = string.Equals(_state.ServiceState, "Running", StringComparison.OrdinalIgnoreCase);
+        _navigationService.Navigate(IsLicenseActivated() ? "relays" : "license");
         UpdateNavigationLockState();
         UpdateStatusSummary();
         _statusTimer.Interval = GetRefreshInterval();
@@ -106,6 +116,83 @@ public partial class MainWindowViewModel : ObservableObject
         ThemeLabel = _themeService.CurrentTheme;
     }
 
+    [RelayCommand]
+    private async Task ToggleRelayServiceAsync()
+    {
+        if (IsRelayServiceActionBusy)
+        {
+            return;
+        }
+
+        try
+        {
+            IsRelayServiceActionBusy = true;
+            OperationResult result;
+            if (IsRelayServiceRunning)
+            {
+                result = await _orchestrator.StopServiceAsync();
+            }
+            else
+            {
+                var installed = await _serviceControl.InstallOrStartWindowsServiceAsync();
+                if (!installed)
+                {
+                    var state = await _serviceControl.QueryServiceStateAsync();
+                    result = new OperationResult(false, $"Service install/start canceled or failed. Service state: {state}.");
+                }
+                else
+                {
+                    var startProxy = await _orchestrator.StartProxyAsync();
+                    result = new OperationResult(startProxy.Success, startProxy.Message);
+                }
+            }
+
+            _state.LastAction = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} {result.Message}";
+            await _orchestrator.RefreshStatusAsync();
+            IsRelayServiceRunning = string.Equals(_state.ServiceState, "Running", StringComparison.OrdinalIgnoreCase);
+            UpdateStatusSummary();
+        }
+        finally
+        {
+            IsRelayServiceActionBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task ReinstallStartRelayServiceAsync()
+    {
+        if (IsRelayServiceActionBusy)
+        {
+            return;
+        }
+
+        try
+        {
+            IsRelayServiceActionBusy = true;
+            await _orchestrator.StopServiceAsync();
+            await _serviceControl.UninstallWindowsServiceAsync();
+            var installed = await _serviceControl.InstallOrStartWindowsServiceAsync();
+            if (!installed)
+            {
+                var state = await _serviceControl.QueryServiceStateAsync();
+                _state.LastAction = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} Service reinstall/start canceled or failed. Service state: {state}.";
+            }
+            else
+            {
+                var startProxy = await _orchestrator.StartProxyAsync();
+                _state.LastAction = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} {startProxy.Message}";
+            }
+
+            await _orchestrator.RefreshStatusAsync();
+            IsRelayServiceRunning = string.Equals(_state.ServiceState, "Running", StringComparison.OrdinalIgnoreCase);
+            UpdateStatusSummary();
+        }
+        finally
+        {
+            IsRelayServiceActionBusy = false;
+        }
+    }
+
     private void OnRouteChanged(object? sender, string route)
     {
         if (RequiresLicenseActivation(route) && !IsLicenseActivated())
@@ -129,21 +216,18 @@ public partial class MainWindowViewModel : ObservableObject
 
         PageTitle = route switch
         {
-            "dashboard" => "Dashboard",
-            "relay" => "Relay Service",
-            "gateway" => "Gateway Control",
-            "whitelist" => "Policies",
+            "relays" => "Relays",
             "license" => "License Management",
             "logs" => "Logs",
-            "settings" => "Settings",
             _ => "OmniRelay"
         };
     }
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(GatewayStateStore.Status) or nameof(GatewayStateStore.ServiceState) or nameof(GatewayStateStore.LastAction) or nameof(GatewayStateStore.LicenseActivated))
+        if (e.PropertyName is nameof(GatewayStateStore.Status) or nameof(GatewayStateStore.AppStatus) or nameof(GatewayStateStore.ServiceState) or nameof(GatewayStateStore.LastAction) or nameof(GatewayStateStore.LicenseActivated))
         {
+            IsRelayServiceRunning = string.Equals(_state.ServiceState, "Running", StringComparison.OrdinalIgnoreCase);
             UpdateStatusSummary();
             UpdateNavigationLockState();
 
@@ -160,9 +244,12 @@ public partial class MainWindowViewModel : ObservableObject
     {
         var status = _state.Status;
         var licenseValid = IsLicenseActivated();
-        StatusSummary = status is null
+        var appStatus = _state.AppStatus;
+        StatusSummary = appStatus is not null
+            ? $"Service: {_state.ServiceState} | License: {(licenseValid ? "Valid" : "Invalid")} | Relays: {appStatus.Relays.Count} | Last: {_state.LastAction}"
+            : status is null
             ? $"Service: {_state.ServiceState} | IPC: offline | Last: {_state.LastAction}"
-            : $"Service: {_state.ServiceState} | Proxy: {(status.ProxyRunning ? "Running" : "Stopped")} | License: {(licenseValid ? "Valid" : "Invalid")} | Tunnel: {(status.TunnelConnected ? "Connected" : "Disconnected")} | Last: {_state.LastAction}";
+            : $"Service: {_state.ServiceState} | License: {(licenseValid ? "Valid" : "Invalid")} | Tunnel: {(status.TunnelConnected ? "Connected" : "Disconnected")} | Last: {_state.LastAction}";
     }
 
     private TimeSpan GetRefreshInterval()
@@ -202,8 +289,7 @@ public partial class MainWindowViewModel : ObservableObject
 
     private static bool RequiresLicenseActivation(string route)
     {
-        return !string.Equals(route, LicenseRoute, StringComparison.OrdinalIgnoreCase) &&
-               !string.Equals(route, "relay", StringComparison.OrdinalIgnoreCase);
+        return !string.Equals(route, LicenseRoute, StringComparison.OrdinalIgnoreCase);
     }
 
     private void UpdateNavigationLockState()
@@ -212,8 +298,7 @@ public partial class MainWindowViewModel : ObservableObject
         foreach (var item in NavigationItems)
         {
             item.IsEnabled = unlocked ||
-                             string.Equals(item.Item.Route, LicenseRoute, StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(item.Item.Route, "relay", StringComparison.OrdinalIgnoreCase);
+                             string.Equals(item.Item.Route, LicenseRoute, StringComparison.OrdinalIgnoreCase);
         }
     }
 

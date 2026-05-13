@@ -1,9 +1,13 @@
 using System.Net;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Globalization;
+using Microsoft.Data.Sqlite;
 using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Licensing;
+using OmniRelay.Core.Networking;
 using OmniRelay.Core.Policy;
 using OmniRelay.Core.Status;
 
@@ -16,8 +20,6 @@ public sealed class GatewayRuntime
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true
     };
-    private static readonly object LegacyClientsMigrationSync = new();
-    private static bool LegacyClientsMigrated;
 
     private readonly object _sync = new();
     private readonly ConfigStore _configStore;
@@ -34,11 +36,12 @@ public sealed class GatewayRuntime
     private bool _proxyRequested;
     private bool _licenseTransferRequested;
     private GatewayStatus _status;
+    private readonly Dictionary<string, RelayStatus> _relayStatuses = new(StringComparer.Ordinal);
     private long _tunnelRestartRequestVersion;
     private bool _localGatewayRequested;
     private bool _localGatewayRestartRequested;
     private long _localGatewayRequestVersion;
-    private List<LocalGatewayClient> _localGatewayClients = [];
+    private readonly Dictionary<string, string> _relayLocalAccountingSyncSignatures = new(StringComparer.Ordinal);
 
     public GatewayRuntime(ConfigStore configStore, PolicyStore policyStore, FileLogWriter log)
     {
@@ -48,21 +51,16 @@ public sealed class GatewayRuntime
 
         var persisted = _configStore.Load();
         _config = CloneConfig(persisted.Config);
+        ConfigStore.EnsureRelayPorts(_config.Relays);
         _whitelistEntries = [];
         _blacklistEntries = [];
         _whitelistIndex = PolicyAddressIndex.Build([]);
         _blacklistIndex = PolicyAddressIndex.Build([]);
         _status = new GatewayStatus();
-        _localGatewayClients = LoadLocalGatewayClients(_config.LocalGateway.Protocol);
+        SyncRelayStatusesLocked();
         _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
 
         var policySnapshot = _policyStore.Load();
-        if (policySnapshot.WhitelistEntries.Count == 0 && persisted.WhitelistEntries.Count > 0)
-        {
-            _policyStore.ImportLegacyWhitelistIfEmpty(persisted.WhitelistEntries);
-            policySnapshot = _policyStore.Load();
-        }
-
         ApplyPolicySnapshotLocked(policySnapshot);
 
         _status = new GatewayStatus
@@ -76,7 +74,7 @@ public sealed class GatewayRuntime
             LocalGatewayState = "inactive",
             LocalGatewayProtocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol),
             LocalGatewayPort = _config.LocalGateway.Port,
-            LocalGatewayClientsCount = _localGatewayClients.Count
+            LocalGatewayClientsCount = 0
         };
 
         // Keep relay data-plane active by default after service startup.
@@ -92,71 +90,295 @@ public sealed class GatewayRuntime
         }
     }
 
-    public IReadOnlyList<LocalGatewayClient> GetLocalGatewayClientsSnapshot()
+    public IReadOnlyList<RelayConfig> ListRelays()
     {
         lock (_sync)
         {
-            return _localGatewayClients
+            return _config.Relays.Select(CloneRelayConfig).ToList();
+        }
+    }
+
+    public bool TryGetRelay(string relayId, out RelayConfig relay)
+    {
+        lock (_sync)
+        {
+            var found = _config.Relays.FirstOrDefault(x => string.Equals(x.Id, relayId, StringComparison.Ordinal));
+            relay = found is null ? new RelayConfig() : CloneRelayConfig(found);
+            return found is not null;
+        }
+    }
+
+    public RelayConfig UpsertRelay(RelayConfig relay)
+    {
+        lock (_sync)
+        {
+            var normalized = CloneRelayConfig(relay);
+            if (string.IsNullOrWhiteSpace(normalized.Id))
+            {
+                normalized.Id = Guid.NewGuid().ToString("N");
+            }
+
+            ConfigStore.EnsureRelayPorts([normalized, .. _config.Relays.Where(x => !string.Equals(x.Id, normalized.Id, StringComparison.Ordinal))]);
+            var index = _config.Relays.FindIndex(x => string.Equals(x.Id, normalized.Id, StringComparison.Ordinal));
+            if (index >= 0)
+            {
+                _config.Relays[index] = normalized;
+            }
+            else
+            {
+                _config.Relays.Add(normalized);
+            }
+
+            _relayStatuses[normalized.Id] = BuildRelayStatus(normalized, null);
+            _relayStatuses[normalized.Id].TunnelState = normalized.Enabled ? "PendingRestart" : "Disabled";
+            _relayStatuses[normalized.Id].HealthState = normalized.Enabled ? "Pending" : "Disabled";
+            _relayStatuses[normalized.Id].HealthReasonCode = normalized.Enabled
+                ? "Relay configuration saved; waiting for runtime reconciliation."
+                : "Relay disabled.";
+            PersistLocked();
+            return CloneRelayConfig(normalized);
+        }
+    }
+
+    public bool DeleteRelay(string relayId)
+    {
+        lock (_sync)
+        {
+            var relay = _config.Relays.FirstOrDefault(x => string.Equals(x.Id, relayId, StringComparison.Ordinal));
+            if (relay is null)
+            {
+                return false;
+            }
+
+            _config.Relays.RemoveAll(x => string.Equals(x.Id, relayId, StringComparison.Ordinal));
+            _relayStatuses.Remove(relayId);
+            _relayLocalAccountingSyncSignatures.Remove(relayId);
+            CleanupDeletedRelayRuntimeBestEffort(relay);
+            PersistLocked();
+            DeleteRelayArtifactsBestEffort(relayId);
+
+            return true;
+        }
+    }
+
+    private void CleanupDeletedRelayRuntimeBestEffort(RelayConfig relay)
+    {
+        try
+        {
+            if (!string.Equals(GatewayTypes.Normalize(relay.GatewayType), GatewayTypes.Local, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var metadataPath = ServicePaths.GetRelayLocalGatewayConnectorMetadataPath(relay.Id);
+            var openVpnConfigPath = ServicePaths.GetRelayLocalGatewayOpenVpnServerConfigPath(relay.Id);
+            var localPort = relay.LocalGateway?.Port ?? 0;
+            var omniPanelPort = relay.OmniPanel?.Port ?? 0;
+
+            var command =
+                "$k=0; " +
+                "$meta='" + EscapePowerShellSingleQuoted(metadataPath) + "'; " +
+                "$ovpn='" + EscapePowerShellSingleQuoted(openVpnConfigPath) + "'; " +
+                "$ports=@(" + localPort + "," + omniPanelPort + ") | Where-Object { $_ -gt 0 } | Select-Object -Unique; " +
+                "$allowed=@('node','connector-core','openvpn','sing-box','singbox'); " +
+                "Get-CimInstance Win32_Process | " +
+                "Where-Object { $_.CommandLine -and (($_.Name -ieq 'connector-core.exe' -and $_.CommandLine -like ('*' + $meta + '*')) -or ($_.Name -ieq 'openvpn.exe' -and $_.CommandLine -like ('*' + $ovpn + '*'))) } | " +
+                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; if ($?) { $k++ } }; " +
+                "foreach($p in $ports){ " +
+                "  netstat -ano -p tcp | Select-String (':'+$p+'\\s+.*LISTENING\\s+\\d+$') | ForEach-Object { " +
+                "    $m=[regex]::Match($_.Line,'\\s(\\d+)\\s*$'); " +
+                "    if($m.Success){ " +
+                "      $pid=[int]$m.Groups[1].Value; " +
+                "      $pr=Get-Process -Id $pid -ErrorAction SilentlyContinue; " +
+                "      if($null -ne $pr -and $allowed -contains $pr.ProcessName.ToLowerInvariant()){ Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue; if($?) { $k++ } } " +
+                "    } " +
+                "  } " +
+                "} " +
+                "Write-Output $k";
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("-NoLogo");
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-ExecutionPolicy");
+            psi.ArgumentList.Add("Bypass");
+            psi.ArgumentList.Add("-Command");
+            psi.ArgumentList.Add(command);
+
+            using var process = new Process { StartInfo = psi };
+            if (!process.Start())
+            {
+                return;
+            }
+
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit(8000);
+
+            if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                _log.Warn($"Relay delete runtime cleanup stderr for '{relay.Name}': {stderr.Trim()}");
+            }
+
+            if (int.TryParse((stdout ?? string.Empty).Trim(), out var killed) && killed > 0)
+            {
+                _log.Info($"Relay delete runtime cleanup killed {killed} process(es) for '{relay.Name}'.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Relay delete runtime cleanup failed for '{relay.Name}': {ex.Message}");
+        }
+    }
+
+    private static string EscapePowerShellSingleQuoted(string value)
+    {
+        return (value ?? string.Empty).Replace("'", "''", StringComparison.Ordinal);
+    }
+
+    private void DeleteRelayArtifactsBestEffort(string relayId)
+    {
+        var relayDirectory = ServicePaths.GetRelayLocalGatewayDirectory(relayId);
+        if (!Directory.Exists(relayDirectory))
+        {
+            return;
+        }
+
+        try
+        {
+            if (TryDeleteDirectoryWithRetries(relayDirectory, out var error))
+            {
+                _log.Info($"Deleted relay artifacts directory: {relayDirectory}");
+                return;
+            }
+
+            _log.Warn($"Failed deleting relay artifacts for relay '{relayId}': {error}");
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Failed deleting relay artifacts for relay '{relayId}': {ex.Message}");
+        }
+    }
+
+    private static bool TryDeleteDirectoryWithRetries(string directoryPath, out string error)
+    {
+        error = string.Empty;
+        var retryDelaysMs = new[] { 120, 220, 350, 500, 800, 1200, 1600 };
+
+        for (var attempt = 0; attempt <= retryDelaysMs.Length; attempt++)
+        {
+            try
+            {
+                if (!Directory.Exists(directoryPath))
+                {
+                    return true;
+                }
+
+                // Best-effort attribute normalization first.
+                foreach (var file in Directory.EnumerateFiles(directoryPath, "*", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        var attr = File.GetAttributes(file);
+                        if ((attr & FileAttributes.ReadOnly) != 0)
+                        {
+                            File.SetAttributes(file, attr & ~FileAttributes.ReadOnly);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                Directory.Delete(directoryPath, recursive: true);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                if (attempt >= retryDelaysMs.Length)
+                {
+                    break;
+                }
+
+                Thread.Sleep(retryDelaysMs[attempt]);
+            }
+        }
+
+        return !Directory.Exists(directoryPath);
+    }
+
+    public bool SetRelayEnabled(string relayId, bool enabled)
+    {
+        lock (_sync)
+        {
+            var relay = _config.Relays.FirstOrDefault(x => string.Equals(x.Id, relayId, StringComparison.Ordinal));
+            if (relay is null)
+            {
+                return false;
+            }
+
+            relay.Enabled = enabled;
+            _relayStatuses[relay.Id] = BuildRelayStatus(relay, _relayStatuses.TryGetValue(relay.Id, out var existing) ? existing : null);
+            PersistLocked();
+            return true;
+        }
+    }
+
+    public IReadOnlyList<LocalGatewayClient> GetLocalGatewayClientsSnapshot(string relayId)
+    {
+        lock (_sync)
+        {
+            if (!TryGetRelayLocalContextLocked(relayId, out var relay, out var protocol, out _))
+            {
+                return [];
+            }
+
+            var clients = LoadRelayLocalGatewayClientsFromDb(relay.Id, protocol);
+            ApplyRelayLocalGatewayAccountingSnapshot(relay.Id, clients);
+            return clients
                 .Select(CloneLocalGatewayClient)
                 .ToList();
         }
     }
 
-    public bool TryAddLocalGatewayClient(string email, string? remark, out LocalGatewayClient? client, out string? error)
+    public bool TryAddLocalGatewayClient(string email, string? remark, string relayId, out LocalGatewayClient? client, out string? error)
     {
         lock (_sync)
         {
-            var normalizedEmail = (email ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(normalizedEmail))
+            if (!TryGetRelayLocalContextLocked(relayId, out var relay, out var protocol, out error))
             {
                 client = null;
-                error = "Client email is required.";
                 return false;
             }
 
-            var exists = _localGatewayClients.Any(x =>
-                string.Equals(x.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase));
-            if (exists)
+            var clients = LoadRelayLocalGatewayClientsFromDb(relay.Id, protocol);
+            if (!TryCreateLocalGatewayClient(clients, protocol, email, remark, out client, out error))
             {
-                client = null;
-                error = "Client email already exists.";
                 return false;
             }
 
-            var protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
-            var existingUsernames = _localGatewayClients
-                .Select(x => x.Username)
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => x.Trim())
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var created = new LocalGatewayClient
-            {
-                Id = Guid.NewGuid().ToString(),
-                Email = normalizedEmail,
-                Enabled = true,
-                Remark = string.IsNullOrWhiteSpace(remark) ? normalizedEmail : remark.Trim(),
-                Protocol = protocol,
-                Username = CreateLocalGatewayUsername(normalizedEmail, existingUsernames),
-                Secret = CreateLocalGatewaySecret(protocol),
-                CreatedAtUtc = DateTimeOffset.UtcNow
-            };
-
-            _localGatewayClients.Add(created);
-            PersistLocalGatewayClientsLocked();
-            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
-            _localGatewayRestartRequested = true;
-            _localGatewayRequestVersion++;
-
-            client = CloneLocalGatewayClient(created);
-            error = null;
+            PersistRelayLocalGatewayClientsToDb(relay.Id, clients, protocol);
+            SetRelayLocalClientCountLocked(relay.Id, clients.Count);
             return true;
         }
     }
 
-    public bool TryUpdateLocalGatewayClient(LocalGatewayClient client, out string? error)
+    public bool TryUpdateLocalGatewayClient(LocalGatewayClient client, string relayId, out string? error)
     {
         lock (_sync)
         {
+            if (!TryGetRelayLocalContextLocked(relayId, out var relay, out var protocol, out error))
+            {
+                return false;
+            }
+
             var id = (client.Id ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(id))
             {
@@ -164,7 +386,8 @@ public sealed class GatewayRuntime
                 return false;
             }
 
-            var existing = _localGatewayClients.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
+            var clients = LoadRelayLocalGatewayClientsFromDb(relay.Id, protocol);
+            var existing = clients.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
             if (existing is null)
             {
                 error = "Client not found.";
@@ -178,7 +401,7 @@ public sealed class GatewayRuntime
                 return false;
             }
 
-            var duplicate = _localGatewayClients.Any(x =>
+            var duplicate = clients.Any(x =>
                 !string.Equals(x.Id, id, StringComparison.Ordinal) &&
                 string.Equals(x.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase));
             if (duplicate)
@@ -190,13 +413,16 @@ public sealed class GatewayRuntime
             existing.Email = normalizedEmail;
             existing.Enabled = client.Enabled;
             existing.Remark = string.IsNullOrWhiteSpace(client.Remark) ? normalizedEmail : client.Remark.Trim();
+            existing.TotalGB = double.IsFinite(client.TotalGB) && client.TotalGB >= 0 ? client.TotalGB : 0;
+            existing.ExpiryTime = client.ExpiryTime < 0 ? 0 : client.ExpiryTime;
+            existing.SpeedLimitKbps = client.SpeedLimitKbps < 0 ? 0 : client.SpeedLimitKbps;
             if (!string.IsNullOrWhiteSpace(client.Secret))
             {
                 existing.Secret = client.Secret.Trim();
             }
             if (string.IsNullOrWhiteSpace(existing.Username))
             {
-                var existingUsernames = _localGatewayClients
+                var existingUsernames = clients
                     .Where(x => !string.Equals(x.Id, id, StringComparison.Ordinal))
                     .Select(x => x.Username)
                     .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -205,18 +431,22 @@ public sealed class GatewayRuntime
                 existing.Username = CreateLocalGatewayUsername(existing.Email, existingUsernames);
             }
 
-            PersistLocalGatewayClientsLocked();
-            _localGatewayRestartRequested = true;
-            _localGatewayRequestVersion++;
+            PersistRelayLocalGatewayClientsToDb(relay.Id, clients, protocol);
+            SetRelayLocalClientCountLocked(relay.Id, clients.Count);
             error = null;
             return true;
         }
     }
 
-    public bool TryDeleteLocalGatewayClient(string clientId, out string? error)
+    public bool TryDeleteLocalGatewayClient(string clientId, string relayId, out string? error)
     {
         lock (_sync)
         {
+            if (!TryGetRelayLocalContextLocked(relayId, out var relay, out var protocol, out error))
+            {
+                return false;
+            }
+
             var id = (clientId ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(id))
             {
@@ -224,28 +454,34 @@ public sealed class GatewayRuntime
                 return false;
             }
 
-            var removed = _localGatewayClients.RemoveAll(x => string.Equals(x.Id, id, StringComparison.Ordinal));
+            var clients = LoadRelayLocalGatewayClientsFromDb(relay.Id, protocol);
+            var removed = clients.RemoveAll(x => string.Equals(x.Id, id, StringComparison.Ordinal));
             if (removed <= 0)
             {
                 error = "Client not found.";
                 return false;
             }
 
-            PersistLocalGatewayClientsLocked();
-            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
-            _localGatewayRestartRequested = true;
-            _localGatewayRequestVersion++;
+            PersistRelayLocalGatewayClientsToDb(relay.Id, clients, protocol);
+            SetRelayLocalClientCountLocked(relay.Id, clients.Count);
             error = null;
             return true;
         }
     }
 
-    public bool TryBuildLocalGatewayClientConfig(string clientId, out LocalGatewayClientConfigPayload payload, out string? error)
+    public bool TryBuildLocalGatewayClientConfig(string clientId, string relayId, out LocalGatewayClientConfigPayload payload, out string? error)
     {
         lock (_sync)
         {
+            if (!TryGetRelayLocalContextLocked(relayId, out var relay, out var protocol, out error))
+            {
+                payload = LocalGatewayClientConfigPayload.Empty;
+                return false;
+            }
+
             var id = (clientId ?? string.Empty).Trim();
-            var client = _localGatewayClients.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
+            var clients = LoadRelayLocalGatewayClientsFromDb(relay.Id, protocol);
+            var client = clients.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
             if (client is null)
             {
                 payload = LocalGatewayClientConfigPayload.Empty;
@@ -253,78 +489,8 @@ public sealed class GatewayRuntime
                 return false;
             }
 
-            var host = ResolveLocalGatewayHostLocked();
-
-            var protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
-            var port = _config.LocalGateway.Port;
-            var display = string.IsNullOrWhiteSpace(client.Remark) ? client.Email : client.Remark;
-            if (string.Equals(protocol, LocalGatewayProtocols.Shadowsocks, StringComparison.OrdinalIgnoreCase))
-            {
-                const string method = "aes-128-gcm";
-                var userInfo = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{method}:{client.Secret}"))
-                    .TrimEnd('=')
-                    .Replace('+', '-')
-                    .Replace('/', '_');
-                payload = new LocalGatewayClientConfigPayload
-                {
-                    Mode = "uri",
-                    Uri = $"ss://{userInfo}@{host}:{port}#{Uri.EscapeDataString(display)}",
-                    Title = "Shadowsocks Config"
-                };
-                error = null;
-                return true;
-            }
-            if (string.Equals(protocol, LocalGatewayProtocols.OpenVpnTcp, StringComparison.OrdinalIgnoreCase))
-            {
-                var username = string.IsNullOrWhiteSpace(client.Username)
-                    ? CreateLocalGatewayUsername(client.Email, new HashSet<string>(StringComparer.OrdinalIgnoreCase))
-                    : client.Username.Trim();
-                if (string.IsNullOrWhiteSpace(username))
-                {
-                    payload = LocalGatewayClientConfigPayload.Empty;
-                    error = "OpenVPN username is missing.";
-                    return false;
-                }
-
-                if (!File.Exists(ServicePaths.LocalGatewayOpenVpnCaPath))
-                {
-                    payload = LocalGatewayClientConfigPayload.Empty;
-                    error = "OpenVPN CA material was not generated yet. Start local OpenVPN runtime first.";
-                    return false;
-                }
-
-                if (!File.Exists(ServicePaths.LocalGatewayOpenVpnTlsCryptKeyPath))
-                {
-                    payload = LocalGatewayClientConfigPayload.Empty;
-                    error = "OpenVPN TLS key material was not generated yet. Start local OpenVPN runtime first.";
-                    return false;
-                }
-
-                var ovpn = BuildOpenVpnClientProfile(host, port);
-                var safeStem = ToSafeFileStem(display);
-                payload = new LocalGatewayClientConfigPayload
-                {
-                    Mode = "openvpn_bundle",
-                    Title = "OpenVPN Client Bundle",
-                    Uri = ovpn.Trim(),
-                    Username = username,
-                    Password = client.Secret,
-                    OvpnFileName = $"{safeStem}-{client.Id[..Math.Min(8, client.Id.Length)]}.ovpn",
-                    OvpnContent = ovpn
-                };
-                error = null;
-                return true;
-            }
-
-            var query = "type=tcp&security=none&encryption=none";
-            payload = new LocalGatewayClientConfigPayload
-            {
-                Mode = "uri",
-                Uri = $"vless://{client.Id}@{host}:{port}?{query}#{Uri.EscapeDataString(display)}",
-                Title = "VLESS Config"
-            };
-            error = null;
-            return true;
+            payload = BuildLocalGatewayClientConfigPayload(relay.LocalGateway, client, ResolveLocalGatewayHostLocked(relay), protocol, relay.Id, out error);
+            return error is null;
         }
     }
 
@@ -346,6 +512,119 @@ public sealed class GatewayRuntime
 
     public PolicyListSnapshot GetPolicyListSnapshot(string listType)
     {
+        return GetPolicyListSnapshot(listType, string.Empty);
+    }
+
+    public PolicyListSnapshot GetPolicyListSnapshot(string listType, string relayId)
+    {
+        if (!string.IsNullOrWhiteSpace(relayId))
+        {
+            return _policyStore.GetList(listType, relayId);
+        }
+
+        lock (_sync)
+        {
+            var normalized = PolicyListTypes.Normalize(listType);
+            var entries = normalized == PolicyListTypes.Blacklist
+                ? _blacklistEntries
+                : _whitelistEntries;
+            return new PolicyListSnapshot(
+                normalized,
+                entries.ToList(),
+                entries.Count,
+                _policyRevision,
+                _policyUpdatedAtUtc);
+        }
+    }
+
+    public PolicyStoreSnapshot GetRelayPolicySnapshot(string relayId)
+    {
+        return _policyStore.Load(relayId);
+    }
+
+    public RelayPolicySetSnapshot GetRelayPolicySetSnapshot(string relayId)
+    {
+        return _policyStore.LoadPolicySet(relayId);
+    }
+
+    public RelayPolicyList? GetRelayPolicyListSnapshot(string relayId, string listId)
+    {
+        return _policyStore.GetPolicyList(listId, relayId);
+    }
+
+    public RelayPolicyListSummary CreateRelayPolicyList(string relayId, string label, string listType, int? priority)
+    {
+        lock (_sync)
+        {
+            var summary = _policyStore.CreatePolicyList(relayId, label, listType, priority);
+            UpdateRelayPolicyStatusLocked(relayId);
+            PersistLocked();
+            return summary;
+        }
+    }
+
+    public RelayPolicyListSummary UpdateRelayPolicyListMeta(string relayId, string listId, string label, string listType)
+    {
+        lock (_sync)
+        {
+            var summary = _policyStore.UpdatePolicyListMeta(relayId, listId, label, listType);
+            UpdateRelayPolicyStatusLocked(relayId);
+            PersistLocked();
+            return summary;
+        }
+    }
+
+    public IReadOnlyList<RelayPolicyListSummary> ReorderRelayPolicyLists(string relayId, IReadOnlyList<string> orderedListIds)
+    {
+        lock (_sync)
+        {
+            var reordered = _policyStore.ReorderPolicyLists(relayId, orderedListIds);
+            UpdateRelayPolicyStatusLocked(relayId);
+            PersistLocked();
+            return reordered;
+        }
+    }
+
+    public RelayPolicyListCommitResult ReplaceRelayPolicyListEntries(string relayId, string listId, IReadOnlyList<string> entries)
+    {
+        lock (_sync)
+        {
+            var result = _policyStore.ReplacePolicyListEntries(relayId, listId, entries);
+            UpdateRelayPolicyStatusLocked(relayId);
+            PersistLocked();
+            return result;
+        }
+    }
+
+    public bool DeleteRelayPolicyList(string relayId, string listId)
+    {
+        lock (_sync)
+        {
+            var deleted = _policyStore.DeletePolicyList(relayId, listId);
+            if (deleted)
+            {
+                UpdateRelayPolicyStatusLocked(relayId);
+                PersistLocked();
+            }
+
+            return deleted;
+        }
+    }
+
+    public PolicyAddressIndex GetRelayWhitelistIndex(string relayId)
+    {
+        var snapshot = _policyStore.LoadLegacyFlattened(relayId);
+        return BuildIndex(snapshot.WhitelistEntries, PolicyListTypes.Whitelist);
+    }
+
+    public PolicyAddressIndex GetRelayBlacklistIndex(string relayId)
+    {
+        var snapshot = _policyStore.LoadLegacyFlattened(relayId);
+        return BuildIndex(snapshot.BlacklistEntries, PolicyListTypes.Blacklist);
+    }
+
+    public PolicyListSnapshot GetLegacyPolicyListSnapshot(string listType)
+    {
         lock (_sync)
         {
             var normalized = PolicyListTypes.Normalize(listType);
@@ -366,20 +645,16 @@ public sealed class GatewayRuntime
         lock (_sync)
         {
             var previous = CloneConfig(_config);
-            var previousProtocol = LocalGatewayProtocols.Normalize(previous.LocalGateway.Protocol);
             _config = CloneConfig(config);
+            ConfigStore.EnsureRelayPorts(_config.Relays);
+            SyncRelayStatusesLocked();
             _config.GatewayType = GatewayTypes.Normalize(_config.GatewayType);
             _config.LocalGateway.Protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
-            var currentProtocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
-            if (!string.Equals(previousProtocol, currentProtocol, StringComparison.OrdinalIgnoreCase))
-            {
-                _localGatewayClients = LoadLocalGatewayClients(currentProtocol);
-            }
             _status.ProxyListenPort = _config.LocalProxyListenPort;
             _status.GatewayType = _config.GatewayType;
             _status.LocalGatewayProtocol = _config.LocalGateway.Protocol;
             _status.LocalGatewayPort = _config.LocalGateway.Port;
-            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
+            _status.LocalGatewayClientsCount = 0;
             _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
 
             if (string.Equals(_config.GatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
@@ -455,8 +730,6 @@ public sealed class GatewayRuntime
                 }
             }
 
-            var previousProtocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
-
             _config.GatewayType = GatewayTypes.Local;
             _config.LocalGateway.Protocol = protocol;
             _config.LocalGateway.Port = config.Port;
@@ -464,18 +737,13 @@ public sealed class GatewayRuntime
             _config.LocalGateway.RemoteAddress = remoteAddress;
             _config.LocalGateway.Remark = string.IsNullOrWhiteSpace(config.Remark) ? "OmniRelay Local Gateway" : config.Remark.Trim();
             _config.LocalGateway.RuntimeEnabled = config.RuntimeEnabled;
-            if (!string.Equals(previousProtocol, protocol, StringComparison.OrdinalIgnoreCase))
-            {
-                _localGatewayClients = LoadLocalGatewayClients(protocol);
-            }
-
             _localGatewayRequested = _config.LocalGateway.RuntimeEnabled;
             _localGatewayRestartRequested = true;
             _localGatewayRequestVersion++;
             _status.GatewayType = _config.GatewayType;
             _status.LocalGatewayProtocol = _config.LocalGateway.Protocol;
             _status.LocalGatewayPort = _config.LocalGateway.Port;
-            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
+            _status.LocalGatewayClientsCount = 0;
             _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
             PersistLocked();
             error = null;
@@ -518,12 +786,32 @@ public sealed class GatewayRuntime
         out PolicyCommitResult? result,
         out string? error)
     {
+        return TryApplyPolicyUpdate(listType, mode, entries, string.Empty, out result, out error);
+    }
+
+    public bool TryApplyPolicyUpdate(
+        string listType,
+        string mode,
+        IReadOnlyList<string> entries,
+        string relayId,
+        out PolicyCommitResult? result,
+        out string? error)
+    {
         lock (_sync)
         {
             try
             {
-                result = _policyStore.ApplyUpdate(listType, mode, entries);
-                ApplyPolicySnapshotLocked(_policyStore.Load());
+                result = _policyStore.ApplyUpdate(listType, mode, entries, relayId);
+                if (string.IsNullOrWhiteSpace(relayId))
+                {
+                    ApplyPolicySnapshotLocked(_policyStore.Load());
+                }
+                else if (_relayStatuses.TryGetValue(relayId, out var status))
+                {
+                    var snapshot = _policyStore.Load(relayId);
+                    status.WhitelistCount = snapshot.WhitelistEntries.Count;
+                    status.BlacklistCount = snapshot.BlacklistEntries.Count;
+                }
                 PersistLocked();
                 error = null;
                 return true;
@@ -539,18 +827,26 @@ public sealed class GatewayRuntime
 
     public bool ShouldUseWhitelistAdapter(IPAddress? destinationAddress)
     {
-        lock (_sync)
-        {
-            return _whitelistIndex.Matches(destinationAddress);
-        }
+        var match = EvaluatePolicyDestination(destinationAddress);
+        return match.Action == PolicyMatchAction.Whitelist;
     }
 
     public bool ShouldBlockDestination(IPAddress? destinationAddress)
     {
-        lock (_sync)
-        {
-            return _blacklistIndex.Matches(destinationAddress);
-        }
+        var match = EvaluatePolicyDestination(destinationAddress);
+        return match.Action == PolicyMatchAction.Blacklist;
+    }
+
+    public RelayPolicyMatchResult EvaluatePolicyDestination(IPAddress? destinationAddress)
+    {
+        var lists = BuildCompiledPolicyLists(_policyStore.LoadPolicySet(string.Empty));
+        return RelayPolicyMatcher.Evaluate(lists, destinationAddress);
+    }
+
+    public RelayPolicyMatchResult EvaluateRelayPolicyDestination(string relayId, IPAddress? destinationAddress)
+    {
+        var lists = BuildCompiledPolicyLists(_policyStore.LoadPolicySet(relayId));
+        return RelayPolicyMatcher.Evaluate(lists, destinationAddress);
     }
 
     public void RequestProxyStart()
@@ -695,7 +991,7 @@ public sealed class GatewayRuntime
             _status.LocalGatewayAutoRecovered = autoRecovered;
             _status.LocalGatewayProtocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
             _status.LocalGatewayPort = _config.LocalGateway.Port;
-            _status.LocalGatewayClientsCount = _localGatewayClients.Count;
+            _status.LocalGatewayClientsCount = 0;
             _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
         }
     }
@@ -769,6 +1065,7 @@ public sealed class GatewayRuntime
             _status.LicenseCheckedAtUtc = result.CheckedAtUtc;
             _status.LicenseExpiresAtUtc = result.ExpiresAtUtc;
             _status.LicenseReason = result.Reason;
+            _status.LicenseSource = string.IsNullOrWhiteSpace(result.Source) ? "unknown" : result.Source;
             _status.LicenseTransferRequired = result.TransferRequired;
             _status.LicenseTransferLimitPerRollingYear = result.TransferLimitPerRollingYear;
             _status.LicenseTransfersUsedInWindow = result.TransfersUsedInWindow;
@@ -777,6 +1074,10 @@ public sealed class GatewayRuntime
             _status.LicenseActiveDeviceHint = result.ActiveDeviceIdHint;
             _status.LastError = result.Error;
             _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+            if (!result.IsValid)
+            {
+                MarkRelayStatusesDisconnectedLocked(result.Reason ?? result.Error ?? "License invalid.");
+            }
         }
     }
 
@@ -822,6 +1123,7 @@ public sealed class GatewayRuntime
                 LicenseCheckedAtUtc = _status.LicenseCheckedAtUtc,
                 LicenseExpiresAtUtc = _status.LicenseExpiresAtUtc,
                 LicenseReason = _status.LicenseReason,
+                LicenseSource = _status.LicenseSource,
                 LicenseTransferRequired = _status.LicenseTransferRequired,
                 LicenseTransferLimitPerRollingYear = _status.LicenseTransferLimitPerRollingYear,
                 LicenseTransfersUsedInWindow = _status.LicenseTransfersUsedInWindow,
@@ -843,9 +1145,168 @@ public sealed class GatewayRuntime
         }
     }
 
+    public AppStatus GetAppStatusSnapshot()
+    {
+        lock (_sync)
+        {
+            SyncRelayStatusesLocked();
+            return new AppStatus
+            {
+                ServiceRunning = true,
+                ProxyRunning = _relayStatuses.Values.Any(x => x.Enabled && x.DataPlaneListening),
+                LicenseValid = _status.LicenseValid,
+                LicenseFromCache = _status.LicenseFromCache,
+                LicenseCheckedAtUtc = _status.LicenseCheckedAtUtc,
+                LicenseExpiresAtUtc = _status.LicenseExpiresAtUtc,
+                LicenseReason = _status.LicenseReason,
+                LicenseSource = _status.LicenseSource,
+                LicenseTransferRequired = _status.LicenseTransferRequired,
+                LicenseTransferLimitPerRollingYear = _status.LicenseTransferLimitPerRollingYear,
+                LicenseTransfersUsedInWindow = _status.LicenseTransfersUsedInWindow,
+                LicenseTransfersRemainingInWindow = _status.LicenseTransfersRemainingInWindow,
+                LicenseTransferWindowStartAt = _status.LicenseTransferWindowStartAt,
+                LicenseActiveDeviceHint = _status.LicenseActiveDeviceHint,
+                Relays = _relayStatuses.Values.Select(CloneRelayStatus).ToList()
+            };
+        }
+    }
+
+    public void SetRelayRuntimeStatus(RelayStatus status)
+    {
+        lock (_sync)
+        {
+            if (string.IsNullOrWhiteSpace(status.RelayId))
+            {
+                return;
+            }
+
+            _relayStatuses[status.RelayId] = CloneRelayStatus(status);
+            _status.ProxyRunning = _relayStatuses.Values.Any(x => x.Enabled && x.DataPlaneListening);
+            _status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
     private void PersistLocked()
     {
         _configStore.Save(_config);
+    }
+
+    private void SyncRelayStatusesLocked()
+    {
+        var relayIds = _config.Relays.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var staleId in _relayStatuses.Keys.Where(x => !relayIds.Contains(x)).ToArray())
+        {
+            _relayStatuses.Remove(staleId);
+        }
+
+        foreach (var relay in _config.Relays)
+        {
+            _relayStatuses[relay.Id] = BuildRelayStatus(relay, _relayStatuses.TryGetValue(relay.Id, out var existing) ? existing : null);
+        }
+    }
+
+    private RelayStatus BuildRelayStatus(RelayConfig relay, RelayStatus? existing)
+    {
+        var snapshot = _policyStore.Load(relay.Id);
+        var status = existing is null ? new RelayStatus() : CloneRelayStatus(existing);
+        status.RelayId = relay.Id;
+        status.Name = relay.Name;
+        status.Enabled = relay.Enabled;
+        status.GatewayType = GatewayTypes.Normalize(relay.GatewayType);
+        status.LocalGatewayProtocol = LocalGatewayProtocols.Normalize(relay.LocalGateway?.Protocol);
+        status.LocalGatewayPort = relay.LocalGateway?.Port ?? 0;
+        status.OmniPanelUrl = relay.OmniPanel?.PublicUrl;
+        status.OmniPanelState = string.IsNullOrWhiteSpace(relay.OmniPanel?.Domain) ? "not_configured" : "configured";
+        status.OmniPanelLastError = string.IsNullOrWhiteSpace(relay.OmniPanel?.LastError) ? null : relay.OmniPanel.LastError;
+        status.WhitelistCount = snapshot.WhitelistEntries.Count;
+        status.BlacklistCount = snapshot.BlacklistEntries.Count;
+        if (_status.LicenseCheckedAtUtc is not null && !_status.LicenseValid)
+        {
+            var reason = _status.LicenseReason ?? _status.LastError ?? "License invalid.";
+            status.TunnelState = "Disconnected";
+            status.HealthState = "Disconnected";
+            status.HealthReasonCode = "license_inactive";
+            status.RecoveryAction = null;
+            status.TunnelConnected = false;
+            status.DataPlaneListening = false;
+            status.BootstrapSocksListening = false;
+            status.BootstrapSocksRemoteForwardActive = false;
+            status.TunnelLastError = reason;
+            status.BootstrapSocksLastError = reason;
+            status.LastError = reason;
+            status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+        }
+        return status;
+    }
+
+    private void MarkRelayStatusesDisconnectedLocked(string reason)
+    {
+        foreach (var key in _relayStatuses.Keys.ToArray())
+        {
+            var status = _relayStatuses[key];
+            status.TunnelState = "Disconnected";
+            status.HealthState = "Disconnected";
+            status.HealthReasonCode = "license_inactive";
+            status.RecoveryAction = null;
+            status.TunnelConnected = false;
+            status.DataPlaneListening = false;
+            status.BootstrapSocksListening = false;
+            status.BootstrapSocksRemoteForwardActive = false;
+            status.TunnelLastError = reason;
+            status.BootstrapSocksLastError = reason;
+            status.LastError = reason;
+            status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+        }
+
+        _status.ProxyRunning = false;
+        _status.TunnelConnected = false;
+        _status.BootstrapSocksListening = false;
+        _status.BootstrapSocksRemoteForwardActive = false;
+        _status.TunnelLastError = reason;
+        _status.BootstrapSocksLastError = reason;
+    }
+
+    private static RelayStatus CloneRelayStatus(RelayStatus status)
+    {
+        return new RelayStatus
+        {
+            RelayId = status.RelayId,
+            Name = status.Name,
+            Enabled = status.Enabled,
+            GatewayType = status.GatewayType,
+            StatusStale = status.StatusStale,
+            TunnelState = status.TunnelState,
+            HealthState = status.HealthState,
+            HealthReasonCode = status.HealthReasonCode,
+            ConsecutiveFailures = status.ConsecutiveFailures,
+            RecoveryTier = status.RecoveryTier,
+            RecoveryAction = status.RecoveryAction,
+            LastLocalProbeUtc = status.LastLocalProbeUtc,
+            LastEndToEndProbeUtc = status.LastEndToEndProbeUtc,
+            LastHealthyUtc = status.LastHealthyUtc,
+            LastStatusUpdateUtc = status.LastStatusUpdateUtc,
+            TunnelConnected = status.TunnelConnected,
+            TunnelLastConnectedAtUtc = status.TunnelLastConnectedAtUtc,
+            TunnelReconnectCount = status.TunnelReconnectCount,
+            TunnelLastError = status.TunnelLastError,
+            DataPlaneListening = status.DataPlaneListening,
+            BootstrapSocksListening = status.BootstrapSocksListening,
+            BootstrapSocksRemoteForwardActive = status.BootstrapSocksRemoteForwardActive,
+            BootstrapSocksLastError = status.BootstrapSocksLastError,
+            IncomingAdapterIp = status.IncomingAdapterIp,
+            OutgoingAdapterIp = status.OutgoingAdapterIp,
+            WhitelistCount = status.WhitelistCount,
+            BlacklistCount = status.BlacklistCount,
+            LastError = status.LastError,
+            LocalGatewayState = status.LocalGatewayState,
+            LocalGatewayHealthReason = status.LocalGatewayHealthReason,
+            LocalGatewayProtocol = status.LocalGatewayProtocol,
+            LocalGatewayPort = status.LocalGatewayPort,
+            LocalGatewayClientsCount = status.LocalGatewayClientsCount,
+            OmniPanelState = status.OmniPanelState,
+            OmniPanelUrl = status.OmniPanelUrl,
+            OmniPanelLastError = status.OmniPanelLastError
+        };
     }
 
     private void RequestTunnelRestartLocked(string reason)
@@ -950,6 +1411,7 @@ public sealed class GatewayRuntime
             TunnelPrivateKeyPassphrase = config.TunnelPrivateKeyPassphrase,
             TunnelPassword = config.TunnelPassword,
             LicenseKey = config.LicenseKey,
+            Relays = config.Relays?.Select(CloneRelayConfig).ToList() ?? [],
             LocalGateway = new LocalGatewayConfig
             {
                 Protocol = LocalGatewayProtocols.Normalize(config.LocalGateway?.Protocol),
@@ -958,6 +1420,103 @@ public sealed class GatewayRuntime
                 RemoteAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.RemoteAddress) ? string.Empty : config.LocalGateway.RemoteAddress.Trim(),
                 Remark = string.IsNullOrWhiteSpace(config.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : config.LocalGateway.Remark.Trim(),
                 RuntimeEnabled = config.LocalGateway?.RuntimeEnabled ?? true
+            }
+        };
+    }
+
+    private static RelayConfig CloneRelayConfig(RelayConfig relay)
+    {
+        return new RelayConfig
+        {
+            Id = string.IsNullOrWhiteSpace(relay.Id) ? Guid.NewGuid().ToString("N") : relay.Id.Trim(),
+            Name = string.IsNullOrWhiteSpace(relay.Name) ? "Relay" : relay.Name.Trim(),
+            GatewayType = GatewayTypes.Normalize(relay.GatewayType),
+            Enabled = relay.Enabled,
+            IncomingAdapterId = relay.IncomingAdapterId ?? string.Empty,
+            IncomingAdapterIfIndex = relay.IncomingAdapterIfIndex,
+            OutgoingAdapterId = relay.OutgoingAdapterId ?? string.Empty,
+            OutgoingAdapterIfIndex = relay.OutgoingAdapterIfIndex,
+            DataPlaneLocalPort = relay.DataPlaneLocalPort,
+            BootstrapSocksLocalPort = relay.BootstrapSocksLocalPort,
+            BootstrapSocksRemotePort = relay.BootstrapSocksRemotePort is > 0 and <= 65535 ? relay.BootstrapSocksRemotePort : 0,
+            OmniPanel = new RelayOmniPanelConfig
+            {
+                Port = relay.OmniPanel?.Port is > 0 and <= 65535
+                    ? relay.OmniPanel.Port
+                    : (relay.RemoteGateway?.PanelPort is > 0 and <= 65535 ? relay.RemoteGateway.PanelPort : 2054),
+                Username = relay.OmniPanel?.Username ?? relay.RemoteGateway?.PanelUser ?? string.Empty,
+                Password = relay.OmniPanel?.Password ?? relay.RemoteGateway?.PanelPassword ?? string.Empty,
+                Domain = relay.OmniPanel?.Domain ?? relay.RemoteGateway?.PanelDomain ?? string.Empty,
+                DomainOnly = relay.OmniPanel?.DomainOnly ?? relay.RemoteGateway?.PanelDomainOnly ?? false,
+                UseSsl = relay.OmniPanel?.UseSsl ?? relay.RemoteGateway?.PanelUseSsl ?? false,
+                SslMode = !string.IsNullOrWhiteSpace(relay.OmniPanel?.SslMode)
+                    ? relay.OmniPanel.SslMode.Trim()
+                    : (string.IsNullOrWhiteSpace(relay.RemoteGateway?.PanelSslMode) ? "letsencrypt" : relay.RemoteGateway.PanelSslMode.Trim()),
+                UploadedCertPath = relay.OmniPanel?.UploadedCertPath ?? relay.RemoteGateway?.PanelUploadedCertPath ?? string.Empty,
+                UploadedKeyPath = relay.OmniPanel?.UploadedKeyPath ?? relay.RemoteGateway?.PanelUploadedKeyPath ?? string.Empty,
+                PublicUrl = relay.OmniPanel?.PublicUrl ?? string.Empty,
+                LastError = relay.OmniPanel?.LastError ?? string.Empty
+            },
+            RemoteGateway = new RemoteGatewayConfig
+            {
+                TunnelHost = relay.RemoteGateway?.TunnelHost ?? string.Empty,
+                TunnelSshPort = relay.RemoteGateway?.TunnelSshPort is > 0 and <= 65535 ? relay.RemoteGateway.TunnelSshPort : 22,
+                TunnelRemotePort = relay.RemoteGateway?.TunnelRemotePort is > 0 and <= 65535 ? relay.RemoteGateway.TunnelRemotePort : 0,
+                TunnelUser = string.IsNullOrWhiteSpace(relay.RemoteGateway?.TunnelUser) ? "OmniRelay" : relay.RemoteGateway.TunnelUser.Trim(),
+                TunnelAuthMethod = TunnelAuthMethods.Normalize(relay.RemoteGateway?.TunnelAuthMethod),
+                TunnelPrivateKeyPath = relay.RemoteGateway?.TunnelPrivateKeyPath ?? string.Empty,
+                TunnelPrivateKeyPassphrase = relay.RemoteGateway?.TunnelPrivateKeyPassphrase ?? string.Empty,
+                TunnelPassword = relay.RemoteGateway?.TunnelPassword ?? string.Empty,
+                BootstrapMode = string.IsNullOrWhiteSpace(relay.RemoteGateway?.BootstrapMode) ? "tunnel" : relay.RemoteGateway.BootstrapMode.Trim(),
+                Protocol = string.IsNullOrWhiteSpace(relay.RemoteGateway?.Protocol) ? "vless_tls_singbox" : relay.RemoteGateway.Protocol.Trim(),
+                PublicPort = relay.RemoteGateway?.PublicPort is > 0 and <= 65535 ? relay.RemoteGateway.PublicPort : 443,
+                PanelPort = relay.OmniPanel?.Port is > 0 and <= 65535
+                    ? relay.OmniPanel.Port
+                    : (relay.RemoteGateway?.PanelPort is > 0 and <= 65535 ? relay.RemoteGateway.PanelPort : 2054),
+                PanelUser = relay.OmniPanel?.Username ?? relay.RemoteGateway?.PanelUser ?? string.Empty,
+                PanelPassword = relay.OmniPanel?.Password ?? relay.RemoteGateway?.PanelPassword ?? string.Empty,
+                PanelDomain = relay.OmniPanel?.Domain ?? relay.RemoteGateway?.PanelDomain ?? string.Empty,
+                PanelDomainOnly = relay.OmniPanel?.DomainOnly ?? relay.RemoteGateway?.PanelDomainOnly ?? false,
+                PanelUseSsl = relay.OmniPanel?.UseSsl ?? relay.RemoteGateway?.PanelUseSsl ?? false,
+                PanelSslMode = !string.IsNullOrWhiteSpace(relay.OmniPanel?.SslMode)
+                    ? relay.OmniPanel.SslMode.Trim()
+                    : (string.IsNullOrWhiteSpace(relay.RemoteGateway?.PanelSslMode) ? "letsencrypt" : relay.RemoteGateway.PanelSslMode.Trim()),
+                PanelUploadedCertPath = relay.OmniPanel?.UploadedCertPath ?? relay.RemoteGateway?.PanelUploadedCertPath ?? string.Empty,
+                PanelUploadedKeyPath = relay.OmniPanel?.UploadedKeyPath ?? relay.RemoteGateway?.PanelUploadedKeyPath ?? string.Empty,
+                ProtocolTlsEnabled = relay.RemoteGateway?.ProtocolTlsEnabled ?? false,
+                ProtocolTlsServerName = relay.RemoteGateway?.ProtocolTlsServerName ?? string.Empty,
+                ProtocolCertPath = relay.RemoteGateway?.ProtocolCertPath ?? string.Empty,
+                ProtocolKeyPath = relay.RemoteGateway?.ProtocolKeyPath ?? string.Empty,
+                ProtocolTlsMode = string.IsNullOrWhiteSpace(relay.RemoteGateway?.ProtocolTlsMode) ? "uploaded" : relay.RemoteGateway.ProtocolTlsMode.Trim(),
+                ProtocolAlpnCsv = relay.RemoteGateway?.ProtocolAlpnCsv ?? string.Empty,
+                ProxyUsername = string.IsNullOrWhiteSpace(relay.RemoteGateway?.ProxyUsername) ? "omni" : relay.RemoteGateway.ProxyUsername.Trim(),
+                ProxyPassword = relay.RemoteGateway?.ProxyPassword ?? string.Empty,
+                VlessTlsFlow = relay.RemoteGateway?.VlessTlsFlow ?? string.Empty,
+                Hysteria2UpMbps = relay.RemoteGateway?.Hysteria2UpMbps is > 0 ? relay.RemoteGateway.Hysteria2UpMbps : 100,
+                Hysteria2DownMbps = relay.RemoteGateway?.Hysteria2DownMbps is > 0 ? relay.RemoteGateway.Hysteria2DownMbps : 100,
+                Hysteria2ObfsPassword = relay.RemoteGateway?.Hysteria2ObfsPassword ?? string.Empty,
+                Hysteria2IgnoreClientBandwidth = relay.RemoteGateway?.Hysteria2IgnoreClientBandwidth ?? false,
+                Hysteria2MasqueradeUrl = relay.RemoteGateway?.Hysteria2MasqueradeUrl ?? string.Empty,
+                NaiveNetwork = relay.RemoteGateway?.NaiveNetwork ?? string.Empty,
+                NaiveQuicCongestionControl = relay.RemoteGateway?.NaiveQuicCongestionControl ?? string.Empty,
+                ShadowTlsCamouflageServer = relay.RemoteGateway?.ShadowTlsCamouflageServer ?? string.Empty,
+                ShadowTlsStrictMode = relay.RemoteGateway?.ShadowTlsStrictMode ?? false,
+                ShadowTlsWildcardSni = relay.RemoteGateway?.ShadowTlsWildcardSni ?? string.Empty,
+                OpenVpnNetwork = string.IsNullOrWhiteSpace(relay.RemoteGateway?.OpenVpnNetwork) ? "10.29.0.0/24" : relay.RemoteGateway.OpenVpnNetwork.Trim(),
+                OpenVpnSharedCaCertPath = relay.RemoteGateway?.OpenVpnSharedCaCertPath ?? string.Empty,
+                OpenVpnSharedClientCertPath = relay.RemoteGateway?.OpenVpnSharedClientCertPath ?? string.Empty,
+                OpenVpnSharedClientKeyPath = relay.RemoteGateway?.OpenVpnSharedClientKeyPath ?? string.Empty,
+                OpenVpnSharedTlsCryptKeyPath = relay.RemoteGateway?.OpenVpnSharedTlsCryptKeyPath ?? string.Empty,
+                DohEndpoints = relay.RemoteGateway?.DohEndpoints ?? string.Empty,
+            },
+            LocalGateway = new LocalGatewayConfig
+            {
+                Protocol = LocalGatewayProtocols.Normalize(relay.LocalGateway?.Protocol),
+                Port = relay.LocalGateway?.Port is > 0 and <= 65535 ? relay.LocalGateway.Port : 443,
+                BindAddress = string.IsNullOrWhiteSpace(relay.LocalGateway?.BindAddress) ? "0.0.0.0" : relay.LocalGateway.BindAddress.Trim(),
+                RemoteAddress = string.IsNullOrWhiteSpace(relay.LocalGateway?.RemoteAddress) ? string.Empty : relay.LocalGateway.RemoteAddress.Trim(),
+                Remark = string.IsNullOrWhiteSpace(relay.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : relay.LocalGateway.Remark.Trim(),
+                RuntimeEnabled = relay.LocalGateway?.RuntimeEnabled ?? true
             }
         };
     }
@@ -1015,111 +1574,79 @@ public sealed class GatewayRuntime
         return false;
     }
 
-    private List<LocalGatewayClient> LoadLocalGatewayClients(string? protocol)
+    private List<LocalGatewayClient> LoadRelayLocalGatewayClientsFromDb(string relayId, string protocol)
     {
         var normalizedProtocol = LocalGatewayProtocols.Normalize(protocol);
-        EnsureLegacyLocalClientsMigrated();
-        return LoadLocalGatewayClientsFromPath(ServicePaths.GetLocalGatewayClientsPath(normalizedProtocol), normalizedProtocol);
-    }
-
-    private static void EnsureLegacyLocalClientsMigrated()
-    {
-        lock (LegacyClientsMigrationSync)
-        {
-            if (LegacyClientsMigrated)
-            {
-                return;
-            }
-
-            LegacyClientsMigrated = true;
-            if (!File.Exists(ServicePaths.LocalGatewayClientsPath))
-            {
-                return;
-            }
-
-            try
-            {
-                var raw = File.ReadAllText(ServicePaths.LocalGatewayClientsPath);
-                var legacyClients = JsonSerializer.Deserialize<List<LocalGatewayClient>>(raw, JsonOptions) ?? [];
-                var buckets = new Dictionary<string, List<LocalGatewayClient>>(StringComparer.OrdinalIgnoreCase);
-                foreach (var client in legacyClients)
-                {
-                    var protocol = LocalGatewayProtocols.Normalize(client.Protocol);
-                    if (!buckets.TryGetValue(protocol, out var list))
-                    {
-                        list = [];
-                        buckets[protocol] = list;
-                    }
-
-                    list.Add(client);
-                }
-
-                ServicePaths.EnsureDirectories();
-                foreach (var bucket in buckets)
-                {
-                    var path = ServicePaths.GetLocalGatewayClientsPath(bucket.Key);
-                    if (File.Exists(path))
-                    {
-                        continue;
-                    }
-
-                    var migratedRaw = JsonSerializer.Serialize(bucket.Value, JsonOptions);
-                    File.WriteAllText(path, migratedRaw);
-                }
-
-                var backupPath = $"{ServicePaths.LocalGatewayClientsPath}.migrated";
-                if (!File.Exists(backupPath))
-                {
-                    File.Move(ServicePaths.LocalGatewayClientsPath, backupPath);
-                }
-                else
-                {
-                    File.Delete(ServicePaths.LocalGatewayClientsPath);
-                }
-            }
-            catch
-            {
-                // Leave legacy file untouched; runtime can continue with current protocol defaults.
-            }
-        }
-    }
-
-    private List<LocalGatewayClient> LoadLocalGatewayClientsFromPath(string path, string normalizedProtocol)
-    {
         try
         {
-            if (!File.Exists(path))
+            var dbPath = ServicePaths.GetRelayLocalGatewayAccountingDbPath(relayId);
+            var dbDir = Path.GetDirectoryName(dbPath);
+            if (!string.IsNullOrWhiteSpace(dbDir))
             {
-                return [];
+                Directory.CreateDirectory(dbDir);
             }
 
-            var raw = File.ReadAllText(path);
-            var clients = JsonSerializer.Deserialize<List<LocalGatewayClient>>(raw, JsonOptions) ?? [];
-            var normalized = new List<LocalGatewayClient>(clients.Count);
+            using var connection = new SqliteConnection($"Data Source={dbPath};Cache=Shared");
+            connection.Open();
+            EnsureRelayLocalGatewayClientSchema(connection);
+
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+SELECT c.client_id,
+       COALESCE(c.email, ''),
+       COALESCE(c.enabled, 1),
+       COALESCE(c.remark, ''),
+       COALESCE(c.auth_username, ''),
+       COALESCE(c.auth_secret, ''),
+       COALESCE(c.total_bytes_limit, 0),
+       COALESCE(c.expiry_unix_ms, 0),
+       COALESCE(x.speed_limit_kbps, 0),
+       COALESCE(cc.last_seen_at, 0),
+       COALESCE(cc.active_connections, 0),
+       COALESCE(c.created_at, 0)
+FROM clients c
+LEFT JOIN relay_client_extensions x ON x.client_id = c.client_id
+LEFT JOIN connection_counters cc ON cc.client_id = c.client_id
+WHERE c.protocol_id = $protocol;
+""";
+            command.Parameters.AddWithValue("$protocol", normalizedProtocol);
+
+            var clients = new List<LocalGatewayClient>();
             var usernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var client in clients)
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
             {
-                var id = (client.Id ?? string.Empty).Trim();
-                var email = (client.Email ?? string.Empty).Trim();
+                var id = reader.IsDBNull(0) ? string.Empty : reader.GetString(0).Trim();
+                var email = reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim();
                 if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(email))
                 {
                     continue;
                 }
 
-                normalized.Add(new LocalGatewayClient
+                var username = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
+                var secret = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);
+                var totalBytesLimit = reader.IsDBNull(6) ? 0L : reader.GetInt64(6);
+                var createdAtUnix = reader.IsDBNull(11) ? 0L : reader.GetInt64(11);
+
+                clients.Add(new LocalGatewayClient
                 {
                     Id = id,
                     Email = email,
-                    Enabled = client.Enabled,
-                    Remark = string.IsNullOrWhiteSpace(client.Remark) ? email : client.Remark.Trim(),
+                    Enabled = !reader.IsDBNull(2) && reader.GetInt32(2) != 0,
+                    Remark = string.IsNullOrWhiteSpace(reader.IsDBNull(3) ? null : reader.GetString(3)) ? email : reader.GetString(3).Trim(),
                     Protocol = normalizedProtocol,
-                    Username = CreateLocalGatewayUsername(client.Username, email, usernames),
-                    Secret = string.IsNullOrWhiteSpace(client.Secret) ? CreateLocalGatewaySecret(normalizedProtocol) : client.Secret.Trim(),
-                    CreatedAtUtc = client.CreatedAtUtc == default ? DateTimeOffset.UtcNow : client.CreatedAtUtc
+                    Username = CreateLocalGatewayUsername(username, email, usernames),
+                    Secret = string.IsNullOrWhiteSpace(secret) ? CreateLocalGatewaySecret(normalizedProtocol) : secret.Trim(),
+                    TotalGB = totalBytesLimit > 0 ? totalBytesLimit / (1024d * 1024d * 1024d) : 0,
+                    ExpiryTime = reader.IsDBNull(7) ? 0L : Math.Max(0L, reader.GetInt64(7)),
+                    SpeedLimitKbps = reader.IsDBNull(8) ? 0 : Math.Max(0, reader.GetInt32(8)),
+                    LastSeenAtUnixMs = reader.IsDBNull(9) ? 0L : Math.Max(0L, reader.GetInt64(9) * 1000L),
+                    ActiveConnections = reader.IsDBNull(10) ? 0 : Math.Max(0, reader.GetInt32(10)),
+                    CreatedAtUtc = createdAtUnix > 0 ? DateTimeOffset.FromUnixTimeSeconds(createdAtUnix) : DateTimeOffset.UtcNow
                 });
             }
 
-            return normalized;
+            return clients;
         }
         catch (Exception ex)
         {
@@ -1128,24 +1655,531 @@ public sealed class GatewayRuntime
         }
     }
 
-    private void PersistLocalGatewayClientsLocked()
+    private void PersistRelayLocalGatewayClientsToDb(string relayId, List<LocalGatewayClient> clients, string protocol)
     {
         try
         {
-            ServicePaths.EnsureDirectories();
-            var protocol = LocalGatewayProtocols.Normalize(_config.LocalGateway.Protocol);
-            foreach (var client in _localGatewayClients)
+            var dbPath = ServicePaths.GetRelayLocalGatewayAccountingDbPath(relayId);
+            var dbDir = Path.GetDirectoryName(dbPath);
+            if (!string.IsNullOrWhiteSpace(dbDir))
             {
-                client.Protocol = protocol;
+                Directory.CreateDirectory(dbDir);
             }
 
-            var raw = JsonSerializer.Serialize(_localGatewayClients, JsonOptions);
-            File.WriteAllText(ServicePaths.GetLocalGatewayClientsPath(protocol), raw);
+            using var connection = new SqliteConnection($"Data Source={dbPath};Cache=Shared");
+            connection.Open();
+            EnsureRelayLocalGatewayClientSchema(connection);
+
+            using var tx = connection.BeginTransaction();
+            var normalizedProtocol = LocalGatewayProtocols.Normalize(protocol);
+            foreach (var client in clients)
+            {
+                client.Protocol = normalizedProtocol;
+
+                using var upsertClient = connection.CreateCommand();
+                upsertClient.Transaction = tx;
+                upsertClient.CommandText = """
+INSERT INTO clients(client_id, protocol_id, email, username, auth_username, auth_secret, enabled, remark, total_bytes_limit, expiry_unix_ms, created_at, updated_at)
+VALUES($id, $protocol, $email, $username, $authUsername, $authSecret, $enabled, $remark, $totalBytesLimit, $expiry, $createdAt, $updatedAt)
+ON CONFLICT(client_id) DO UPDATE SET
+  protocol_id=excluded.protocol_id,
+  email=excluded.email,
+  username=excluded.username,
+  auth_username=excluded.auth_username,
+  auth_secret=excluded.auth_secret,
+  enabled=excluded.enabled,
+  remark=excluded.remark,
+  total_bytes_limit=excluded.total_bytes_limit,
+  expiry_unix_ms=excluded.expiry_unix_ms,
+  updated_at=excluded.updated_at;
+""";
+                var totalBytesLimit = 0L;
+                if (double.IsFinite(client.TotalGB) && client.TotalGB > 0)
+                {
+                    totalBytesLimit = checked((long)Math.Round(client.TotalGB * 1024d * 1024d * 1024d));
+                }
+
+                upsertClient.Parameters.AddWithValue("$id", client.Id ?? string.Empty);
+                upsertClient.Parameters.AddWithValue("$protocol", normalizedProtocol);
+                upsertClient.Parameters.AddWithValue("$email", (client.Email ?? string.Empty).Trim());
+                upsertClient.Parameters.AddWithValue("$username", string.IsNullOrWhiteSpace(client.Username) ? (client.Id ?? string.Empty) : client.Username.Trim());
+                upsertClient.Parameters.AddWithValue("$authUsername", string.IsNullOrWhiteSpace(client.Username) ? (client.Id ?? string.Empty) : client.Username.Trim());
+                upsertClient.Parameters.AddWithValue("$authSecret", (client.Secret ?? string.Empty).Trim());
+                upsertClient.Parameters.AddWithValue("$enabled", client.Enabled ? 1 : 0);
+                upsertClient.Parameters.AddWithValue("$remark", string.IsNullOrWhiteSpace(client.Remark) ? (client.Email ?? string.Empty).Trim() : client.Remark.Trim());
+                upsertClient.Parameters.AddWithValue("$totalBytesLimit", totalBytesLimit);
+                upsertClient.Parameters.AddWithValue("$expiry", client.ExpiryTime < 0 ? 0L : client.ExpiryTime);
+                upsertClient.Parameters.AddWithValue("$createdAt", client.CreatedAtUtc == default ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : client.CreatedAtUtc.ToUnixTimeSeconds());
+                upsertClient.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                upsertClient.ExecuteNonQuery();
+
+                using var upsertExt = connection.CreateCommand();
+                upsertExt.Transaction = tx;
+                upsertExt.CommandText = """
+INSERT INTO relay_client_extensions(client_id, speed_limit_kbps, updated_at)
+VALUES($id, $speedLimitKbps, $updatedAt)
+ON CONFLICT(client_id) DO UPDATE SET
+  speed_limit_kbps=excluded.speed_limit_kbps,
+  updated_at=excluded.updated_at;
+""";
+                upsertExt.Parameters.AddWithValue("$id", client.Id ?? string.Empty);
+                upsertExt.Parameters.AddWithValue("$speedLimitKbps", client.SpeedLimitKbps < 0 ? 0 : client.SpeedLimitKbps);
+                upsertExt.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                upsertExt.ExecuteNonQuery();
+
+                using var upsertUsage = connection.CreateCommand();
+                upsertUsage.Transaction = tx;
+                upsertUsage.CommandText = """
+INSERT INTO usage_totals(client_id, used_bytes, updated_at)
+VALUES($id, 0, 0)
+ON CONFLICT(client_id) DO NOTHING;
+""";
+                upsertUsage.Parameters.AddWithValue("$id", client.Id ?? string.Empty);
+                upsertUsage.ExecuteNonQuery();
+
+                using var upsertConn = connection.CreateCommand();
+                upsertConn.Transaction = tx;
+                upsertConn.CommandText = """
+INSERT INTO connection_counters(client_id, active_connections, last_seen_at)
+VALUES($id, 0, 0)
+ON CONFLICT(client_id) DO NOTHING;
+""";
+                upsertConn.Parameters.AddWithValue("$id", client.Id ?? string.Empty);
+                upsertConn.ExecuteNonQuery();
+            }
+
+            var ids = clients
+                .Select(x => (x.Id ?? string.Empty).Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var inList = ids.Length == 0
+                ? "''"
+                : string.Join(",", ids.Select((_, idx) => $"$id{idx}"));
+
+            using var pruneClients = connection.CreateCommand();
+            pruneClients.Transaction = tx;
+            pruneClients.CommandText = $"DELETE FROM clients WHERE protocol_id = $protocol AND client_id NOT IN ({inList});";
+            pruneClients.Parameters.AddWithValue("$protocol", normalizedProtocol);
+            for (var i = 0; i < ids.Length; i++)
+            {
+                pruneClients.Parameters.AddWithValue($"$id{i}", ids[i]);
+            }
+            pruneClients.ExecuteNonQuery();
+
+            using var pruneUsage = connection.CreateCommand();
+            pruneUsage.Transaction = tx;
+            pruneUsage.CommandText = "DELETE FROM usage_totals WHERE client_id NOT IN (SELECT client_id FROM clients);";
+            pruneUsage.ExecuteNonQuery();
+
+            using var pruneConnections = connection.CreateCommand();
+            pruneConnections.Transaction = tx;
+            pruneConnections.CommandText = "DELETE FROM connection_counters WHERE client_id NOT IN (SELECT client_id FROM clients);";
+            pruneConnections.ExecuteNonQuery();
+
+            using var pruneExtensions = connection.CreateCommand();
+            pruneExtensions.Transaction = tx;
+            pruneExtensions.CommandText = "DELETE FROM relay_client_extensions WHERE client_id NOT IN (SELECT client_id FROM clients);";
+            pruneExtensions.ExecuteNonQuery();
+
+            tx.Commit();
         }
         catch (Exception ex)
         {
-            _log.Error("Failed persisting local gateway clients.", ex);
+            _log.Error("Failed persisting relay local gateway clients.", ex);
         }
+    }
+
+    private static void EnsureRelayLocalGatewayClientSchema(SqliteConnection connection)
+    {
+        using var schema = connection.CreateCommand();
+        schema.CommandText = """
+CREATE TABLE IF NOT EXISTS clients (
+  client_id TEXT PRIMARY KEY,
+  protocol_id TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  auth_username TEXT NOT NULL DEFAULT '',
+  auth_secret TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  remark TEXT NOT NULL DEFAULT '',
+  total_bytes_limit INTEGER NOT NULL DEFAULT 0,
+  expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS usage_totals (
+  client_id TEXT PRIMARY KEY,
+  used_bytes INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS connection_counters (
+  client_id TEXT PRIMARY KEY,
+  active_connections INTEGER NOT NULL DEFAULT 0,
+  last_seen_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS relay_client_extensions (
+  client_id TEXT PRIMARY KEY,
+  speed_limit_kbps INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_clients_protocol_id ON clients(protocol_id);
+CREATE INDEX IF NOT EXISTS idx_clients_protocol_auth_username ON clients(protocol_id, auth_username);
+""";
+        schema.ExecuteNonQuery();
+
+        using var pragma = connection.CreateCommand();
+        pragma.CommandText = "PRAGMA table_info(clients);";
+        var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var reader = pragma.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                if (!reader.IsDBNull(1))
+                {
+                    cols.Add(reader.GetString(1));
+                }
+            }
+        }
+
+        static void EnsureColumn(SqliteConnection conn, HashSet<string> existing, string name, string ddl)
+        {
+            if (existing.Contains(name))
+            {
+                return;
+            }
+
+            using var alter = conn.CreateCommand();
+            alter.CommandText = $"ALTER TABLE clients ADD COLUMN {ddl};";
+            alter.ExecuteNonQuery();
+            existing.Add(name);
+        }
+
+        EnsureColumn(connection, cols, "email", "email TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, cols, "username", "username TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, cols, "auth_username", "auth_username TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, cols, "auth_secret", "auth_secret TEXT NOT NULL DEFAULT ''");
+        EnsureColumn(connection, cols, "remark", "remark TEXT NOT NULL DEFAULT ''");
+    }
+
+    private void SyncRelayLocalGatewayAccountingDb(string relayId, string protocol, IReadOnlyList<LocalGatewayClient> clients)
+    {
+        try
+        {
+            var signature = BuildRelayLocalClientsSyncSignature(protocol, clients);
+            if (_relayLocalAccountingSyncSignatures.TryGetValue(relayId, out var existingSignature) &&
+                string.Equals(existingSignature, signature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var dbPath = ServicePaths.GetRelayLocalGatewayAccountingDbPath(relayId);
+            var dbDir = Path.GetDirectoryName(dbPath);
+            if (!string.IsNullOrWhiteSpace(dbDir))
+            {
+                Directory.CreateDirectory(dbDir);
+            }
+
+            using var connection = new SqliteConnection($"Data Source={dbPath};Cache=Shared");
+            connection.Open();
+
+            using (var schema = connection.CreateCommand())
+            {
+                schema.CommandText = """
+CREATE TABLE IF NOT EXISTS clients (
+  client_id TEXT PRIMARY KEY,
+  protocol_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  total_bytes_limit INTEGER NOT NULL DEFAULT 0,
+  expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS usage_totals (
+  client_id TEXT PRIMARY KEY,
+  used_bytes INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS connection_counters (
+  client_id TEXT PRIMARY KEY,
+  active_connections INTEGER NOT NULL DEFAULT 0,
+  last_seen_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS relay_client_extensions (
+  client_id TEXT PRIMARY KEY,
+  speed_limit_kbps INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+""";
+                schema.ExecuteNonQuery();
+            }
+
+            var nowUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            using var tx = connection.BeginTransaction();
+            foreach (var client in clients)
+            {
+                using var upsertClient = connection.CreateCommand();
+                upsertClient.Transaction = tx;
+                upsertClient.CommandText = """
+INSERT INTO clients(client_id, protocol_id, username, enabled, total_bytes_limit, expiry_unix_ms, created_at, updated_at)
+VALUES($id, $protocol, $username, $enabled, $totalBytesLimit, $expiry, $createdAt, $updatedAt)
+ON CONFLICT(client_id) DO UPDATE SET
+  protocol_id=excluded.protocol_id,
+  username=excluded.username,
+  enabled=excluded.enabled,
+  total_bytes_limit=excluded.total_bytes_limit,
+  expiry_unix_ms=excluded.expiry_unix_ms,
+  updated_at=excluded.updated_at;
+""";
+                upsertClient.Parameters.AddWithValue("$id", client.Id ?? string.Empty);
+                upsertClient.Parameters.AddWithValue("$protocol", LocalGatewayProtocols.Normalize(protocol));
+                upsertClient.Parameters.AddWithValue("$username", string.IsNullOrWhiteSpace(client.Username) ? client.Id ?? string.Empty : client.Username);
+                upsertClient.Parameters.AddWithValue("$enabled", client.Enabled ? 1 : 0);
+                var totalBytesLimit = 0L;
+                if (double.IsFinite(client.TotalGB) && client.TotalGB > 0)
+                {
+                    totalBytesLimit = checked((long)Math.Round(client.TotalGB * 1024d * 1024d * 1024d));
+                }
+                upsertClient.Parameters.AddWithValue("$totalBytesLimit", totalBytesLimit);
+                upsertClient.Parameters.AddWithValue("$expiry", client.ExpiryTime < 0 ? 0L : client.ExpiryTime);
+                upsertClient.Parameters.AddWithValue("$createdAt", client.CreatedAtUtc.ToUnixTimeSeconds());
+                upsertClient.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                upsertClient.ExecuteNonQuery();
+
+                using var upsertExt = connection.CreateCommand();
+                upsertExt.Transaction = tx;
+                upsertExt.CommandText = """
+INSERT INTO relay_client_extensions(client_id, speed_limit_kbps, updated_at)
+VALUES($id, $speedLimitKbps, $updatedAt)
+ON CONFLICT(client_id) DO UPDATE SET
+  speed_limit_kbps=excluded.speed_limit_kbps,
+  updated_at=excluded.updated_at;
+""";
+                upsertExt.Parameters.AddWithValue("$id", client.Id ?? string.Empty);
+                upsertExt.Parameters.AddWithValue("$speedLimitKbps", client.SpeedLimitKbps < 0 ? 0 : client.SpeedLimitKbps);
+                upsertExt.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                upsertExt.ExecuteNonQuery();
+
+                using var upsertUsage = connection.CreateCommand();
+                upsertUsage.Transaction = tx;
+                upsertUsage.CommandText = """
+INSERT INTO usage_totals(client_id, used_bytes)
+VALUES($id, 0)
+ON CONFLICT(client_id) DO NOTHING;
+""";
+                upsertUsage.Parameters.AddWithValue("$id", client.Id ?? string.Empty);
+                upsertUsage.ExecuteNonQuery();
+
+                using var upsertConn = connection.CreateCommand();
+                upsertConn.Transaction = tx;
+                upsertConn.CommandText = """
+INSERT INTO connection_counters(client_id, active_connections, last_seen_at)
+VALUES($id, 0, 0)
+ON CONFLICT(client_id) DO NOTHING;
+""";
+                upsertConn.Parameters.AddWithValue("$id", client.Id ?? string.Empty);
+                upsertConn.ExecuteNonQuery();
+            }
+
+            var ids = clients
+                .Select(x => (x.Id ?? string.Empty).Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var inList = ids.Length == 0
+                ? "''"
+                : string.Join(",", ids.Select((_, idx) => $"$id{idx}"));
+
+            using var pruneClients = connection.CreateCommand();
+            pruneClients.Transaction = tx;
+            pruneClients.CommandText = $"DELETE FROM clients WHERE client_id NOT IN ({inList});";
+            for (var i = 0; i < ids.Length; i++)
+            {
+                pruneClients.Parameters.AddWithValue($"$id{i}", ids[i]);
+            }
+            pruneClients.ExecuteNonQuery();
+
+            using var pruneUsage = connection.CreateCommand();
+            pruneUsage.Transaction = tx;
+            pruneUsage.CommandText = "DELETE FROM usage_totals WHERE client_id NOT IN (SELECT client_id FROM clients);";
+            pruneUsage.ExecuteNonQuery();
+
+            using var pruneConnections = connection.CreateCommand();
+            pruneConnections.Transaction = tx;
+            pruneConnections.CommandText = "DELETE FROM connection_counters WHERE client_id NOT IN (SELECT client_id FROM clients);";
+            pruneConnections.ExecuteNonQuery();
+
+            using var pruneExtensions = connection.CreateCommand();
+            pruneExtensions.Transaction = tx;
+            pruneExtensions.CommandText = "DELETE FROM relay_client_extensions WHERE client_id NOT IN (SELECT client_id FROM clients);";
+            pruneExtensions.ExecuteNonQuery();
+
+            tx.Commit();
+            _relayLocalAccountingSyncSignatures[relayId] = signature;
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed syncing local accounting DB for relay '{relayId}'.", ex);
+        }
+    }
+
+    private static string BuildRelayLocalClientsSyncSignature(string protocol, IReadOnlyList<LocalGatewayClient> clients)
+    {
+        var normalizedProtocol = LocalGatewayProtocols.Normalize(protocol);
+        var ordered = clients
+            .OrderBy(x => x.Id, StringComparer.Ordinal)
+            .Select(x =>
+                $"{x.Id}|{x.Email}|{(x.Enabled ? 1 : 0)}|{(double.IsFinite(x.TotalGB) && x.TotalGB >= 0 ? x.TotalGB.ToString("R", CultureInfo.InvariantCulture) : "0")}|{(x.ExpiryTime < 0 ? 0 : x.ExpiryTime)}|{(x.SpeedLimitKbps < 0 ? 0 : x.SpeedLimitKbps)}");
+
+        return normalizedProtocol + "||" + string.Join("||", ordered);
+    }
+
+    private void ApplyRelayLocalGatewayAccountingSnapshot(string relayId, List<LocalGatewayClient> clients)
+    {
+        if (clients.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var dbPath = ServicePaths.GetRelayLocalGatewayAccountingDbPath(relayId);
+            if (!File.Exists(dbPath))
+            {
+                return;
+            }
+
+            using var connection = new SqliteConnection($"Data Source={dbPath};Cache=Shared");
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+SELECT c.client_id,
+       COALESCE(u.used_bytes, 0),
+       COALESCE(cc.last_seen_at, 0),
+       COALESCE(cc.active_connections, 0),
+       COALESCE(c.total_bytes_limit, 0),
+       COALESCE(c.expiry_unix_ms, 0),
+       COALESCE(x.speed_limit_kbps, 0),
+       COALESCE(c.enabled, 1)
+FROM clients c
+LEFT JOIN usage_totals u ON u.client_id = c.client_id
+LEFT JOIN connection_counters cc ON cc.client_id = c.client_id
+LEFT JOIN relay_client_extensions x ON x.client_id = c.client_id;
+""";
+
+            var byId = clients.ToDictionary(x => x.Id, StringComparer.Ordinal);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var clientId = reader.GetString(0);
+                if (!byId.TryGetValue(clientId, out var client))
+                {
+                    continue;
+                }
+
+                _ = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                var lastSeenAtUnixSeconds = reader.IsDBNull(2) ? 0L : reader.GetInt64(2);
+                var activeConnections = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
+                var totalBytesLimit = reader.IsDBNull(4) ? 0L : reader.GetInt64(4);
+                var expiryUnixMs = reader.IsDBNull(5) ? 0L : reader.GetInt64(5);
+                var speedLimitKbps = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);
+                var enabledRaw = reader.IsDBNull(7) ? 1 : reader.GetInt32(7);
+
+                client.LastSeenAtUnixMs = lastSeenAtUnixSeconds > 0 ? lastSeenAtUnixSeconds * 1000 : 0;
+                client.ActiveConnections = activeConnections < 0 ? 0 : activeConnections;
+                client.TotalGB = totalBytesLimit > 0 ? totalBytesLimit / (1024d * 1024d * 1024d) : 0;
+                client.ExpiryTime = expiryUnixMs < 0 ? 0 : expiryUnixMs;
+                client.SpeedLimitKbps = speedLimitKbps < 0 ? 0 : speedLimitKbps;
+                client.Enabled = enabledRaw != 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed reading local accounting DB for relay '{relayId}'.", ex);
+        }
+    }
+
+    private static bool TryCreateLocalGatewayClient(
+        List<LocalGatewayClient> clients,
+        string protocol,
+        string email,
+        string? remark,
+        out LocalGatewayClient? client,
+        out string? error)
+    {
+        var normalizedEmail = (email ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedEmail))
+        {
+            client = null;
+            error = "Client email is required.";
+            return false;
+        }
+
+        if (clients.Any(x => string.Equals(x.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase)))
+        {
+            client = null;
+            error = "Client email already exists.";
+            return false;
+        }
+
+        var normalizedProtocol = LocalGatewayProtocols.Normalize(protocol);
+        var existingUsernames = clients
+            .Select(x => x.Username)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        client = new LocalGatewayClient
+        {
+            Id = Guid.NewGuid().ToString(),
+            Email = normalizedEmail,
+            Enabled = true,
+            Remark = string.IsNullOrWhiteSpace(remark) ? normalizedEmail : remark.Trim(),
+            Protocol = normalizedProtocol,
+            Username = CreateLocalGatewayUsername(normalizedEmail, existingUsernames),
+            Secret = CreateLocalGatewaySecret(normalizedProtocol),
+            TotalGB = 0,
+            ExpiryTime = 0,
+            SpeedLimitKbps = 0,
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        };
+        clients.Add(client);
+        error = null;
+        return true;
+    }
+
+    private void SetRelayLocalClientCountLocked(string relayId, int count)
+    {
+        if (_relayStatuses.TryGetValue(relayId, out var status))
+        {
+            status.LocalGatewayClientsCount = count;
+            status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private bool TryGetRelayLocalContextLocked(string? relayId, out RelayConfig relay, out string protocol, out string? error)
+    {
+        relay = new RelayConfig();
+        protocol = LocalGatewayProtocols.VlessTcpPlain;
+        error = null;
+        var id = (relayId ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            error = "Relay id is required.";
+            return false;
+        }
+
+        var found = _config.Relays.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
+        if (found is null)
+        {
+            error = "Relay not found.";
+            return false;
+        }
+
+        relay = CloneRelayConfig(found);
+        protocol = LocalGatewayProtocols.Normalize(relay.LocalGateway.Protocol);
+        return true;
     }
 
     private static LocalGatewayClient CloneLocalGatewayClient(LocalGatewayClient client)
@@ -1159,6 +2193,11 @@ public sealed class GatewayRuntime
             Protocol = client.Protocol,
             Username = client.Username,
             Secret = client.Secret,
+            TotalGB = client.TotalGB,
+            ExpiryTime = client.ExpiryTime,
+            SpeedLimitKbps = client.SpeedLimitKbps,
+            LastSeenAtUnixMs = client.LastSeenAtUnixMs,
+            ActiveConnections = client.ActiveConnections,
             CreatedAtUtc = client.CreatedAtUtc
         };
     }
@@ -1200,10 +2239,118 @@ public sealed class GatewayRuntime
         return host;
     }
 
-    private static string BuildOpenVpnClientProfile(string host, int port)
+    private static string ResolveLocalGatewayHostLocked(RelayConfig relay)
     {
-        var caPem = File.ReadAllText(ServicePaths.LocalGatewayOpenVpnCaPath).Trim();
-        var tlsCrypt = File.ReadAllText(ServicePaths.LocalGatewayOpenVpnTlsCryptKeyPath).Trim();
+        var host = (relay.LocalGateway.RemoteAddress ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(host))
+        {
+            return host;
+        }
+
+        if (NetworkAdapterCatalog.TryGetPrimaryIpv4(relay.IncomingAdapterId, relay.IncomingAdapterIfIndex, out var incomingIp, out _) && incomingIp is not null)
+        {
+            return incomingIp.ToString();
+        }
+
+        if (NetworkAdapterCatalog.TryGetPrimaryIpv4(relay.OutgoingAdapterId, relay.OutgoingAdapterIfIndex, out var outgoingIp, out _) && outgoingIp is not null)
+        {
+            return outgoingIp.ToString();
+        }
+
+        return "127.0.0.1";
+    }
+
+    private static LocalGatewayClientConfigPayload BuildLocalGatewayClientConfigPayload(
+        LocalGatewayConfig config,
+        LocalGatewayClient client,
+        string host,
+        string protocol,
+        string relayId,
+        out string? error)
+    {
+        var normalizedProtocol = LocalGatewayProtocols.Normalize(protocol);
+        var port = config.Port;
+        var display = string.IsNullOrWhiteSpace(client.Remark) ? client.Email : client.Remark;
+        if (string.Equals(normalizedProtocol, LocalGatewayProtocols.Shadowsocks, StringComparison.OrdinalIgnoreCase))
+        {
+            const string method = "aes-128-gcm";
+            var userInfo = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{method}:{client.Secret}"))
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+            error = null;
+            return new LocalGatewayClientConfigPayload
+            {
+                Mode = "uri",
+                Uri = $"ss://{userInfo}@{host}:{port}#{Uri.EscapeDataString(display)}",
+                Title = "Shadowsocks Config"
+            };
+        }
+
+        if (string.Equals(normalizedProtocol, LocalGatewayProtocols.OpenVpnTcp, StringComparison.OrdinalIgnoreCase))
+        {
+            var username = string.IsNullOrWhiteSpace(client.Username)
+                ? CreateLocalGatewayUsername(client.Email, new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+                : client.Username.Trim();
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                error = "OpenVPN username is missing.";
+                return LocalGatewayClientConfigPayload.Empty;
+            }
+
+            if (!File.Exists(ServicePaths.GetRelayLocalGatewayOpenVpnCaPath(relayId)))
+            {
+                error = "OpenVPN CA material was not generated yet. Start local OpenVPN runtime first.";
+                return LocalGatewayClientConfigPayload.Empty;
+            }
+
+            if (!File.Exists(ServicePaths.GetRelayLocalGatewayOpenVpnTlsCryptKeyPath(relayId)))
+            {
+                error = "OpenVPN TLS key material was not generated yet. Start local OpenVPN runtime first.";
+                return LocalGatewayClientConfigPayload.Empty;
+            }
+            if (!File.Exists(ServicePaths.GetRelayLocalGatewayOpenVpnServerCertPath(relayId)))
+            {
+                error = "OpenVPN shared cert material is missing. Configure relay OpenVPN bundle and start runtime first.";
+                return LocalGatewayClientConfigPayload.Empty;
+            }
+            if (!File.Exists(ServicePaths.GetRelayLocalGatewayOpenVpnServerKeyPath(relayId)))
+            {
+                error = "OpenVPN shared key material is missing. Configure relay OpenVPN bundle and start runtime first.";
+                return LocalGatewayClientConfigPayload.Empty;
+            }
+
+            var ovpn = BuildOpenVpnClientProfile(host, port, relayId);
+            var safeStem = ToSafeFileStem(display);
+            error = null;
+            return new LocalGatewayClientConfigPayload
+            {
+                Mode = "openvpn_bundle",
+                Title = "OpenVPN Client Bundle",
+                Uri = ovpn.Trim(),
+                Username = username,
+                Password = client.Secret,
+                OvpnFileName = $"{safeStem}-{client.Id[..Math.Min(8, client.Id.Length)]}.ovpn",
+                OvpnContent = ovpn
+            };
+        }
+
+        var query = "type=tcp&security=none&encryption=none";
+        error = null;
+        return new LocalGatewayClientConfigPayload
+        {
+            Mode = "uri",
+            Uri = $"vless://{client.Id}@{host}:{port}?{query}#{Uri.EscapeDataString(display)}",
+            Title = "VLESS Config"
+        };
+    }
+
+    private static string BuildOpenVpnClientProfile(string host, int port, string relayId)
+    {
+        var caPem = File.ReadAllText(ServicePaths.GetRelayLocalGatewayOpenVpnCaPath(relayId)).Trim();
+        var certPem = File.ReadAllText(ServicePaths.GetRelayLocalGatewayOpenVpnServerCertPath(relayId)).Trim();
+        var keyPem = File.ReadAllText(ServicePaths.GetRelayLocalGatewayOpenVpnServerKeyPath(relayId)).Trim();
+        var tlsCrypt = File.ReadAllText(ServicePaths.GetRelayLocalGatewayOpenVpnTlsCryptKeyPath(relayId)).Trim();
         var sb = new StringBuilder(2048);
         sb.AppendLine("client");
         sb.AppendLine("dev tun");
@@ -1224,6 +2371,12 @@ public sealed class GatewayRuntime
         sb.AppendLine("<ca>");
         sb.AppendLine(caPem);
         sb.AppendLine("</ca>");
+        sb.AppendLine("<cert>");
+        sb.AppendLine(certPem);
+        sb.AppendLine("</cert>");
+        sb.AppendLine("<key>");
+        sb.AppendLine(keyPem);
+        sb.AppendLine("</key>");
         sb.AppendLine("<tls-crypt>");
         sb.AppendLine(tlsCrypt);
         sb.AppendLine("</tls-crypt>");
@@ -1329,6 +2482,41 @@ public sealed class GatewayRuntime
         _blacklistIndex = BuildIndex(_blacklistEntries, PolicyListTypes.Blacklist);
         _status.WhitelistCount = _whitelistEntries.Count;
         _status.BlacklistCount = _blacklistEntries.Count;
+    }
+
+    private void UpdateRelayPolicyStatusLocked(string relayId)
+    {
+        var snapshot = _policyStore.LoadPolicySet(relayId);
+        if (string.IsNullOrWhiteSpace(relayId))
+        {
+            _status.WhitelistCount = snapshot.WhitelistListCount;
+            _status.BlacklistCount = snapshot.BlacklistListCount;
+            return;
+        }
+
+        if (_relayStatuses.TryGetValue(relayId, out var status))
+        {
+            status.WhitelistCount = snapshot.WhitelistListCount;
+            status.BlacklistCount = snapshot.BlacklistListCount;
+            status.LastStatusUpdateUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private IReadOnlyList<RelayPolicyCompiledList> BuildCompiledPolicyLists(RelayPolicySetSnapshot snapshot)
+    {
+        var compiled = new List<RelayPolicyCompiledList>(snapshot.Lists.Count);
+        foreach (var list in snapshot.Lists.OrderBy(x => x.Priority))
+        {
+            var index = BuildIndex(list.Entries, list.ListType);
+            compiled.Add(new RelayPolicyCompiledList(
+                list.ListId,
+                list.Label,
+                list.ListType,
+                list.Priority,
+                index));
+        }
+
+        return compiled;
     }
 
     private PolicyAddressIndex BuildIndex(IReadOnlyList<string> entries, string listType)

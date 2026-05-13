@@ -241,6 +241,8 @@ if ($InsecureSkipTlsVerify) {
     Write-Warning "TLS certificate validation is disabled for this upload request."
 }
 
+$downloadPath = if ($Channel -eq "beta") { "/download/windows/beta" } else { "/download/windows" }
+
 $response = Invoke-Upload `
     -Endpoint $uploadUrl `
     -ApiKey $AdminApiKey `
@@ -257,7 +259,7 @@ Write-Host "  Version: $($response.version)"
 Write-Host "  Channel: $($response.channel)"
 Write-Host "  PublishedAt: $($response.publishedAt)"
 Write-Host "  Server SHA-256: $($response.sha256)"
-Write-Host "  Download URL: $normalizedBaseUrl/download/windows"
+Write-Host "  Download URL: $normalizedBaseUrl$downloadPath"
 
 if ($response.sha256 -ne $localHash) {
     Write-Warning "Local and server SHA-256 differ. Verify upload path and file consistency."

@@ -7,13 +7,13 @@ public interface IInstallerStorageService
     string GetWindowsInstallerPath(string channel, string version);
     string GetWindowsDownloadFileName(string version);
 
-    string GetOmniGatewayArtifactPath();
+    string GetOmniGatewayArtifactPath(string channel);
     string GetOmniGatewayDownloadFileName();
-    string GetConnectorCoreArtifactPath(string os, string arch);
+    string GetConnectorCoreArtifactPath(string channel, string os, string arch);
     string GetConnectorCoreDownloadFileName(string os, string arch);
     Task<InstallerSaveResult> SaveWindowsInstallerAsync(string sourceFilePath, string channel, string version, CancellationToken cancellationToken);
-    Task<InstallerSaveResult> SaveOmniGatewayArtifactAsync(string sourceFilePath, CancellationToken cancellationToken);
-    Task<InstallerSaveResult> SaveConnectorCoreArtifactAsync(string sourceFilePath, string os, string arch, CancellationToken cancellationToken);
+    Task<InstallerSaveResult> SaveOmniGatewayArtifactAsync(string sourceFilePath, string channel, CancellationToken cancellationToken);
+    Task<InstallerSaveResult> SaveConnectorCoreArtifactAsync(string sourceFilePath, string channel, string os, string arch, CancellationToken cancellationToken);
 }
 
 public sealed record InstallerSaveResult(string FilePath, long FileSizeBytes, string Sha256);

@@ -18,5 +18,6 @@ public sealed class LicenseVerifyResponse
     public string KeyId { get; set; } = string.Empty;
     public string RequestId { get; set; } = string.Empty;
     public string Signature { get; set; } = string.Empty;
+    public LicenseCertificate? LicenseCertificate { get; set; }
     public Dictionary<string, string>? Features { get; set; }
 }

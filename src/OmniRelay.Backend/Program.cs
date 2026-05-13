@@ -187,6 +187,7 @@ builder.Services.AddRazorPages(options =>
         options.Conventions.AllowAnonymousToPage("/Docs");
         options.Conventions.AllowAnonymousToPage("/Contact");
         options.Conventions.AllowAnonymousToPage("/Download");
+        options.Conventions.AllowAnonymousToPage("/Changelogs");
     })
     .AddViewLocalization()
     .AddDataAnnotationsLocalization();
@@ -198,6 +199,7 @@ builder.Services.AddScoped<SampleDataSeeder>();
 builder.Services.AddScoped<SigningKeyService>();
 builder.Services.AddScoped<SecurityBootstrapper>();
 builder.Services.AddScoped<LicenseResponseSigner>();
+builder.Services.AddSingleton<LicenseCertificateSigner>();
 builder.Services.AddScoped<IPayKryptClient, PayKryptClient>();
 builder.Services.AddScoped<ICommerceService, CommerceService>();
 builder.Services.AddHostedService<PendingPaymentReconcileWorker>();
@@ -384,40 +386,30 @@ app.MapGet("/download/windows", async (
         IInstallerStorageService installerStorageService,
         CancellationToken cancellationToken) =>
     {
-        var latest = await appReleaseService.GetLatestAsync("stable", null, cancellationToken);
-        if (latest is null)
-        {
-            return Results.NotFound(new { message = "No stable Windows installer release is available yet." });
-        }
+        return await DownloadWindowsByChannelAsync("stable", appReleaseService, installerStorageService, cancellationToken);
+    })
+    .RequireRateLimiting("public");
 
-        var installerPath = installerStorageService.GetWindowsInstallerPath("stable", latest.LatestVersion);
-        if (!File.Exists(installerPath))
-        {
-            return Results.NotFound(new
-            {
-                message = "Installer artifact for latest stable release was not found in storage.",
-                version = latest.LatestVersion
-            });
-        }
-
-        var downloadFileName = installerStorageService.GetWindowsDownloadFileName(latest.LatestVersion);
-        return Results.File(installerPath, "application/x-msi", downloadFileName);
+app.MapGet("/download/windows/beta", async (
+        AppReleaseService appReleaseService,
+        IInstallerStorageService installerStorageService,
+        CancellationToken cancellationToken) =>
+    {
+        return await DownloadWindowsByChannelAsync("beta", appReleaseService, installerStorageService, cancellationToken);
     })
     .RequireRateLimiting("public");
 
 app.MapGet("/download/omni-gateway", (
         IInstallerStorageService installerStorageService) =>
     {
-        var artifactPath = installerStorageService.GetOmniGatewayArtifactPath();
-        if (!File.Exists(artifactPath))
-        {
-            return Results.NotFound(new { message = "Gateway panel artifact is not available yet." });
-        }
+        return DownloadOmniGatewayByChannel("stable", installerStorageService);
+    })
+    .RequireRateLimiting("public");
 
-        return Results.File(
-            artifactPath,
-            "application/gzip",
-            installerStorageService.GetOmniGatewayDownloadFileName());
+app.MapGet("/download/omni-gateway/beta", (
+        IInstallerStorageService installerStorageService) =>
+    {
+        return DownloadOmniGatewayByChannel("beta", installerStorageService);
     })
     .RequireRateLimiting("public");
 
@@ -426,40 +418,16 @@ app.MapGet("/download/connector-core/{os}/{arch}", (
         string arch,
         IInstallerStorageService installerStorageService) =>
     {
-        var normalizedOs = (os ?? string.Empty).Trim().ToLowerInvariant();
-        var normalizedArch = (arch ?? string.Empty).Trim().ToLowerInvariant();
+        return DownloadConnectorCoreByChannel("stable", os, arch, installerStorageService);
+    })
+    .RequireRateLimiting("public");
 
-        if (normalizedOs != "linux")
-        {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["os"] = ["os must be linux."]
-            });
-        }
-
-        if (normalizedArch is not ("amd64" or "arm64"))
-        {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["arch"] = ["arch must be amd64 or arm64."]
-            });
-        }
-
-        var artifactPath = installerStorageService.GetConnectorCoreArtifactPath(normalizedOs, normalizedArch);
-        if (!File.Exists(artifactPath))
-        {
-            return Results.NotFound(new
-            {
-                message = "Connector-core artifact is not available yet.",
-                os = normalizedOs,
-                arch = normalizedArch
-            });
-        }
-
-        return Results.File(
-            artifactPath,
-            "application/gzip",
-            installerStorageService.GetConnectorCoreDownloadFileName(normalizedOs, normalizedArch));
+app.MapGet("/download/connector-core/beta/{os}/{arch}", (
+        string os,
+        string arch,
+        IInstallerStorageService installerStorageService) =>
+    {
+        return DownloadConnectorCoreByChannel("beta", os, arch, installerStorageService);
     })
     .RequireRateLimiting("public");
 
@@ -726,7 +694,7 @@ installerApi.MapPost("/upload-windows", async (
                 channel: channel,
                 version: resolvedVersion,
                 minSupportedVersion: minSupportedVersion,
-                downloadUrl: "/download/windows",
+                downloadUrl: channel == "beta" ? "/download/windows/beta" : "/download/windows",
                 sha256: saveResult.Sha256,
                 notes: notes,
                 publishedAt: publishedAt,
@@ -807,7 +775,16 @@ installerApi.MapPost("/upload-omni-gateway", async (
             });
         }
 
-        var tempPath = Path.Combine(Path.GetTempPath(), $"omnirelay-omni-gateway-{Guid.NewGuid():N}.tar.gz");
+        var channel = NormalizeReleaseChannel(form["channel"].FirstOrDefault());
+        if (channel is null)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["channel"] = ["channel must be stable or beta."]
+            });
+        }
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"omnirelay-omni-gateway-{channel}-{Guid.NewGuid():N}.tar.gz");
         try
         {
             await using (var tempStream = new FileStream(
@@ -829,13 +806,17 @@ installerApi.MapPost("/upload-omni-gateway", async (
                 });
             }
 
-            var saveResult = await installerStorageService.SaveOmniGatewayArtifactAsync(tempPath, cancellationToken);
+            var saveResult = await installerStorageService.SaveOmniGatewayArtifactAsync(tempPath, channel, cancellationToken);
+            var downloadUrl = channel == "beta"
+                ? "/download/omni-gateway/beta"
+                : "/download/omni-gateway";
             return Results.Ok(new
             {
                 message = "Gateway panel artifact uploaded successfully.",
+                channel,
                 sha256 = saveResult.Sha256,
                 fileSizeBytes = saveResult.FileSizeBytes,
-                downloadUrl = "/download/omni-gateway"
+                downloadUrl
             });
         }
         finally
@@ -901,6 +882,15 @@ installerApi.MapPost("/upload-connector-core", async (
             });
         }
 
+        var channel = NormalizeReleaseChannel(form["channel"].FirstOrDefault());
+        if (channel is null)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["channel"] = ["channel must be stable or beta."]
+            });
+        }
+
         var os = (form["os"].FirstOrDefault() ?? "linux").Trim().ToLowerInvariant();
         if (os != "linux")
         {
@@ -919,7 +909,7 @@ installerApi.MapPost("/upload-connector-core", async (
             });
         }
 
-        var tempPath = Path.Combine(Path.GetTempPath(), $"omnirelay-connector-core-{os}-{arch}-{Guid.NewGuid():N}.tar.gz");
+        var tempPath = Path.Combine(Path.GetTempPath(), $"omnirelay-connector-core-{channel}-{os}-{arch}-{Guid.NewGuid():N}.tar.gz");
         try
         {
             await using (var tempStream = new FileStream(
@@ -941,15 +931,19 @@ installerApi.MapPost("/upload-connector-core", async (
                 });
             }
 
-            var saveResult = await installerStorageService.SaveConnectorCoreArtifactAsync(tempPath, os, arch, cancellationToken);
+            var saveResult = await installerStorageService.SaveConnectorCoreArtifactAsync(tempPath, channel, os, arch, cancellationToken);
+            var downloadUrl = channel == "beta"
+                ? $"/download/connector-core/beta/{os}/{arch}"
+                : $"/download/connector-core/{os}/{arch}";
             return Results.Ok(new
             {
+                channel,
                 message = "Connector-core artifact uploaded successfully.",
                 os,
                 arch,
                 sha256 = saveResult.Sha256,
                 fileSizeBytes = saveResult.FileSizeBytes,
-                downloadUrl = $"/download/connector-core/{os}/{arch}"
+                downloadUrl
             });
         }
         finally
@@ -1239,6 +1233,92 @@ admin.MapPost("/seed/sample", async (
 
 app.Run();
 
+static async Task<IResult> DownloadWindowsByChannelAsync(
+    string channel,
+    AppReleaseService appReleaseService,
+    IInstallerStorageService installerStorageService,
+    CancellationToken cancellationToken)
+{
+    var normalizedChannel = NormalizeReleaseChannel(channel) ?? "stable";
+    var latest = await appReleaseService.GetLatestAsync(normalizedChannel, null, cancellationToken);
+    if (latest is null)
+    {
+        return Results.NotFound(new { message = $"No {normalizedChannel} Windows installer release is available yet." });
+    }
+
+    var installerPath = installerStorageService.GetWindowsInstallerPath(normalizedChannel, latest.LatestVersion);
+    if (!File.Exists(installerPath))
+    {
+        return Results.NotFound(new
+        {
+            message = $"Installer artifact for latest {normalizedChannel} release was not found in storage.",
+            version = latest.LatestVersion
+        });
+    }
+
+    var downloadFileName = installerStorageService.GetWindowsDownloadFileName(latest.LatestVersion);
+    return Results.File(installerPath, "application/x-msi", downloadFileName);
+}
+
+static IResult DownloadOmniGatewayByChannel(string channel, IInstallerStorageService installerStorageService)
+{
+    var normalizedChannel = NormalizeReleaseChannel(channel) ?? "stable";
+    var artifactPath = installerStorageService.GetOmniGatewayArtifactPath(normalizedChannel);
+    if (!File.Exists(artifactPath))
+    {
+        return Results.NotFound(new { message = $"Gateway panel artifact for channel '{normalizedChannel}' is not available yet." });
+    }
+
+    return Results.File(
+        artifactPath,
+        "application/gzip",
+        installerStorageService.GetOmniGatewayDownloadFileName());
+}
+
+static IResult DownloadConnectorCoreByChannel(
+    string channel,
+    string os,
+    string arch,
+    IInstallerStorageService installerStorageService)
+{
+    var normalizedChannel = NormalizeReleaseChannel(channel) ?? "stable";
+    var normalizedOs = (os ?? string.Empty).Trim().ToLowerInvariant();
+    var normalizedArch = (arch ?? string.Empty).Trim().ToLowerInvariant();
+
+    if (normalizedOs != "linux")
+    {
+        return Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["os"] = ["os must be linux."]
+        });
+    }
+
+    if (normalizedArch is not ("amd64" or "arm64"))
+    {
+        return Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["arch"] = ["arch must be amd64 or arm64."]
+        });
+    }
+
+    var artifactPath = installerStorageService.GetConnectorCoreArtifactPath(normalizedChannel, normalizedOs, normalizedArch);
+    if (!File.Exists(artifactPath))
+    {
+        return Results.NotFound(new
+        {
+            message = $"Connector-core artifact for channel '{normalizedChannel}' is not available yet.",
+            channel = normalizedChannel,
+            os = normalizedOs,
+            arch = normalizedArch
+        });
+    }
+
+    return Results.File(
+        artifactPath,
+        "application/gzip",
+        installerStorageService.GetConnectorCoreDownloadFileName(normalizedOs, normalizedArch));
+}
+
 static AdminLicenseResponse ToAdminResponse(LicenseEntity entity, int activationCount)
 {
     return new AdminLicenseResponse
@@ -1281,6 +1361,12 @@ static async Task<CheckoutRequest?> ReadCheckoutRequestAsync(HttpContext httpCon
 static bool IsValidSemVer(string value)
 {
     return !string.IsNullOrWhiteSpace(value) && NuGetVersion.TryParse(value.Trim(), out _);
+}
+
+static string? NormalizeReleaseChannel(string? channel)
+{
+    var normalized = (channel ?? "stable").Trim().ToLowerInvariant();
+    return normalized is "stable" or "beta" ? normalized : null;
 }
 
 static bool IsGzipFile(string filePath)

@@ -352,4 +352,83 @@
             </DataTrigger>
         </Style.Triggers>
     </Style>
+
+    <Style x:Key="AppDataGridColumnHeaderStyle" TargetType="DataGridColumnHeader">
+        <Setter Property="Background" Value="{DynamicResource Brush.Surface}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+        <Setter Property="BorderThickness" Value="0,0,1,1"/>
+        <Setter Property="Padding" Value="10,8"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+    </Style>
+
+    <Style x:Key="AppDataGridCellStyle" TargetType="DataGridCell">
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+        <Setter Property="BorderThickness" Value="0,0,1,1"/>
+        <Setter Property="Padding" Value="10,6"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="DataGridCell">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter Margin="{TemplateBinding Padding}"
+                                          VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Brush.NavActiveBackground}"/>
+                <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style x:Key="AppDataGridRowStyle" TargetType="DataGridRow">
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+        <Setter Property="Background" Value="{DynamicResource Brush.InputBackground}"/>
+        <Setter Property="MinHeight" Value="34"/>
+        <Style.Triggers>
+            <Trigger Property="AlternationIndex" Value="1">
+                <Setter Property="Background" Value="{DynamicResource Brush.NavHover}"/>
+            </Trigger>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Brush.NavActiveBackground}"/>
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Brush.NavActiveBackground}"/>
+                <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style x:Key="AppDataGridCheckBoxStyle" TargetType="CheckBox">
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="IsHitTestVisible" Value="False"/>
+        <Setter Property="Focusable" Value="False"/>
+    </Style>
+
+    <Style x:Key="AppDataGridStyle" TargetType="DataGrid">
+        <Setter Property="Background" Value="{DynamicResource Brush.InputBackground}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="HeadersVisibility" Value="Column"/>
+        <Setter Property="GridLinesVisibility" Value="All"/>
+        <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource Brush.Border}"/>
+        <Setter Property="VerticalGridLinesBrush" Value="{DynamicResource Brush.Border}"/>
+        <Setter Property="RowBackground" Value="{DynamicResource Brush.InputBackground}"/>
+        <Setter Property="AlternatingRowBackground" Value="{DynamicResource Brush.NavHover}"/>
+        <Setter Property="AlternationCount" Value="2"/>
+        <Setter Property="ColumnHeaderStyle" Value="{StaticResource AppDataGridColumnHeaderStyle}"/>
+        <Setter Property="CellStyle" Value="{StaticResource AppDataGridCellStyle}"/>
+        <Setter Property="RowStyle" Value="{StaticResource AppDataGridRowStyle}"/>
+    </Style>
 </ResourceDictionary>

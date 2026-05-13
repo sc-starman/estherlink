@@ -12,9 +12,9 @@ SSH_PORT=22
 BOOTSTRAP_SOCKS_PORT=16080
 BOOTSTRAP_MODE="tunnel"
 PROXY_CHECK_URL="https://deb.debian.org/"
-DNS_MODE="hybrid"
 DOH_ENDPOINTS="https://1.1.1.1/dns-query,https://8.8.8.8/dns-query"
-DNS_UDP_ONLY="true"
+CONNECTOR_DNS_LISTEN_ADDRESS="127.0.0.1"
+CONNECTOR_DNS_LISTEN_PORT=1053
 VPS_IP=""
 TUNNEL_USER="omnirelay"
 TUNNEL_AUTH="host_key"
@@ -26,6 +26,15 @@ PANEL_SSL_ENABLED="false"
 PANEL_SSL_MODE="letsencrypt"
 PANEL_CERT_FILE=""
 PANEL_KEY_FILE=""
+RELAY_ID=""
+RELAY_HASH=""
+GATEWAYCTL_PATH="/usr/local/sbin/omnirelay-gatewayctl"
+PANEL_SUDOERS_FILE="/etc/sudoers.d/omnigateway-singbox"
+PANEL_NGINX_SITE_NAME="omnirelay-omnipanel"
+
+if [[ -z "${RELAY_ID:-}" && "${SCRIPT_NAME:-}" == omnirelay-gatewayctl-* ]]; then
+  RELAY_ID="${SCRIPT_NAME#omnirelay-gatewayctl-}"
+fi
 
 GATEWAY_ROOT_DIR="/etc/omnirelay/gateway"
 GATEWAY_METADATA_FILE="${GATEWAY_ROOT_DIR}/metadata.json"
@@ -52,6 +61,7 @@ PANEL_COMMON_SCRIPT="/tmp/omnirelay-omnipanel-common.sh"
 CONNECTOR_COMMON_INSTALLED="/usr/local/lib/omnirelay/singbox-connector-common.sh"
 APT_PROXY_FILE="/etc/apt/apt.conf.d/99-omnirelay-socks"
 CONNECTOR_REDIRECT_CHAIN="OMNIRELAY_CONNECTOR_REDIRECT"
+CONNECTOR_REJECT_CHAIN="OMNIRELAY_CONNECTOR_REJECT"
 CLOCK_SYNC_SCRIPT="/usr/local/sbin/omnirelay-clock-sync"
 CLOCK_SYNC_ENV_FILE="${GATEWAY_ROOT_DIR}/clock_sync.env"
 CLOCK_SYNC_STATE_FILE="${CONNECTOR_DIR}/clock_sync_state.json"
@@ -80,9 +90,87 @@ connector_random_string(){ LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c "
 connector_random_uuid(){ [[ -f /proc/sys/kernel/random/uuid ]] && cat /proc/sys/kernel/random/uuid || uuidgen; }
 connector_check_listener(){ ss -lnt "( sport = :$1 )" 2>/dev/null | awk 'NR>1 {print}' | grep -q . && echo true || echo false; }
 connector_check_udp_listener(){ ss -lun "( sport = :$1 )" 2>/dev/null | awk 'NR>1 {print}' | grep -q . && echo true || echo false; }
+connector_check_local_dns_listener(){
+  local port="${1:-$CONNECTOR_DNS_LISTEN_PORT}"
+  if [[ "$(connector_check_udp_listener "$port")" == true || "$(connector_check_listener "$port")" == true ]]; then
+    echo true
+  else
+    echo false
+  fi
+}
 connector_choose_port(){ local p; for _ in $(seq 1 200); do p=$((RANDOM%30000+22000)); [[ "$(connector_check_listener "$p")" == "false" ]] && echo "$p" && return 0; done; die "cannot allocate free port"; }
 connector_sql_escape(){ printf '%s' "$1" | sed "s/'/''/g"; }
 connector_json_string_safe(){ printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+connector_validate_relay_id(){
+  local id="${1:-}"
+  [[ "$id" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || die "--relay-id must contain only letters, numbers, underscore, or dash and be at most 64 characters"
+}
+connector_short_hash(){
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | awk '{print substr($1,1,10)}'
+  else
+    printf '%s' "$1" | shasum -a 256 | awk '{print substr($1,1,10)}'
+  fi
+}
+
+connector_default_dns_port_for_relay(){
+  local relay_hash="${1:-}"
+  # Keep legacy default for non-relay/global mode.
+  if [[ -z "$relay_hash" ]]; then
+    echo 1053
+    return 0
+  fi
+
+  # Deterministic per-relay DNS listener port to avoid 127.0.0.1:1053 collisions
+  # when multiple relays run on the same VPS.
+  local first4="${relay_hash:0:4}"
+  if [[ ! "$first4" =~ ^[0-9a-fA-F]{4}$ ]]; then
+    first4="1f1f"
+  fi
+  local seed=$((16#$first4))
+  echo $((20000 + (seed % 20000)))
+}
+
+connector_apply_relay_scope(){
+  if [[ -z "${RELAY_ID:-}" ]]; then
+    die "--relay-id is required; global gateway runtime is not supported."
+  fi
+
+  connector_validate_relay_id "$RELAY_ID"
+  RELAY_HASH="$(connector_short_hash "$RELAY_ID")"
+  CONNECTOR_DNS_LISTEN_PORT="$(connector_default_dns_port_for_relay "$RELAY_HASH")"
+  GATEWAY_ROOT_DIR="/etc/omnirelay/relays/${RELAY_ID}/gateway"
+  GATEWAY_METADATA_FILE="${GATEWAY_ROOT_DIR}/metadata.json"
+  GATEWAY_DNS_PROFILE_FILE="${GATEWAY_ROOT_DIR}/dns_profile.json"
+  CONNECTOR_DIR="${GATEWAY_ROOT_DIR}/connector"
+  CONNECTOR_CONFIG_FILE="${CONNECTOR_DIR}/config.json"
+  CONNECTOR_STATE_FILE="${CONNECTOR_DIR}/state.json"
+  CONNECTOR_ACCOUNTING_DB="${CONNECTOR_DIR}/accounting.db"
+  CONNECTOR_CORE_STATE_FILE="${CONNECTOR_DIR}/connector_core_state.json"
+  CONNECTOR_ACCOUNTING_LOCK_FILE="/run/omnirelay/${RELAY_ID}/accounting-sync.lock"
+  CONNECTOR_SERVICE="omnirelay-singbox-${RELAY_ID}"
+  PANEL_APP_DIR="/opt/omnirelay/relays/${RELAY_ID}/omni-gateway"
+  PANEL_RELEASES_DIR="${PANEL_APP_DIR}/releases"
+  PANEL_CURRENT_DIR="${PANEL_APP_DIR}/current"
+  PANEL_ENV_FILE="${GATEWAY_ROOT_DIR}/omnipanel.env"
+  PANEL_SERVICE="omnirelay-omnipanel-${RELAY_ID}"
+  CONNECTOR_REDIRECT_CHAIN="OMNIREDIR${RELAY_HASH}"
+  CONNECTOR_REJECT_CHAIN="OMNIREJ${RELAY_HASH}"
+  CLOCK_SYNC_SCRIPT="/usr/local/sbin/omnirelay-clock-sync-${RELAY_ID}"
+  CLOCK_SYNC_ENV_FILE="${GATEWAY_ROOT_DIR}/clock_sync.env"
+  CLOCK_SYNC_STATE_FILE="${CONNECTOR_DIR}/clock_sync_state.json"
+  CLOCK_SYNC_SERVICE="omnirelay-clock-sync-${RELAY_ID}.service"
+  CLOCK_SYNC_TIMER="omnirelay-clock-sync-${RELAY_ID}.timer"
+  ACCOUNTING_SYNC_SCRIPT="/usr/local/sbin/omnirelay-accounting-sync-${RELAY_ID}"
+  ACCOUNTING_SYNC_ENV_FILE="${GATEWAY_ROOT_DIR}/accounting_sync.env"
+  ACCOUNTING_SYNC_STATE_FILE="${CONNECTOR_DIR}/accounting_sync_state.json"
+  ACCOUNTING_SYNC_SERVICE="omnirelay-accounting-sync-${RELAY_ID}.service"
+  ACCOUNTING_SYNC_TIMER="omnirelay-accounting-sync-${RELAY_ID}.timer"
+  ACCOUNTING_SYNC_PPP_SESSIONS_FILE="/run/omnirelay/${RELAY_ID}/ppp-sessions.tsv"
+  GATEWAYCTL_PATH="/usr/local/sbin/omnirelay-gatewayctl-${RELAY_ID}"
+  PANEL_SUDOERS_FILE="/etc/sudoers.d/omnigateway-singbox-${RELAY_ID}"
+  PANEL_NGINX_SITE_NAME="omnirelay-omnipanel-${RELAY_ID}"
+}
 connector_with_accounting_lock(){
   local timeout_sec="${1:-30}"
   shift || true
@@ -99,9 +187,13 @@ PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS clients (
   client_id TEXT PRIMARY KEY,
   protocol_id TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
   username TEXT NOT NULL,
+  auth_username TEXT NOT NULL DEFAULT '',
+  auth_secret TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   total_bytes_limit INTEGER NOT NULL DEFAULT 0,
+  speed_limit_kbps INTEGER NOT NULL DEFAULT 0,
   expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -140,6 +232,20 @@ CREATE TABLE IF NOT EXISTS sampler_sessions (
   PRIMARY KEY (source, session_key)
 );
 SQL
+  if ! sqlite3 "$CONNECTOR_ACCOUNTING_DB" "PRAGMA table_info(clients);" | grep -q '|speed_limit_kbps|'; then
+    sqlite3 "$CONNECTOR_ACCOUNTING_DB" "ALTER TABLE clients ADD COLUMN speed_limit_kbps INTEGER NOT NULL DEFAULT 0;" >/dev/null
+  fi
+  if ! sqlite3 "$CONNECTOR_ACCOUNTING_DB" "PRAGMA table_info(clients);" | grep -q '|email|'; then
+    sqlite3 "$CONNECTOR_ACCOUNTING_DB" "ALTER TABLE clients ADD COLUMN email TEXT NOT NULL DEFAULT '';" >/dev/null
+  fi
+  if ! sqlite3 "$CONNECTOR_ACCOUNTING_DB" "PRAGMA table_info(clients);" | grep -q '|auth_username|'; then
+    sqlite3 "$CONNECTOR_ACCOUNTING_DB" "ALTER TABLE clients ADD COLUMN auth_username TEXT NOT NULL DEFAULT '';" >/dev/null
+  fi
+  if ! sqlite3 "$CONNECTOR_ACCOUNTING_DB" "PRAGMA table_info(clients);" | grep -q '|auth_secret|'; then
+    sqlite3 "$CONNECTOR_ACCOUNTING_DB" "ALTER TABLE clients ADD COLUMN auth_secret TEXT NOT NULL DEFAULT '';" >/dev/null
+  fi
+  sqlite3 "$CONNECTOR_ACCOUNTING_DB" "CREATE INDEX IF NOT EXISTS idx_clients_protocol_email ON clients(protocol_id,email);" >/dev/null
+  sqlite3 "$CONNECTOR_ACCOUNTING_DB" "CREATE INDEX IF NOT EXISTS idx_clients_protocol_auth_username ON clients(protocol_id,auth_username);" >/dev/null
 }
 
 connector_fix_accounting_permissions(){
@@ -212,7 +318,7 @@ connector_load_metadata_defaults(){
 
 connector_is_full_tunnel_singbox_protocol(){
   case "${1:-}" in
-    shadowsocks_singbox|vless_plain_singbox|vless_reality_singbox|shadowtls_v3_shadowsocks_singbox) return 0 ;;
+    shadowsocks_singbox|shadowtls_v3_shadowsocks_singbox|vless_tls_singbox|mixed_singbox|socks_singbox|http_singbox|hysteria2_singbox|trojan_singbox|naive_singbox) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -469,8 +575,13 @@ connector_write_accounting_sync_env(){
     printf 'OMNIRELAY_ACCOUNTING_LOCK_FILE=%q\n' "$CONNECTOR_ACCOUNTING_LOCK_FILE"
     printf 'OMNIRELAY_ACCOUNTING_PPP_SESSIONS_FILE=%q\n' "$ACCOUNTING_SYNC_PPP_SESSIONS_FILE"
     printf 'OMNIRELAY_ACCOUNTING_PANEL_GROUP=%q\n' "$PANEL_USER_ACCOUNT"
+    printf 'OMNIRELAY_ACCOUNTING_RELAY_ID=%q\n' "${RELAY_ID:-}"
     # Keep the command shell-quoted so the value survives env-file parsing and preserves argv separation.
-    printf "OMNIRELAY_ACCOUNTING_SYNC_COMMAND='%s'\n" "/usr/local/sbin/omnirelay-gatewayctl sync-clients"
+    if [[ -n "${RELAY_ID:-}" ]]; then
+      printf "OMNIRELAY_ACCOUNTING_SYNC_COMMAND='%s'\n" "${GATEWAYCTL_PATH} sync-clients --relay-id ${RELAY_ID}"
+    else
+      printf "OMNIRELAY_ACCOUNTING_SYNC_COMMAND='%s'\n" "${GATEWAYCTL_PATH} sync-clients"
+    fi
   } > "$ACCOUNTING_SYNC_ENV_FILE"
   chmod 0600 "$ACCOUNTING_SYNC_ENV_FILE" || true
 }
@@ -514,7 +625,29 @@ STATE_FILE="${OMNIRELAY_ACCOUNTING_STATE_FILE:-/etc/omnirelay/gateway/connector/
 LOCK_FILE="${OMNIRELAY_ACCOUNTING_LOCK_FILE:-/run/omnirelay-accounting-sync.lock}"
 PPP_SESSIONS_FILE="${OMNIRELAY_ACCOUNTING_PPP_SESSIONS_FILE:-/run/omnirelay/ppp-sessions.tsv}"
 PANEL_GROUP="${OMNIRELAY_ACCOUNTING_PANEL_GROUP:-omnigateway}"
-SYNC_COMMAND="${OMNIRELAY_ACCOUNTING_SYNC_COMMAND:-/usr/local/sbin/omnirelay-gatewayctl sync-clients}"
+RELAY_ID="${OMNIRELAY_ACCOUNTING_RELAY_ID:-}"
+SYNC_COMMAND="${OMNIRELAY_ACCOUNTING_SYNC_COMMAND:-}"
+
+normalize_sync_command(){
+  local cmd="$1" protocol="" relay_id="${RELAY_ID:-}"
+  [[ -n "$cmd" ]] || { echo ""; return 0; }
+  if [[ -f "$METADATA_FILE" ]]; then
+    protocol="$(jq -r '.active_protocol // empty' "$METADATA_FILE" 2>/dev/null || true)"
+  fi
+  if [[ "$cmd" != *"--relay-id"* && -n "$relay_id" ]]; then
+    cmd="${cmd} --relay-id ${relay_id}"
+  fi
+  if [[ "$cmd" == *"--protocol"* ]]; then
+    echo "$cmd"
+    return 0
+  fi
+  if [[ -n "$protocol" ]]; then
+    printf '%s --protocol %q' "$cmd" "$protocol"
+  else
+    echo "$cmd"
+  fi
+}
+SYNC_COMMAND="$(normalize_sync_command "$SYNC_COMMAND")"
 
 # Do not force chmod/chown on STATE_FILE parent; it contains accounting.db and
 # must keep group-writable/setgid permissions for omnigateway SQLite access.
@@ -544,7 +677,7 @@ accounting_rc=0
 if ! run_result="$(
   (
     flock -w 25 9 || exit 99
-    python3 - "$DB_PATH" "$METADATA_FILE" "$PPP_SESSIONS_FILE" <<'PY'
+    PANEL_GROUP="$PANEL_GROUP" python3 - "$DB_PATH" "$METADATA_FILE" "$PPP_SESSIONS_FILE" <<'PY'
 import json
 import os
 import re
@@ -559,9 +692,21 @@ ppp_sessions_file = Path(sys.argv[3])
 
 FULL_TUNNEL_SINGBOX_PROTOCOLS = {
     "shadowsocks_singbox",
-    "vless_plain_singbox",
-    "vless_reality_singbox",
     "shadowtls_v3_shadowsocks_singbox",
+    "vless_tls_singbox",
+    "mixed_singbox",
+    "socks_singbox",
+    "http_singbox",
+    "hysteria2_singbox",
+    "trojan_singbox",
+    "naive_singbox",
+}
+
+PER_CLIENT_SINGBOX_PROTOCOLS = {
+    "vless_tls_singbox",
+    "shadowsocks_singbox",
+    "shadowtls_v3_shadowsocks_singbox",
+    "trojan_singbox",
 }
 
 now_sec = int(time.time())
@@ -579,6 +724,9 @@ result = {
     "attributionConfidence": 1.0,
     "observedSessions": 0,
     "attributedSessions": 0,
+    "stateChanged": False,
+    "hasDisabledClients": False,
+    "hasIneligibleActive": False,
     "degraded": False,
     "degradedReason": "",
     "checkedAtUtc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_sec)),
@@ -604,7 +752,7 @@ except Exception as exc:
 protocol_id = str(metadata.get("active_protocol") or "").strip()
 accounting = metadata.get("accounting") if isinstance(metadata.get("accounting"), dict) else {}
 source = str(accounting.get("source") or "").strip()
-client_file = str(accounting.get("clientsFile") or "").strip()
+panel_group = str(os.environ.get("PANEL_GROUP") or "").strip()
 if source == "singbox_v2ray_api":
     fail("unsupported_source:singbox_v2ray_api")
 if protocol_id in FULL_TUNNEL_SINGBOX_PROTOCOLS and source == "singbox_log":
@@ -622,9 +770,13 @@ cur.executescript(
     CREATE TABLE IF NOT EXISTS clients (
       client_id TEXT PRIMARY KEY,
       protocol_id TEXT NOT NULL,
+      email TEXT NOT NULL DEFAULT '',
       username TEXT NOT NULL,
+      auth_username TEXT NOT NULL DEFAULT '',
+      auth_secret TEXT NOT NULL DEFAULT '',
       enabled INTEGER NOT NULL DEFAULT 1,
       total_bytes_limit INTEGER NOT NULL DEFAULT 0,
+      speed_limit_kbps INTEGER NOT NULL DEFAULT 0,
       expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -718,7 +870,7 @@ def save_state_int(source_key: str, state_key: str, value: int):
     )
 
 client_rows = cur.execute(
-    "SELECT client_id, username, enabled, total_bytes_limit, expiry_unix_ms FROM clients WHERE protocol_id=?",
+    "SELECT client_id, username, auth_username, enabled, total_bytes_limit, expiry_unix_ms FROM clients WHERE protocol_id=?",
     (protocol_id,),
 ).fetchall()
 client_ids = {str(row["client_id"]): str(row["client_id"]) for row in client_rows}
@@ -735,8 +887,10 @@ def openvpn_cn_from_client_id(client_id: str) -> str:
 for row in client_rows:
     client_id = str(row["client_id"])
     username = str(row["username"] or "").strip()
-    if username and username not in username_to_client:
-        username_to_client[username] = client_id
+    auth_username = str(row["auth_username"] or "").strip()
+    for candidate in (username, auth_username):
+        if candidate and candidate not in username_to_client:
+            username_to_client[candidate] = client_id
     if protocol_id == "openvpn_tcp_singbox":
         cn = openvpn_cn_from_client_id(client_id)
         if cn and cn not in openvpn_cn_to_client:
@@ -797,15 +951,15 @@ elif source == "openvpn_status":
             key = username if username and username != "UNDEF" else common_name
             if not key:
                 return
+            client_id = resolve_openvpn_client_id(username, common_name)
+            if client_id:
+                active_counts[client_id] = active_counts.get(client_id, 0) + 1
             rx = max(0, parse_int(rx_raw))
             tx = max(0, parse_int(tx_raw))
             total = rx + tx
             if total <= 0:
                 return
             usage_by_user[key] = usage_by_user.get(key, 0) + total
-            client_id = resolve_openvpn_client_id(username, common_name)
-            if client_id:
-                active_counts[client_id] = active_counts.get(client_id, 0) + 1
 
         for raw_line in status_file.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = raw_line.strip()
@@ -960,8 +1114,17 @@ for row in client_rows:
     client_id = str(row["client_id"])
     active = int(active_counts.get(client_id, 0))
     cur.execute(
-        "INSERT OR REPLACE INTO connection_counters(client_id,active_connections,last_seen_at) VALUES(?,?,?)",
-        (client_id, active, now_sec),
+        """
+        INSERT INTO connection_counters(client_id,active_connections,last_seen_at)
+        VALUES(?,?,?)
+        ON CONFLICT(client_id) DO UPDATE SET
+          active_connections=excluded.active_connections,
+          last_seen_at=CASE
+            WHEN excluded.active_connections > 0 THEN excluded.last_seen_at
+            ELSE connection_counters.last_seen_at
+          END
+        """,
+        (client_id, active, now_sec if active > 0 else 0),
     )
 
 usage_rows = cur.execute(
@@ -974,11 +1137,16 @@ usage_rows = cur.execute(
 ).fetchall()
 
 quota_enforcement_allowed = True
-enforcement_enabled = source in ("openvpn_status", "ipsec_ppp")
+enforcement_enabled = (
+    source in ("openvpn_status", "ipsec_ppp")
+    or (source == "connector_tracker" and protocol_id in PER_CLIENT_SINGBOX_PROTOCOLS)
+)
 if not enforcement_enabled:
     quota_enforcement_allowed = False
 
-desired_enable = {}
+ineligible_active_found = False
+state_changed = False
+has_disabled_clients = False
 for row in usage_rows:
     if not enforcement_enabled:
         continue
@@ -996,46 +1164,42 @@ for row in usage_rows:
         reason = "quota_exceeded"
 
     if reason:
+        has_disabled_clients = True
+        active_now = int(active_counts.get(client_id, 0))
+        if active_now > 0:
+            ineligible_active_found = True
+        if disabled_reason != reason:
+            state_changed = True
         if enabled != 0:
-            desired_enable[client_id] = False
+            cur.execute(
+                "UPDATE clients SET enabled=0, updated_at=? WHERE client_id=?",
+                (now_sec, client_id),
+            )
             result["updatedClients"] += 1
+            state_changed = True
         cur.execute(
             "INSERT OR REPLACE INTO enforcement_state(client_id,disabled_reason,disabled_at,updated_at) VALUES(?,?,?,?)",
             (client_id, reason, now_sec, now_sec),
         )
     else:
         if enabled == 0 and disabled_reason in ("expired", "quota_exceeded"):
-            desired_enable[client_id] = True
+            cur.execute(
+                "UPDATE clients SET enabled=1, updated_at=? WHERE client_id=?",
+                (now_sec, client_id),
+            )
             result["updatedClients"] += 1
+            state_changed = True
+        if disabled_reason:
+            state_changed = True
         cur.execute(
             "INSERT OR REPLACE INTO enforcement_state(client_id,disabled_reason,disabled_at,updated_at) VALUES(?,?,?,?)",
             (client_id, "", 0, now_sec),
         )
 
-if desired_enable and client_file:
-    client_path = Path(client_file)
-    if client_path.exists():
-        try:
-            payload = json.loads(client_path.read_text(encoding="utf-8"))
-            changed = False
-            if isinstance(payload, list):
-                for item in payload:
-                    if not isinstance(item, dict):
-                        continue
-                    client_id = str(item.get("id") or "")
-                    if client_id in desired_enable:
-                        target = bool(desired_enable[client_id])
-                        if bool(item.get("enable", True)) != target:
-                            item["enable"] = target
-                            changed = True
-                if changed:
-                    tmp_path = client_path.with_suffix(client_path.suffix + ".tmp")
-                    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                    os.replace(str(tmp_path), str(client_path))
-                    result["needsSync"] = True
-        except Exception as exc:
-            result["ok"] = False
-            result["error"] = f"client_file_update_failed:{exc}"
+result["stateChanged"] = state_changed
+result["hasDisabledClients"] = has_disabled_clients
+result["hasIneligibleActive"] = ineligible_active_found
+result["needsSync"] = bool(state_changed or ineligible_active_found)
 
 conn.commit()
 conn.close()
@@ -1051,7 +1215,11 @@ PY
 fi
 
 if [[ "$(jq -r '.needsSync // false' <<<"$run_result" 2>/dev/null || echo false)" == "true" ]]; then
-  if ! bash -lc "$SYNC_COMMAND" >/tmp/omnirelay-accounting-sync.log 2>&1; then
+  printf '[%s] accounting-sync: needsSync=true source=%s cmd=%s\n' \
+    "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    "$(jq -r '.source // \"\"' <<<"$run_result" 2>/dev/null || echo "")" \
+    "$SYNC_COMMAND" >> /tmp/omnirelay-accounting-sync.log 2>/dev/null || true
+  if ! bash -lc "$SYNC_COMMAND" >>/tmp/omnirelay-accounting-sync.log 2>&1; then
     sync_error="$(tail -n 60 /tmp/omnirelay-accounting-sync.log 2>/dev/null | tr '\n' ';' | sed 's/"/\\"/g' || true)"
     [[ -n "$sync_error" ]] || sync_error="sync_command_failed"
     run_result="$(jq -c --arg err "$sync_error" '.ok=false | .syncError=$err' <<<"$run_result" 2>/dev/null || printf '{"ok":false,"needsSync":true,"error":"%s"}' "$sync_error")"
@@ -1140,6 +1308,11 @@ connector_ensure_node_runtime(){
 }
 
 connector_write_service_unit(){
+  local sync_cmd
+  sync_cmd="${GATEWAYCTL_PATH} sync-clients"
+  if [[ -n "${RELAY_ID:-}" ]]; then
+    sync_cmd="${sync_cmd} --relay-id ${RELAY_ID}"
+  fi
   cat > "/etc/systemd/system/${CONNECTOR_SERVICE}.service" <<EOF
 [Unit]
 Description=OmniRelay sing-box connector
@@ -1147,7 +1320,7 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-ExecStart=${CONNECTOR_BIN} run --config ${CONNECTOR_CONFIG_FILE} --metadata ${GATEWAY_METADATA_FILE} --accounting-db ${CONNECTOR_ACCOUNTING_DB} --state-file ${CONNECTOR_CORE_STATE_FILE} --lock-file ${CONNECTOR_ACCOUNTING_LOCK_FILE} --interval-sec ${ACCOUNTING_SYNC_INTERVAL_SEC} --panel-group ${PANEL_USER_ACCOUNT}
+ExecStart=${CONNECTOR_BIN} run --config ${CONNECTOR_CONFIG_FILE} --metadata ${GATEWAY_METADATA_FILE} --accounting-db ${CONNECTOR_ACCOUNTING_DB} --state-file ${CONNECTOR_CORE_STATE_FILE} --lock-file ${CONNECTOR_ACCOUNTING_LOCK_FILE} --interval-sec ${ACCOUNTING_SYNC_INTERVAL_SEC} "--sync-command=${sync_cmd}" --panel-group ${PANEL_USER_ACCOUNT}
 Restart=always
 RestartSec=3
 [Install]
@@ -1223,52 +1396,88 @@ connector_install_runtime(){
   systemctl enable --now "$CONNECTOR_SERVICE"
 }
 
-connector_sync_accounting_db(){
-  local client_file="$1"
-  local protocol_id="$2"
-  local now row id username enable total_gb expiry bytes exists enabled_value
-  [[ -f "$client_file" ]] || return 0
-  now="$(date +%s)"
-  install -d -m 0755 "$(dirname "$CONNECTOR_ACCOUNTING_LOCK_FILE")"
-  exec 9>"$CONNECTOR_ACCOUNTING_LOCK_FILE"
-  flock -w 30 9 || die "Accounting database lock timeout."
-  connector_ensure_accounting_schema
-  sqlite3 "$CONNECTOR_ACCOUNTING_DB" "DELETE FROM clients WHERE protocol_id='$(connector_sql_escape "$protocol_id")';"
-  while IFS= read -r row; do
-    id="$(jq -r '.id // empty' <<<"$row")"
-    username="$(jq -r '.username // .email // .id // empty' <<<"$row")"
-    enable="$(jq -r '.enable // true' <<<"$row")"
-    total_gb="$(jq -r '.totalGB // 0' <<<"$row")"
-    expiry="$(jq -r '.expiryTime // 0' <<<"$row")"
-    [[ -n "$id" && -n "$username" ]] || continue
-    bytes="$(python3 - "$total_gb" <<'PY'
-import sys
-try:
-    gb = float(sys.argv[1])
-except Exception:
-    gb = 0.0
-if gb < 0:
-    gb = 0.0
-print(int(gb * 1024 * 1024 * 1024))
-PY
-)"
-    [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
-    [[ "$expiry" =~ ^-?[0-9]+$ ]] || expiry=0
-    exists="$(sqlite3 "$CONNECTOR_ACCOUNTING_DB" "SELECT created_at FROM clients WHERE client_id='$(connector_sql_escape "$id")' LIMIT 1;")"
-    enabled_value=0
-    [[ "$enable" == "true" ]] && enabled_value=1
-    if [[ -n "$exists" ]]; then
-      sqlite3 "$CONNECTOR_ACCOUNTING_DB" "INSERT OR REPLACE INTO clients(client_id,protocol_id,username,enabled,total_bytes_limit,expiry_unix_ms,created_at,updated_at) VALUES('$(connector_sql_escape "$id")','$(connector_sql_escape "$protocol_id")','$(connector_sql_escape "$username")',$enabled_value,$bytes,$expiry,$exists,$now);"
-    else
-      sqlite3 "$CONNECTOR_ACCOUNTING_DB" "INSERT OR REPLACE INTO clients(client_id,protocol_id,username,enabled,total_bytes_limit,expiry_unix_ms,created_at,updated_at) VALUES('$(connector_sql_escape "$id")','$(connector_sql_escape "$protocol_id")','$(connector_sql_escape "$username")',$enabled_value,$bytes,$expiry,$now,$now);"
-    fi
-    sqlite3 "$CONNECTOR_ACCOUNTING_DB" "INSERT OR IGNORE INTO usage_totals(client_id,used_bytes,updated_at) VALUES('$(connector_sql_escape "$id")',0,$now);"
-    sqlite3 "$CONNECTOR_ACCOUNTING_DB" "INSERT OR IGNORE INTO connection_counters(client_id,active_connections,last_seen_at) VALUES('$(connector_sql_escape "$id")',0,$now);"
-    sqlite3 "$CONNECTOR_ACCOUNTING_DB" "INSERT OR IGNORE INTO enforcement_state(client_id,disabled_reason,disabled_at,updated_at) VALUES('$(connector_sql_escape "$id")','',0,0);"
-  done < <(jq -c '.[]' "$client_file" 2>/dev/null || true)
-  connector_fix_accounting_permissions
-  flock -u 9 || true
-  exec 9>&- || true
+connector_validate_dns_profile(){
+  local endpoints="${1:-}"
+  [[ -n "$(printf '%s' "$endpoints" | tr ',' '\n' | awk 'NF{print $1; exit}')" ]] || die "--doh-endpoints is required"
+  while IFS= read -r endpoint; do
+    [[ -n "$endpoint" ]] || continue
+    [[ "$endpoint" =~ ^https://[^[:space:]]+$ ]] || die "DoH endpoint must be an https URL: ${endpoint}"
+  done < <(printf '%s' "$endpoints" | tr ',' '\n' | xargs -n1 2>/dev/null || true)
+}
+
+connector_maybe_load_dns_profile_defaults(){
+  case "${COMMAND:-}" in
+    install|dns-apply) return 0 ;;
+  esac
+  [[ -f "$GATEWAY_DNS_PROFILE_FILE" ]] || return 0
+  DOH_ENDPOINTS="$(jq -r '.dohEndpoints // "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query"' "$GATEWAY_DNS_PROFILE_FILE" 2>/dev/null || echo "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query")"
+}
+
+connector_dns_profile_json(){
+  local endpoints="${DOH_ENDPOINTS:-}"
+  connector_validate_dns_profile "$endpoints"
+  jq -c -n \
+    --arg doh "$endpoints" \
+    --arg listen "$CONNECTOR_DNS_LISTEN_ADDRESS" \
+    --argjson port "$CONNECTOR_DNS_LISTEN_PORT" \
+    '{
+      dohEndpoints:$doh,
+      listenAddress:$listen,
+      listenPort:$port,
+      updatedAtUtc:(now|todate)
+    }'
+}
+
+connector_dns_singbox_json(){
+  connector_dns_profile_json | jq -c '
+    def csv: split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length > 0));
+    . as $profile
+    | ($profile.dohEndpoints | csv) as $doh
+    | ([$doh[] as $address | {tag:("dns-doh-" + ($doh | index($address) | tostring)), address:$address, detour:"tunnel-backend"}]) as $servers
+    | {
+        dns:{
+          servers:$servers,
+          final:"dns-doh-0",
+          strategy:"prefer_ipv4",
+          independent_cache:true
+        },
+        dnsInbound:{
+          type:"direct",
+          tag:"dns-in",
+          listen:$profile.listenAddress,
+          listen_port:$profile.listenPort,
+          override_address:"1.1.1.1",
+          override_port:53
+        },
+        dnsOutbound:{type:"dns",tag:"dns-out"},
+        dnsRouteRuleInbound:{inbound:["dns-in"],outbound:"dns-out"},
+        dnsRouteRuleProtocol:{protocol:"dns",outbound:"dns-out"}
+      }'
+}
+
+connector_apply_dns_to_config_json(){
+  local config_json="$1"
+  local dns_json
+  dns_json="$(connector_dns_singbox_json)"
+  jq -c --argjson dnsPatch "$dns_json" '
+    def without_tag($tag): map(select((.tag // "") != $tag));
+    .dns = $dnsPatch.dns
+    | .inbounds = ((.inbounds // []) | without_tag("dns-in") + [$dnsPatch.dnsInbound])
+    | .outbounds = ((.outbounds // []) | without_tag("dns-out") + [$dnsPatch.dnsOutbound])
+    | .route = (.route // {})
+    | .route.rules = (
+        [$dnsPatch.dnsRouteRuleInbound, $dnsPatch.dnsRouteRuleProtocol]
+        + (
+            (.route.rules // [])
+            | map(
+                select(
+                  (.protocol != "dns")
+                  and ((.inbound // []) | index("dns-in") | not)
+                )
+              )
+          )
+      )
+  ' <<<"$config_json"
 }
 
 connector_render_apply(){
@@ -1276,6 +1485,10 @@ connector_render_apply(){
   local config_json="$2"
   [[ "$mode" == "full_tunnel" || "$mode" == "internal_tunnel" ]] || die "connector mode must be full_tunnel|internal_tunnel"
   jq -e 'type=="object"' >/dev/null 2>&1 <<<"$config_json" || die "Invalid connector JSON payload"
+  connector_maybe_load_dns_profile_defaults
+  connector_validate_dns_profile "$DOH_ENDPOINTS"
+  config_json="$(connector_apply_dns_to_config_json "$config_json")"
+  jq -e 'type=="object"' >/dev/null 2>&1 <<<"$config_json" || die "Invalid connector JSON payload after DNS injection"
   printf '%s\n' "$config_json" > "$CONNECTOR_CONFIG_FILE"
   "$CONNECTOR_BIN" check --config "$CONNECTOR_CONFIG_FILE" >/tmp/omnirelay-singbox-check.log 2>&1 || { sed -n '1,120p' /tmp/omnirelay-singbox-check.log >&2 || true; die "connector-core config validation failed"; }
   jq -n --arg mode "$mode" '{mode:$mode,updatedAtUtc:(now|todate)}' > "$CONNECTOR_STATE_FILE"
@@ -1302,6 +1515,14 @@ connector_apply_internal_redirect(){
   iptables -t nat -A "$CONNECTOR_REDIRECT_CHAIN" -d 127.0.0.0/8 -j RETURN
   iptables -t nat -A "$CONNECTOR_REDIRECT_CHAIN" -p tcp -j REDIRECT --to-ports "$redirect_port"
   iptables -t nat -C PREROUTING -i "$iface" -p tcp -j "$CONNECTOR_REDIRECT_CHAIN" 2>/dev/null || iptables -t nat -A PREROUTING -i "$iface" -p tcp -j "$CONNECTOR_REDIRECT_CHAIN"
+
+  iptables -N "$CONNECTOR_REJECT_CHAIN" 2>/dev/null || true
+  iptables -F "$CONNECTOR_REJECT_CHAIN"
+  iptables -A "$CONNECTOR_REJECT_CHAIN" -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable
+  iptables -C FORWARD -i "$iface" -p udp --dport 443 -j "$CONNECTOR_REJECT_CHAIN" 2>/dev/null || iptables -I FORWARD 1 -i "$iface" -p udp --dport 443 -j "$CONNECTOR_REJECT_CHAIN"
+  if command -v ip6tables >/dev/null 2>&1; then
+    ip6tables -C FORWARD -i "$iface" -j REJECT 2>/dev/null || ip6tables -I FORWARD 1 -i "$iface" -j REJECT
+  fi
 }
 
 connector_clear_internal_redirect(){
@@ -1310,34 +1531,59 @@ connector_clear_internal_redirect(){
   iptables -t nat -D PREROUTING -i "$iface" -p tcp -j "$CONNECTOR_REDIRECT_CHAIN" 2>/dev/null || true
   iptables -t nat -F "$CONNECTOR_REDIRECT_CHAIN" 2>/dev/null || true
   iptables -t nat -X "$CONNECTOR_REDIRECT_CHAIN" 2>/dev/null || true
+  iptables -D FORWARD -i "$iface" -p udp --dport 443 -j "$CONNECTOR_REJECT_CHAIN" 2>/dev/null || true
+  iptables -F "$CONNECTOR_REJECT_CHAIN" 2>/dev/null || true
+  iptables -X "$CONNECTOR_REJECT_CHAIN" 2>/dev/null || true
+  if command -v ip6tables >/dev/null 2>&1; then
+    ip6tables -D FORWARD -i "$iface" -j REJECT 2>/dev/null || true
+  fi
 }
 
 connector_dns_apply(){
-  local mode="$1"
-  local endpoints="$2"
-  local udp_only="$3"
-  jq -n --arg mode "$mode" --arg doh "$endpoints" --argjson udpOnly "$udp_only" '{mode:$mode,dohEndpoints:$doh,dnsUdpOnly:$udpOnly,updatedAtUtc:(now|todate)}' > "$GATEWAY_DNS_PROFILE_FILE"
+  local endpoints="$1"
+  DOH_ENDPOINTS="$endpoints"
+  connector_validate_dns_profile "$DOH_ENDPOINTS"
+  install -d -m 0755 "$(dirname "$GATEWAY_DNS_PROFILE_FILE")"
+  connector_dns_profile_json > "$GATEWAY_DNS_PROFILE_FILE"
+  chmod 0600 "$GATEWAY_DNS_PROFILE_FILE" || true
+  if [[ -f "$CONNECTOR_CONFIG_FILE" && -x "$CONNECTOR_BIN" ]]; then
+    local updated_config
+    updated_config="$(connector_apply_dns_to_config_json "$(cat "$CONNECTOR_CONFIG_FILE")")"
+    printf '%s\n' "$updated_config" > "$CONNECTOR_CONFIG_FILE"
+    "$CONNECTOR_BIN" check --config "$CONNECTOR_CONFIG_FILE" >/tmp/omnirelay-singbox-check.log 2>&1 || { sed -n '1,120p' /tmp/omnirelay-singbox-check.log >&2 || true; die "connector-core config validation failed after DNS apply"; }
+    if ! systemctl kill -s HUP "$CONNECTOR_SERVICE" >/dev/null 2>&1; then
+      systemctl restart "$CONNECTOR_SERVICE" >/dev/null 2>&1 || true
+    fi
+  fi
 }
 
 connector_dns_status_json(){
-  local m d u cfg rule p h
+  local d cfg local_listener h config_dns config_route doh_ok
   if [[ -f "$GATEWAY_DNS_PROFILE_FILE" ]]; then
-    m="$(jq -r '.mode // "unknown"' "$GATEWAY_DNS_PROFILE_FILE")"
     d="$(jq -r '.dohEndpoints // ""' "$GATEWAY_DNS_PROFILE_FILE")"
-    u="$(jq -r '.dnsUdpOnly // false' "$GATEWAY_DNS_PROFILE_FILE")"
     cfg=true
-    rule=true
   else
-    m="unknown"
     d=""
-    u=false
     cfg=false
-    rule=false
   fi
-  p="$(connector_check_listener 53)"
+  local_listener="$(connector_check_local_dns_listener "$CONNECTOR_DNS_LISTEN_PORT")"
+  config_dns=false
+  config_route=false
+  if [[ -f "$CONNECTOR_CONFIG_FILE" ]]; then
+    jq -e '.dns.servers | type=="array" and length > 0' "$CONNECTOR_CONFIG_FILE" >/dev/null 2>&1 && config_dns=true
+    jq -e '.route.rules[]? | select(.protocol=="dns" and .outbound=="dns-out")' "$CONNECTOR_CONFIG_FILE" >/dev/null 2>&1 && config_route=true
+  fi
+  doh_ok=false
+  if [[ "$cfg" == true ]]; then
+    local first_doh
+    first_doh="$(printf '%s' "$d" | tr ',' '\n' | awk 'NF{print $1; exit}')"
+    if [[ -n "$first_doh" ]] && command -v curl >/dev/null 2>&1; then
+      curl -fsS --max-time 5 -H 'accept: application/dns-message' "$first_doh?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB" >/dev/null 2>&1 && doh_ok=true
+    fi
+  fi
   h=false
-  [[ "$cfg" == true && "$rule" == true ]] && h=true
-  printf '{"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s"}\n' "$cfg" "$rule" "$cfg" "$p" "$h" "$m" "$u" "$(printf '%s' "$d" | sed 's/"/\\"/g')"
+  [[ "$cfg" == true && "$config_dns" == true && "$config_route" == true && "$local_listener" == true && "$doh_ok" == true ]] && h=true
+  printf '{"dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"dnsPathHealthy":%s,"dohEndpoints":"%s","localDnsListener":%s,"singBoxDnsConfigPresent":%s,"singBoxDnsRuleActive":%s}\n' "$cfg" "$config_route" "$doh_ok" "$h" "$(printf '%s' "$d" | sed 's/"/\\"/g')" "$local_listener" "$config_dns" "$config_route"
 }
 
 connector_tunnel_probe_json(){
@@ -1443,7 +1689,7 @@ connector_accounting_status_json(){
 }
 
 connector_status_base_json(){
-  local active ssh_state connector_state panel_state nginx_state fail2_state intp back pub pan inl dns tunnel dns_mode dns_endpoints tunnel_reason tunnel_backend configured_backend_outbound_type clock clock_state clock_source clock_reason accounting
+  local active ssh_state connector_state panel_state nginx_state fail2_state intp back pub pan inl dns tunnel dns_endpoints tunnel_reason tunnel_backend configured_backend_outbound_type clock clock_state clock_source clock_reason accounting
   active="$(connector_json_string_safe "$(connector_active_protocol)")"
   ssh_state="$(connector_service_state ssh)"
   if [[ "$ssh_state" != "active" ]]; then
@@ -1466,7 +1712,6 @@ connector_status_base_json(){
   [[ "$intp" =~ ^[0-9]+$ && "$intp" != "0" ]] && inl="$(connector_check_listener "$intp")"
   dns="$(connector_dns_status_json)"
   tunnel="$(connector_tunnel_probe_json)"
-  dns_mode="$(connector_json_string_safe "$(jq -r '.dnsMode' <<<"$dns")")"
   dns_endpoints="$(connector_json_string_safe "$(jq -r '.dohEndpoints' <<<"$dns")")"
   tunnel_reason="$(connector_json_string_safe "$(jq -r '.reasonCode // .reason // "unknown"' <<<"$tunnel")")"
   tunnel_backend="$(connector_json_string_safe "$(jq -r '.backendProtocol // "unknown"' <<<"$tunnel")")"
@@ -1476,9 +1721,9 @@ connector_status_base_json(){
   clock_source="$(connector_json_string_safe "$(jq -r '.clockSource // ""' <<<"$clock")")"
   clock_reason="$(connector_json_string_safe "$(jq -r '.clockReason // "unknown"' <<<"$clock")")"
   accounting="$(connector_accounting_status_json)"
-  printf '{"activeProtocol":"%s","sshState":"%s","singBoxState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"udp53PathReady":%s,"dnsPathHealthy":%s,"dnsMode":"%s","dnsUdpOnly":%s,"dohEndpoints":"%s","tunnelHealthy":%s,"tunnelReason":"%s","tunnelBackendProtocol":"%s","tunnelConfiguredOutboundType":"%s","tunnelEgressReachable":%s,"clockSyncEnabled":%s,"clockSyncState":"%s","clockSkewSec":%s,"clockLastCheckedUtc":"%s","clockSource":"%s","clockReason":"%s","accountingTimerState":"%s","lastAccountingSyncUtc":"%s","accountingSyncState":"%s","accountingLastError":"%s"}\n' \
+  printf '{"activeProtocol":"%s","sshState":"%s","singBoxState":"%s","omniPanelState":"%s","nginxState":"%s","fail2banState":"%s","backendPort":%s,"publicPort":%s,"panelPort":%s,"omniPanelInternalPort":%s,"backendListener":%s,"publicListener":%s,"panelListener":%s,"omniPanelInternalListener":%s,"inboundId":"","dnsConfigPresent":%s,"dnsRuleActive":%s,"dohReachableViaTunnel":%s,"dnsPathHealthy":%s,"dohEndpoints":"%s","tunnelHealthy":%s,"tunnelReason":"%s","tunnelBackendProtocol":"%s","tunnelConfiguredOutboundType":"%s","tunnelEgressReachable":%s,"clockSyncEnabled":%s,"clockSyncState":"%s","clockSkewSec":%s,"clockLastCheckedUtc":"%s","clockSource":"%s","clockReason":"%s","accountingTimerState":"%s","lastAccountingSyncUtc":"%s","accountingSyncState":"%s","accountingLastError":"%s"}\n' \
     "$active" "$ssh_state" "$connector_state" "$panel_state" "$nginx_state" "$fail2_state" "$BACKEND_PORT" "$PUBLIC_PORT" "$PANEL_PORT" "${intp:-0}" "$back" "$pub" "$pan" "$inl" \
-    "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.udp53PathReady' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$dns_mode" "$(jq -r '.dnsUdpOnly' <<<"$dns")" "$dns_endpoints" \
+    "$(jq -r '.dnsConfigPresent' <<<"$dns")" "$(jq -r '.dnsRuleActive' <<<"$dns")" "$(jq -r '.dohReachableViaTunnel' <<<"$dns")" "$(jq -r '.dnsPathHealthy' <<<"$dns")" "$dns_endpoints" \
     "$(jq -r '.healthy // false' <<<"$tunnel")" "$tunnel_reason" "$tunnel_backend" "$configured_backend_outbound_type" "$(jq -r '.egressReachable // false' <<<"$tunnel")" \
     "$(jq -r '.clockSyncEnabled // false' <<<"$clock")" "$clock_state" "$(jq -r '.clockSkewSec // 999999' <<<"$clock")" "$(connector_json_string_safe "$(jq -r '.clockLastCheckedUtc // ""' <<<"$clock")")" "$clock_source" "$clock_reason" \
     "$(connector_json_string_safe "$(jq -r '.accountingTimerState // "unknown"' <<<"$accounting")")" "$(connector_json_string_safe "$(jq -r '.lastAccountingSyncUtc // ""' <<<"$accounting")")" "$(connector_json_string_safe "$(jq -r '.accountingSyncState // "unknown"' <<<"$accounting")")" "$(connector_json_string_safe "$(jq -r '.accountingLastError // ""' <<<"$accounting")")"
@@ -1571,7 +1816,7 @@ connector_deploy_omnipanel(){
   local protocol_id="$1"
   local extra_env_file="${2:-}"
   progress 60 "Deploying OmniPanel artifact"
-  local node_bin rel dir intp host
+  local node_bin rel dir intp host panel_backup_dir singbox_sync_cmd openvpn_sync_cmd ipsec_sync_cmd
   node_bin="$(connector_resolve_node_bin || true)"
   [[ -n "$node_bin" ]] || die "Node.js executable not found"
   install -d -m 0755 "$PANEL_APP_DIR" "$PANEL_RELEASES_DIR"
@@ -1595,6 +1840,20 @@ connector_deploy_omnipanel(){
   host="${PANEL_DOMAIN:-${VPS_IP:-$(hostname -I 2>/dev/null | awk '{print $1}') }}"
   host="${host%% *}"
   [[ -n "$host" ]] || host="127.0.0.1"
+  panel_backup_dir="${PANEL_APP_DIR}/backups"
+  install -d -m 0750 "$panel_backup_dir"
+  chown "${PANEL_USER_ACCOUNT}:${PANEL_USER_ACCOUNT}" "$panel_backup_dir" || true
+  singbox_sync_cmd="/usr/bin/sudo -n ${GATEWAYCTL_PATH} sync-clients"
+  openvpn_sync_cmd="/usr/bin/sudo -n ${GATEWAYCTL_PATH} sync-clients"
+  ipsec_sync_cmd="/usr/bin/sudo -n ${GATEWAYCTL_PATH} sync-clients"
+  if [[ -n "${RELAY_ID:-}" ]]; then
+    singbox_sync_cmd="${singbox_sync_cmd} --relay-id ${RELAY_ID}"
+    openvpn_sync_cmd="${openvpn_sync_cmd} --relay-id ${RELAY_ID}"
+    ipsec_sync_cmd="${ipsec_sync_cmd} --relay-id ${RELAY_ID}"
+  fi
+  if connector_is_full_tunnel_singbox_protocol "$protocol_id"; then
+    singbox_sync_cmd="${singbox_sync_cmd} --protocol ${protocol_id}"
+  fi
 
   cat > "$PANEL_ENV_FILE" <<EOF
 NODE_ENV=production
@@ -1610,8 +1869,11 @@ OMNIRELAY_ACTIVE_PROTOCOL=${protocol_id}
 PANEL_PUBLIC_PORT=${PANEL_PORT}
 PANEL_PUBLIC_HOST=${host}
 SINGBOX_PUBLIC_PORT=${PUBLIC_PORT}
-SINGBOX_RELOAD_COMMAND=/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients
+SINGBOX_RELOAD_COMMAND=${singbox_sync_cmd}
+OPENVPN_SYNC_COMMAND=${openvpn_sync_cmd}
+IPSEC_L2TP_SYNC_COMMAND=${ipsec_sync_cmd}
 SINGBOX_ACCOUNTING_DB=${CONNECTOR_ACCOUNTING_DB}
+OMNIRELAY_PROTOCOL_BACKUP_DIR=${panel_backup_dir}
 EOF
 
   if [[ -n "$extra_env_file" && -f "$extra_env_file" ]]; then
@@ -1636,10 +1898,10 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-  cat > /etc/sudoers.d/omnigateway-singbox <<EOF
-${PANEL_USER_ACCOUNT} ALL=(root) NOPASSWD:/usr/local/sbin/omnirelay-gatewayctl sync-clients, /usr/local/sbin/omnirelay-gatewayctl sync-clients *
+  cat > "$PANEL_SUDOERS_FILE" <<EOF
+${PANEL_USER_ACCOUNT} ALL=(root) NOPASSWD:${GATEWAYCTL_PATH} sync-clients, ${GATEWAYCTL_PATH} sync-clients *
 EOF
-  chmod 0440 /etc/sudoers.d/omnigateway-singbox
+  chmod 0440 "$PANEL_SUDOERS_FILE"
   ln -sfn "$dir" "$PANEL_CURRENT_DIR"
   chown -R "${PANEL_USER_ACCOUNT}:${PANEL_USER_ACCOUNT}" "$PANEL_APP_DIR"
   connector_fix_accounting_permissions
@@ -1648,7 +1910,7 @@ EOF
   systemctl restart "$PANEL_SERVICE"
   connector_wait_omnipanel_ready
   connector_load_panel_common
-  omnipanel_configure_nginx_proxy "$PANEL_PORT" "$intp" "$GATEWAY_ROOT_DIR" "$PANEL_DOMAIN" "$PANEL_DOMAIN_ONLY" "$PANEL_SSL_ENABLED" "$PANEL_SSL_MODE" "$PANEL_CERT_FILE" "$PANEL_KEY_FILE" "$(hostname -I 2>/dev/null | awk '{print $1}')" "$VPS_IP"
+  omnipanel_configure_nginx_proxy "$PANEL_PORT" "$intp" "$GATEWAY_ROOT_DIR" "$PANEL_DOMAIN" "$PANEL_DOMAIN_ONLY" "$PANEL_SSL_ENABLED" "$PANEL_SSL_MODE" "$PANEL_CERT_FILE" "$PANEL_KEY_FILE" "$(hostname -I 2>/dev/null | awk '{print $1}')" "$VPS_IP" "$PANEL_NGINX_SITE_NAME"
 }
 
 connector_wait_omnipanel_ready(){
@@ -1676,22 +1938,26 @@ connector_start_services(){
 }
 
 connector_stop_services(){
-  systemctl stop "$PANEL_SERVICE" "$CONNECTOR_SERVICE" nginx >/dev/null 2>&1 || true
+  systemctl stop "$PANEL_SERVICE" "$CONNECTOR_SERVICE" >/dev/null 2>&1 || true
+  [[ -z "${RELAY_ID:-}" ]] && systemctl stop nginx >/dev/null 2>&1 || true
 }
 
 connector_uninstall_runtime(){
   connector_uninstall_accounting_runtime
   connector_uninstall_clock_sync_runtime
   systemctl disable --now "$CONNECTOR_SERVICE" "$PANEL_SERVICE" >/dev/null 2>&1 || true
-  rm -f "/etc/systemd/system/${CONNECTOR_SERVICE}.service" "/etc/systemd/system/${PANEL_SERVICE}.service" /etc/sudoers.d/omnigateway-singbox /usr/local/sbin/omnirelay-gatewayctl "$CONNECTOR_COMMON_INSTALLED" /usr/local/lib/omnirelay/bootstrap-common.sh /usr/local/lib/omnirelay/omnipanel-common.sh
-  rm -f /etc/nginx/sites-enabled/omnirelay-omnipanel.conf /etc/nginx/sites-available/omnirelay-omnipanel.conf
+  rm -f "/etc/systemd/system/${CONNECTOR_SERVICE}.service" "/etc/systemd/system/${PANEL_SERVICE}.service" "$PANEL_SUDOERS_FILE" "$GATEWAYCTL_PATH"
+  if [[ -z "${RELAY_ID:-}" && ! -d /etc/omnirelay/relays ]]; then
+    rm -f "$CONNECTOR_COMMON_INSTALLED" /usr/local/lib/omnirelay/bootstrap-common.sh /usr/local/lib/omnirelay/omnipanel-common.sh
+  fi
+  rm -f "/etc/nginx/sites-enabled/${PANEL_NGINX_SITE_NAME}.conf" "/etc/nginx/sites-available/${PANEL_NGINX_SITE_NAME}.conf"
   rm -rf "$GATEWAY_ROOT_DIR" "$PANEL_APP_DIR"
   systemctl daemon-reload || true
 }
 
 connector_install_gatewayctl(){
   local script_source="$1"
-  local dst="/usr/local/sbin/omnirelay-gatewayctl"
+  local dst="$GATEWAYCTL_PATH"
   local src_real dst_real
   [[ -f "$script_source" ]] || die "gatewayctl source script not found: $script_source"
   src_real="$(readlink -f "$script_source" 2>/dev/null || printf '%s' "$script_source")"
@@ -1706,7 +1972,6 @@ connector_install_gatewayctl(){
 connector_validate_common_args(){
   PANEL_DOMAIN_ONLY="$(connector_normalize_bool "$PANEL_DOMAIN_ONLY")"
   PANEL_SSL_ENABLED="$(connector_normalize_bool "$PANEL_SSL_ENABLED")"
-  DNS_UDP_ONLY="$(connector_normalize_bool "$DNS_UDP_ONLY")"
   connector_validate_port "$PUBLIC_PORT" "--public-port"
   connector_validate_port "$PANEL_PORT" "--panel-port"
   connector_validate_port "$BACKEND_PORT" "--backend-port"
@@ -1715,6 +1980,11 @@ connector_validate_common_args(){
   connector_ensure_bootstrap_common
   BOOTSTRAP_MODE="$(omnirelay_bootstrap_normalize_mode "$BOOTSTRAP_MODE" || true)"
   [[ -n "$BOOTSTRAP_MODE" ]] || die "Invalid --bootstrap-mode"
-  [[ "$DNS_MODE" == "hybrid" || "$DNS_MODE" == "doh" || "$DNS_MODE" == "udp" ]] || die "--dns-mode must be hybrid|doh|udp"
+  if [[ -n "${DNS_MODE:-}" ]]; then
+    die "DNS mode selection is removed; DoH-only is enforced"
+  fi
+  if [[ -n "${DNS_UDP_ONLY:-}" ]]; then
+    die "UDP DNS toggle is removed; DoH-only is enforced"
+  fi
   [[ "$PUBLIC_PORT" != "$PANEL_PORT" ]] || die "--public-port and --panel-port must differ"
 }

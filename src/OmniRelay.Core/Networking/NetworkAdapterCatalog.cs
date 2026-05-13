@@ -39,8 +39,10 @@ public static class NetworkAdapterCatalog
                 x => x.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.Any.Equals(x.Address));
 
             list.Add(new NetworkAdapterInfo(
+                nic.Id,
                 ipv4Props.Index,
                 nic.Name,
+                FormatMacAddress(nic.GetPhysicalAddress()),
                 addresses,
                 hasGateway));
         }
@@ -62,6 +64,33 @@ public static class NetworkAdapterCatalog
         }
 
         return IPAddress.TryParse(adapter.IPv4Addresses[0], out ipAddress);
+    }
+
+    public static bool TryGetPrimaryIpv4(string? adapterId, int fallbackIfIndex, out IPAddress? ipAddress, out int resolvedIfIndex)
+    {
+        ipAddress = null;
+        resolvedIfIndex = -1;
+        var adapter = ResolveAdapter(adapterId, fallbackIfIndex);
+        if (adapter is null || adapter.IPv4Addresses.Count == 0)
+        {
+            return false;
+        }
+
+        resolvedIfIndex = adapter.IfIndex;
+        return IPAddress.TryParse(adapter.IPv4Addresses[0], out ipAddress);
+    }
+
+    public static bool TryResolveIfIndex(string? adapterId, int fallbackIfIndex, out int resolvedIfIndex)
+    {
+        resolvedIfIndex = -1;
+        var adapter = ResolveAdapter(adapterId, fallbackIfIndex);
+        if (adapter is null)
+        {
+            return false;
+        }
+
+        resolvedIfIndex = adapter.IfIndex;
+        return true;
     }
 
     public static bool TryGetPrimaryIpv4Gateway(int ifIndex, out IPAddress? gatewayAddress)
@@ -95,5 +124,36 @@ public static class NetworkAdapterCatalog
         }
 
         return false;
+    }
+
+    private static NetworkAdapterInfo? ResolveAdapter(string? adapterId, int fallbackIfIndex)
+    {
+        var adapters = ListIpv4Adapters();
+        var normalizedAdapterId = (adapterId ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedAdapterId))
+        {
+            var byId = adapters.FirstOrDefault(x => string.Equals(x.AdapterId, normalizedAdapterId, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null)
+            {
+                return byId;
+            }
+        }
+
+        if (fallbackIfIndex > 0)
+        {
+            var byIfIndex = adapters.FirstOrDefault(x => x.IfIndex == fallbackIfIndex);
+            if (byIfIndex is not null)
+            {
+                return byIfIndex;
+            }
+        }
+
+        return null;
+    }
+
+    private static string FormatMacAddress(PhysicalAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        return bytes.Length == 0 ? string.Empty : string.Join(":", bytes.Select(x => x.ToString("X2")));
     }
 }

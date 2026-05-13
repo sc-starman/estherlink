@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { getGatewayProvider } from "@/lib/protocol";
+import { getActiveProtocol, getGatewayProvider } from "@/lib/protocol";
+import { getProtocolCapabilities } from "@/lib/protocol-capabilities";
 import { type GatewayClientRecord } from "@/lib/providers/types";
 
 interface UpdateClientRequest {
@@ -41,6 +42,23 @@ function normalizeOptionalExpiryTime(value: unknown): number | undefined {
   return Math.trunc(expiryTime);
 }
 
+function normalizeOptionalSpeedLimitKbps(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null || value === "") {
+    return 0;
+  }
+
+  const speed = Number(value);
+  if (!Number.isFinite(speed) || speed < 0) {
+    throw new Error("speedLimitKbps must be a non-negative integer.");
+  }
+
+  return Math.trunc(speed);
+}
+
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session.isAuthenticated) {
@@ -55,6 +73,12 @@ export async function POST(request: Request) {
   }
 
   try {
+    const activeProtocol = getActiveProtocol();
+    const capabilities = getProtocolCapabilities(activeProtocol);
+    if (!capabilities.supportsClientLifecycle) {
+      return NextResponse.json({ message: "Per-client management is not supported for this protocol." }, { status: 400 });
+    }
+
     const provider = getGatewayProvider();
     const sanitized = { ...(client as GatewayClientRecord) };
 
@@ -66,6 +90,11 @@ export async function POST(request: Request) {
     const expiryTime = normalizeOptionalExpiryTime((client as Record<string, unknown>).expiryTime);
     if (expiryTime !== undefined) {
       sanitized.expiryTime = expiryTime;
+    }
+
+    const speedLimitKbps = normalizeOptionalSpeedLimitKbps((client as Record<string, unknown>).speedLimitKbps);
+    if (speedLimitKbps !== undefined) {
+      sanitized.speedLimitKbps = speedLimitKbps;
     }
 
     await provider.updateClient(session, sanitized);

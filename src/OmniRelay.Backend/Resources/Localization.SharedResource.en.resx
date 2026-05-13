@@ -1578,4 +1578,145 @@
   <data name="Billing.SuccessModal.LicenseKey" xml:space="preserve">
     <value>License key:</value>
   </data>
+  <data name="Download.Changelogs.Link" xml:space="preserve">
+    <value>Version changelogs</value>
+  </data>
+  <data name="Changelog.Eyebrow" xml:space="preserve">
+    <value>Release notes</value>
+  </data>
+  <data name="Changelog.Title" xml:space="preserve">
+    <value>Version Changelogs</value>
+  </data>
+  <data name="Changelog.Subtitle" xml:space="preserve">
+    <value>Track released app updates and the current in-progress update package.</value>
+  </data>
+  <data name="Changelog.Section.Version1" xml:space="preserve">
+    <value>Version 1: Released updates</value>
+  </data>
+  <data name="Changelog.Section.Version2" xml:space="preserve">
+    <value>Version 2: Current uncommitted updates</value>
+  </data>
+  <data name="Changelog.Label.Version" xml:space="preserve">
+    <value>Version</value>
+  </data>
+  <data name="Changelog.Label.Date" xml:space="preserve">
+    <value>Date (UTC):</value>
+  </data>
+  <data name="Changelog.Release.1.45.1.1" xml:space="preserve">
+    <value>Refined code structure across app modules for cleaner maintenance.</value>
+  </data>
+  <data name="Changelog.Release.1.45.1.2" xml:space="preserve">
+    <value>Shipped installer package version update for the desktop app.</value>
+  </data>
+  <data name="Changelog.Release.1.44.4.1" xml:space="preserve">
+    <value>Expanded SingBox protocol setup coverage for multiple deployment paths.</value>
+  </data>
+  <data name="Changelog.Release.1.44.4.2" xml:space="preserve">
+    <value>Added protocol setup automation scripts used by app-guided deployments.</value>
+  </data>
+  <data name="Changelog.Release.1.40.9.1" xml:space="preserve">
+    <value>Added bootstrap mode selection for gateway setup operations.</value>
+  </data>
+  <data name="Changelog.Release.1.40.9.2" xml:space="preserve">
+    <value>Improved deployment behavior for tunnel and direct bootstrap flows.</value>
+  </data>
+  <data name="Changelog.Release.1.40.8.1" xml:space="preserve">
+    <value>Added OpenVPN client configuration handling for local gateway mode.</value>
+  </data>
+  <data name="Changelog.Release.1.40.8.2" xml:space="preserve">
+    <value>Extended app test coverage around OpenVPN client configuration parsing.</value>
+  </data>
+  <data name="Changelog.Release.1.39.17.1" xml:space="preserve">
+    <value>Improved tunnel resilience with better recovery handling after connection failures.</value>
+  </data>
+  <data name="Changelog.Release.1.39.17.2" xml:space="preserve">
+    <value>Stabilized backend-connection behavior for long-running sessions.</value>
+  </data>
+  <data name="Changelog.Release.1.39.11.1" xml:space="preserve">
+    <value>Updated app terminology from VPS Network (IC1) to Incoming Network (IC1).</value>
+  </data>
+  <data name="Changelog.Release.1.39.11.2" xml:space="preserve">
+    <value>Applied wording changes consistently across app surfaces and setup flows.</value>
+  </data>
+  <data name="Changelog.Release.1.39.9.1" xml:space="preserve">
+    <value>Added retry handling when required network adapters are temporarily unavailable.</value>
+  </data>
+  <data name="Changelog.Release.1.39.9.2" xml:space="preserve">
+    <value>Normalized scheduled-time behavior in tunnel resilience routines.</value>
+  </data>
+  <data name="Changelog.Release.1.39.8.1" xml:space="preserve">
+    <value>Added redsocks saturation threshold handling for better traffic control.</value>
+  </data>
+  <data name="Changelog.Release.1.39.8.2" xml:space="preserve">
+    <value>Improved runtime behavior under high-load forwarding conditions.</value>
+  </data>
+  <data name="Changelog.Release.1.39.7.1" xml:space="preserve">
+    <value>Improved OpenVPN watchdog behavior and recovery monitoring.</value>
+  </data>
+  <data name="Changelog.Release.1.39.7.2" xml:space="preserve">
+    <value>Reduced tunnel disruption risk during watchdog-triggered recovery paths.</value>
+  </data>
+  <data name="Changelog.Release.1.39.6.1" xml:space="preserve">
+    <value>Introduced local gateway capabilities in the desktop + service runtime.</value>
+  </data>
+  <data name="Changelog.Release.1.39.6.2" xml:space="preserve">
+    <value>Expanded installer payload handling for local gateway resources.</value>
+  </data>
+  <data name="Changelog.Release.1.38.1.1" xml:space="preserve">
+    <value>Added OpenVPN-redsocks dataplane health checks.</value>
+  </data>
+  <data name="Changelog.Release.1.38.1.2" xml:space="preserve">
+    <value>Improved detection of unhealthy dataplane states before service degradation.</value>
+  </data>
+  <data name="Changelog.Release.1.37.13.1" xml:space="preserve">
+    <value>Codebase refactoring pass to improve long-term maintainability.</value>
+  </data>
+  <data name="Changelog.Release.1.37.13.2" xml:space="preserve">
+    <value>Internal structure cleanup to support upcoming app features safely.</value>
+  </data>
+  <data name="Changelog.Release.1.37.5.1" xml:space="preserve">
+    <value>Enhanced client configuration handling and related UI flows.</value>
+  </data>
+  <data name="Changelog.Release.1.37.5.2" xml:space="preserve">
+    <value>Improved OpenVPN bundle generation and protocol-specific setup guidance.</value>
+  </data>
+  <data name="Changelog.Release.1.37.0.1" xml:space="preserve">
+    <value>Expanded client management with usage/accounting support.</value>
+  </data>
+  <data name="Changelog.Release.1.37.0.2" xml:space="preserve">
+    <value>Improved protocol switch hardening for gateway deployment workflows.</value>
+  </data>
+  <data name="Changelog.Release.1.36.1.1" xml:space="preserve">
+    <value>Added OpenVPN, ShadowTLS, and VLESS provider integration.</value>
+  </data>
+  <data name="Changelog.Release.1.36.1.2" xml:space="preserve">
+    <value>Expanded client lifecycle management across supported gateway protocols.</value>
+  </data>
+  <data name="Changelog.Release.1.34.18.1" xml:space="preserve">
+    <value>Improved XUI cookie extraction and related runtime stability.</value>
+  </data>
+  <data name="Changelog.Release.1.34.18.2" xml:space="preserve">
+    <value>Published installer version alignment for this app update.</value>
+  </data>
+  <data name="Changelog.Release.1.34.16.1" xml:space="preserve">
+    <value>Added end-user license agreement (EULA) support in installer flow.</value>
+  </data>
+  <data name="Changelog.Release.1.34.16.2" xml:space="preserve">
+    <value>Improved packaging flow for desktop application distribution.</value>
+  </data>
+  <data name="Changelog.Current.2.1.19.1" xml:space="preserve">
+    <value>Major relay-management redesign in desktop UI with new relay pages and dialogs.</value>
+  </data>
+  <data name="Changelog.Current.2.1.19.2" xml:space="preserve">
+    <value>Service runtime refactor adding relay runtime workers, policy/runtime changes, and log retention.</value>
+  </data>
+  <data name="Changelog.Current.2.1.19.3" xml:space="preserve">
+    <value>Gateway panel protocol/provider updates, public client API routes, and config import/export improvements.</value>
+  </data>
+  <data name="Changelog.Current.2.1.19.4" xml:space="preserve">
+    <value>Licensing/backend updates including certificate signing, paid-license admin improvements, and artifact handling changes.</value>
+  </data>
+  <data name="Changelog.Current.2.1.19.5" xml:space="preserve">
+    <value>Installer and build/upload script updates aligned with package version 2.1.19.</value>
+  </data>
 </root>

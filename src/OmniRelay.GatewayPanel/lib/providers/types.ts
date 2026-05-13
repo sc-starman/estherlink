@@ -7,7 +7,11 @@ export interface GatewayClientRecord {
   flow?: string;
   totalGB?: number;
   expiryTime?: number;
+  speedLimitKbps?: number;
   usedBytes?: number | null;
+  lastSeenAtUnixMs?: number;
+  activeConnections?: number;
+  isOnline?: boolean;
   [key: string]: unknown;
 }
 
@@ -15,6 +19,9 @@ export interface GatewayProtocolCapabilities {
   supportsTrafficLimit: boolean;
   supportsDurationLimit: boolean;
   supportsUsageAccounting: boolean;
+  supportsSpeedLimit?: boolean;
+  supportsOnlineStatus?: boolean;
+  supportsClientLifecycle?: boolean;
 }
 
 export interface GatewayInboundSnapshot {
@@ -64,6 +71,19 @@ export type ClientConfigPayload =
 export interface GatewayClientCreateOptions {
   totalGB?: number;
   expiryTime?: number;
+  speedLimitKbps?: number;
+}
+
+export interface ProtocolBackupPayload {
+  fileName: string;
+  contentType: string;
+  body: Uint8Array;
+}
+
+export interface ProtocolBackupInput {
+  fileName: string;
+  contentType: string;
+  body: Uint8Array;
 }
 
 export interface GatewayProtocolProvider {
@@ -73,6 +93,8 @@ export interface GatewayProtocolProvider {
   updateClient(session: OmniSession, client: GatewayClientRecord): Promise<void>;
   deleteClient(session: OmniSession, clientId: string): Promise<void>;
   buildClientConfig(session: OmniSession, request: Request, clientId: string): Promise<ClientConfigPayload>;
+  exportBackup(session: OmniSession): Promise<ProtocolBackupPayload>;
+  importBackup(session: OmniSession, input: ProtocolBackupInput): Promise<void>;
 }
 
 export function safeParseJson<T>(raw: unknown, fallback: T): T {

@@ -1,0 +1,138 @@
+<Page x:Class="OmniRelay.UI.Views.Pages.RelaysPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Title="Relays"
+      Background="{DynamicResource Brush.Background}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="28">
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <!-- <TextBlock Text="Relays" Style="{StaticResource SectionTitleTextStyle}"/> -->
+                    <TextBlock Text="Create and manage active-active Relay entries." Style="{StaticResource MutedTextStyle}"/>
+                </StackPanel>
+            </Grid>
+
+            <WrapPanel Margin="0,0,0,12">
+                <Button Content="Add Relay" Command="{Binding AddRelayCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0"/>
+                <Button Content="Edit" Command="{Binding EditRelayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                <!-- <Button Content="Enable/Disable" Command="{Binding ToggleRelayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/> -->
+                <Button Content="Delete" Command="{Binding DeleteRelayCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                <Button Content="Backup" Command="{Binding BackupRelaysCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                <Button Content="Restore" Command="{Binding RestoreRelaysCommand}" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                <Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButtonStyle}"/>
+            </WrapPanel>
+
+            <Border Style="{StaticResource CardStyle}">
+                <DataGrid ItemsSource="{Binding Relays}"
+                          Style="{StaticResource AppDataGridStyle}"
+                          SelectedItem="{Binding SelectedRelay}"
+                          AutoGenerateColumns="False"
+                          CanUserAddRows="False"
+                          IsReadOnly="True"
+                          MouseDoubleClick="RelaysGrid_MouseDoubleClick"
+                          MinHeight="255">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                        <DataGridTextColumn Header="Type" Binding="{Binding GatewayType}" Width="80"/>
+                        <DataGridTemplateColumn Header="Enabled" Width="80">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock
+                                        FontFamily="Segoe MDL2 Assets"
+                                        FontSize="16"
+                                        FontWeight="SemiBold"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        Foreground="{DynamicResource Brush.TextMuted}"
+                                        ToolTip="{Binding Enabled, StringFormat=Enabled: {0}}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value=""/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Enabled}" Value="True">
+                                                        <Setter Property="Text" Value="&#xE73E;"/>
+                                                        <Setter Property="Foreground" Value="#1A9B45"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Tunnel" Width="110">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding TunnelState}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="ToolTip" Value="{x:Null}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ShowHealthReasonOnStatusHover}" Value="True">
+                                                        <Setter Property="ToolTip">
+                                                            <Setter.Value>
+                                                                <ToolTip
+                                                                    Background="{DynamicResource Brush.Surface}"
+                                                                    Foreground="{DynamicResource Brush.Text}"
+                                                                    BorderBrush="{DynamicResource Brush.Border}"
+                                                                    BorderThickness="1">
+                                                                    <TextBlock Text="{Binding HealthReason}"
+                                                                               Foreground="{DynamicResource Brush.Text}"
+                                                                               TextWrapping="Wrap"
+                                                                               MaxWidth="360"/>
+                                                                </ToolTip>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Health" Width="110">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding HealthState}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="ToolTip" Value="{x:Null}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ShowHealthReasonOnStatusHover}" Value="True">
+                                                        <Setter Property="ToolTip">
+                                                            <Setter.Value>
+                                                                <ToolTip
+                                                                    Background="{DynamicResource Brush.Surface}"
+                                                                    Foreground="{DynamicResource Brush.Text}"
+                                                                    BorderBrush="{DynamicResource Brush.Border}"
+                                                                    BorderThickness="1">
+                                                                    <TextBlock Text="{Binding HealthReason}"
+                                                                               Foreground="{DynamicResource Brush.Text}"
+                                                                               TextWrapping="Wrap"
+                                                                               MaxWidth="360"/>
+                                                                </ToolTip>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Border>
+
+            <TextBlock Text="{Binding Feedback}" Style="{StaticResource FeedbackTextStyle}" Margin="0,10,0,0"/>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

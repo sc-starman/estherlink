@@ -23,6 +23,11 @@ public sealed class PaidLicensesModel : PageModel
     public int TotalItems { get; private set; }
     public int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalItems / (double)PageSize));
     public List<AdminLicenseItem> Items { get; private set; } = [];
+    [TempData]
+    public string? StatusMessage { get; set; }
+
+    [TempData]
+    public string? ErrorMessage { get; set; }
 
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
@@ -44,6 +49,7 @@ public sealed class PaidLicensesModel : PageModel
         }
 
         var skip = (PageNumber - 1) * PageSize;
+        var transferWindowStart = DateTimeOffset.UtcNow.AddDays(-365);
 
         Items = await query
             .Skip(skip)
@@ -59,9 +65,38 @@ public sealed class PaidLicensesModel : PageModel
                 Source = x.Source,
                 CreatedAt = x.CreatedAt,
                 ExpiresAt = x.License.ExpiresAt,
-                UpdatesEntitledUntil = x.UpdatesEntitledUntil
+                UpdatesEntitledUntil = x.UpdatesEntitledUntil,
+                TransfersUsedInWindow = _dbContext.LicenseTransfers.Count(t =>
+                    t.LicenseId == x.LicenseId &&
+                    t.CreatedAt >= transferWindowStart)
             })
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IActionResult> OnPostResetTransfersAsync(Guid licenseId, int pageNumber, CancellationToken cancellationToken)
+    {
+        var isPaidLicense = await _dbContext.UserLicenses
+            .AsNoTracking()
+            .AnyAsync(x => x.LicenseId == licenseId && x.Source == "purchase", cancellationToken);
+
+        if (!isPaidLicense)
+        {
+            ErrorMessage = "Paid license was not found.";
+            return RedirectToPage(new { pageNumber = Math.Max(1, pageNumber) });
+        }
+
+        var transfers = await _dbContext.LicenseTransfers
+            .Where(x => x.LicenseId == licenseId)
+            .ToListAsync(cancellationToken);
+
+        if (transfers.Count > 0)
+        {
+            _dbContext.LicenseTransfers.RemoveRange(transfers);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        StatusMessage = "Transfer usage was reset. Remaining transfers are now back to 3.";
+        return RedirectToPage(new { pageNumber = Math.Max(1, pageNumber) });
     }
 
     public sealed class AdminLicenseItem
@@ -76,5 +111,6 @@ public sealed class PaidLicensesModel : PageModel
         public DateTimeOffset CreatedAt { get; set; }
         public DateTimeOffset? ExpiresAt { get; set; }
         public DateTimeOffset? UpdatesEntitledUntil { get; set; }
+        public int TransfersUsedInWindow { get; set; }
     }
 }

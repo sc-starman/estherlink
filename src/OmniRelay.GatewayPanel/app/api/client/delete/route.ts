@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { getGatewayProvider } from "@/lib/protocol";
+import { getActiveProtocol, getGatewayProvider } from "@/lib/protocol";
+import { getProtocolCapabilities } from "@/lib/protocol-capabilities";
 
 interface DeleteClientRequest {
   uuid?: string;
@@ -19,6 +20,12 @@ export async function POST(request: Request) {
   }
 
   try {
+    const activeProtocol = getActiveProtocol();
+    const capabilities = getProtocolCapabilities(activeProtocol);
+    if (!capabilities.supportsClientLifecycle) {
+      return NextResponse.json({ message: "Per-client management is not supported for this protocol." }, { status: 400 });
+    }
+
     const provider = getGatewayProvider();
     await provider.deleteClient(session, uuid);
 

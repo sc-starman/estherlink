@@ -12,20 +12,24 @@ public partial class MainWindow : Window
     private readonly MainWindowViewModel _viewModel;
     private readonly INavigationService _navigationService;
     private readonly IServiceProvider _serviceProvider;
+    private readonly ITrayIconService _trayIconService;
 
     public MainWindow(
         MainWindowViewModel viewModel,
         INavigationService navigationService,
-        IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider,
+        ITrayIconService trayIconService)
     {
         InitializeComponent();
 
         _viewModel = viewModel;
         _navigationService = navigationService;
         _serviceProvider = serviceProvider;
+        _trayIconService = trayIconService;
 
         DataContext = _viewModel;
         Loaded += MainWindow_Loaded;
+        Closing += MainWindow_Closing;
     }
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -67,5 +71,16 @@ public partial class MainWindow : Window
     private void CloseButton_OnClick(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_trayIconService.AllowWindowClose)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        Hide();
     }
 }

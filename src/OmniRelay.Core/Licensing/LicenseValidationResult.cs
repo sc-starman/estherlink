@@ -14,4 +14,5 @@ public sealed record LicenseValidationResult(
     string? ActiveDeviceIdHint = null,
     string? Reason = null,
     string? RequestId = null,
-    string? KeyId = null);
+    string? KeyId = null,
+    string Source = "unknown");

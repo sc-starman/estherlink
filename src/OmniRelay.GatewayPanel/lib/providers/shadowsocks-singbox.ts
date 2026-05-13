@@ -7,30 +7,32 @@ import {
   type GatewayClientRecord,
   type GatewayInboundSnapshot,
   type GatewayProtocolProvider,
+  type ProtocolBackupInput,
+  type ProtocolBackupPayload,
   resolveGatewayHost
 } from "@/lib/providers/types";
 import {
-  SINGBOX_ACCOUNTING_CAPABILITIES,
+  SINGBOX_PER_CLIENT_CAPABILITIES,
   normalizeClientOptions,
-  readClientFile,
-  readUsageByClientIds,
+  normalizeImportedClientFile,
+  listProtocolClientsFromDb,
+  readRuntimeStatsByClientIds,
+  normalizeSpeedLimitKbps,
   runGatewaySync,
-  writeClientFile
+  upsertProtocolClientToDb,
+  deleteProtocolClientFromDb
 } from "@/lib/providers/singbox-shared";
+import { createJsonClientBackup, readJsonClientBackup } from "@/lib/providers/backup";
+import { resolveProtocolConfigPort, resolveProtocolConfigString } from "@/lib/protocol-config";
 
 const DEFAULT_METHOD = "2022-blake3-aes-128-gcm";
 
-function getClientsFilePath(): string {
-  return process.env.SINGBOX_SHADOWSOCKS_CLIENTS_FILE?.trim() || "/opt/omnirelay/omni-gateway/shadowsocks_clients.json";
+async function getPublicPort(): Promise<number> {
+  return resolveProtocolConfigPort("shadowsocks_singbox", "publicPort", process.env.SINGBOX_PUBLIC_PORT, 443);
 }
 
-function getPublicPort(): number {
-  const parsed = Number.parseInt((process.env.SINGBOX_PUBLIC_PORT ?? "443").trim(), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 443;
-}
-
-function getServerPassword(): string {
-  return process.env.SINGBOX_SHADOWSOCKS_SERVER_PASSWORD?.trim() ?? "";
+async function getServerPassword(): Promise<string> {
+  return resolveProtocolConfigString("shadowsocks_singbox", "serverPassword", process.env.SINGBOX_SHADOWSOCKS_SERVER_PASSWORD, "");
 }
 
 function random2022Key(): string {
@@ -46,13 +48,13 @@ export class ShadowsocksSingboxProvider implements GatewayProtocolProvider {
   public readonly protocolId = "shadowsocks_singbox";
 
   public async getInbound(_session: OmniSession): Promise<GatewayInboundSnapshot> {
-    const clients = await readClientFile(getClientsFilePath());
-    const usage = await readUsageByClientIds(clients.map((item) => item.id));
+    const clients = await listProtocolClientsFromDb(this.protocolId);
+    const runtimeStats = await readRuntimeStatsByClientIds(clients.map((item) => item.id));
     return {
       inbound: {
         id: 1,
         protocol: "shadowsocks",
-        port: getPublicPort(),
+        port: await getPublicPort(),
         remark: "OmniRelay Managed Shadowsocks",
         enable: true
       },
@@ -62,9 +64,13 @@ export class ShadowsocksSingboxProvider implements GatewayProtocolProvider {
         enable: item.enable,
         totalGB: item.totalGB,
         expiryTime: item.expiryTime,
-        usedBytes: usage.get(item.id) ?? 0
+        speedLimitKbps: item.speedLimitKbps ?? 0,
+        usedBytes: runtimeStats.get(item.id)?.usedBytes ?? 0,
+        lastSeenAtUnixMs: runtimeStats.get(item.id)?.lastSeenAtUnixMs ?? 0,
+        activeConnections: runtimeStats.get(item.id)?.activeConnections ?? 0,
+        isOnline: runtimeStats.get(item.id)?.isOnline ?? false
       })),
-      capabilities: SINGBOX_ACCOUNTING_CAPABILITIES
+      capabilities: SINGBOX_PER_CLIENT_CAPABILITIES
     };
   }
 
@@ -74,7 +80,6 @@ export class ShadowsocksSingboxProvider implements GatewayProtocolProvider {
       throw new Error("Email is required.");
     }
     const normalized = normalizeClientOptions(options);
-    const clients = await readClientFile(getClientsFilePath());
     const client = {
       id: randomUUID(),
       email: normalizedEmail,
@@ -82,12 +87,21 @@ export class ShadowsocksSingboxProvider implements GatewayProtocolProvider {
       method: DEFAULT_METHOD,
       password: random2022Key(),
       totalGB: normalized.totalGB,
-      expiryTime: normalized.expiryTime
+      expiryTime: normalized.expiryTime,
+      speedLimitKbps: normalized.speedLimitKbps
     };
-    clients.push(client);
-    await writeClientFile(getClientsFilePath(), clients);
+    await upsertProtocolClientToDb(this.protocolId, {
+      id: client.id,
+      email: client.email,
+      enable: client.enable,
+      totalGB: client.totalGB,
+      expiryTime: client.expiryTime,
+      speedLimitKbps: client.speedLimitKbps,
+      authUsername: "",
+      authSecret: client.password
+    });
     await runGatewaySync();
-    return { ...client, usedBytes: 0 };
+    return { ...client, usedBytes: 0, lastSeenAtUnixMs: 0, activeConnections: 0, isOnline: false };
   }
 
   public async updateClient(_session: OmniSession, client: GatewayClientRecord): Promise<void> {
@@ -95,21 +109,21 @@ export class ShadowsocksSingboxProvider implements GatewayProtocolProvider {
     if (!clientId) {
       throw new Error("Client id is required.");
     }
-    const clients = await readClientFile(getClientsFilePath());
-    const index = clients.findIndex((item) => item.id === clientId);
-    if (index < 0) {
+    const clients = await listProtocolClientsFromDb(this.protocolId);
+    const existing = clients.find((item) => item.id === clientId);
+    if (!existing) {
       throw new Error("Client not found.");
     }
-
-    clients[index] = {
-      ...clients[index],
-      email: String(client.email ?? clients[index].email).trim() || clients[index].email,
+    await upsertProtocolClientToDb(this.protocolId, {
+      ...existing,
+      email: String(client.email ?? existing.email).trim() || existing.email,
       enable: Boolean(client.enable),
-      totalGB: Number(client.totalGB ?? clients[index].totalGB) || 0,
-      expiryTime: Number(client.expiryTime ?? clients[index].expiryTime) || 0
-    };
-
-    await writeClientFile(getClientsFilePath(), clients);
+      totalGB: Number(client.totalGB ?? existing.totalGB) || 0,
+      expiryTime: Number(client.expiryTime ?? existing.expiryTime) || 0,
+      speedLimitKbps: normalizeSpeedLimitKbps(client.speedLimitKbps ?? existing.speedLimitKbps ?? 0),
+      authSecret: existing.authSecret,
+      authUsername: ""
+    });
     await runGatewaySync();
   }
 
@@ -118,39 +132,60 @@ export class ShadowsocksSingboxProvider implements GatewayProtocolProvider {
     if (!trimmed) {
       throw new Error("Client id is required.");
     }
-    const clients = await readClientFile(getClientsFilePath());
-    const filtered = clients.filter((item) => item.id !== trimmed);
-    if (filtered.length === clients.length) {
+    const clients = await listProtocolClientsFromDb(this.protocolId);
+    if (!clients.some((item) => item.id === trimmed)) {
       throw new Error("Client not found.");
     }
-    await writeClientFile(getClientsFilePath(), filtered);
+    await deleteProtocolClientFromDb(trimmed);
     await runGatewaySync();
   }
 
   public async buildClientConfig(_session: OmniSession, request: Request, clientId: string): Promise<ClientConfigPayload> {
-    const clients = await readClientFile(getClientsFilePath());
+    const clients = await listProtocolClientsFromDb(this.protocolId);
     const client = clients.find((item) => item.id === clientId);
     if (!client) {
       throw new Error("Client not found.");
     }
 
-    const method = String(client.method ?? DEFAULT_METHOD).trim() || DEFAULT_METHOD;
-    const userPassword = String(client.password ?? "").trim();
+    const method = DEFAULT_METHOD;
+    const userPassword = String(client.authSecret ?? "").trim();
     if (!userPassword) {
       throw new Error("Client password is missing.");
     }
-    const serverPassword = getServerPassword();
+    const serverPassword = await getServerPassword();
     const is2022 = method.startsWith("2022-");
     if (is2022 && !serverPassword) {
       throw new Error("Shadowsocks runtime server password is missing.");
     }
     const password = is2022 ? `${serverPassword}:${userPassword}` : userPassword;
 
-    const host = resolveGatewayHost(request);
-    const port = getPublicPort();
+    const host = await resolveProtocolConfigString("shadowsocks_singbox", "publicHost", process.env.PANEL_PUBLIC_HOST, resolveGatewayHost(request));
+    const port = await getPublicPort();
     const userInfo = toSsUriUserInfo(method, password);
     const uri = `ss://${userInfo}@${host}:${port}#${encodeURIComponent(client.email)}`;
     const qrCodeDataUrl = await QRCode.toDataURL(uri, { width: 320, margin: 1 });
     return { mode: "qr", uri, qrCodeDataUrl };
+  }
+
+  public async exportBackup(_session: OmniSession): Promise<ProtocolBackupPayload> {
+    const clients = await listProtocolClientsFromDb(this.protocolId);
+    return createJsonClientBackup(this.protocolId, clients);
+  }
+
+  public async importBackup(_session: OmniSession, input: ProtocolBackupInput): Promise<void> {
+    const clients = normalizeImportedClientFile(readJsonClientBackup(input, this.protocolId));
+    for (const client of clients) {
+      await upsertProtocolClientToDb(this.protocolId, {
+        id: client.id,
+        email: client.email,
+        enable: client.enable,
+        totalGB: client.totalGB,
+        expiryTime: client.expiryTime,
+        speedLimitKbps: normalizeSpeedLimitKbps(client.speedLimitKbps),
+        authUsername: "",
+        authSecret: String(client.password ?? "")
+      });
+    }
+    await runGatewaySync();
   }
 }

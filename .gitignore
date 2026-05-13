@@ -226,3 +226,9 @@ FakesAssemblies/
 xray.exe
 
 OpenVPNInstaller.msi
+
+# Service runtime payloads (built/copied locally)
+src/OmniRelay.Service/connector-core/
+src/OmniRelay.Service/omnipanel/
+src/OmniRelay.Service/sing-box/
+src/OmniRelay.Service/nodejs/

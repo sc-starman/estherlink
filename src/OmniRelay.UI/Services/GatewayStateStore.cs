@@ -10,13 +10,11 @@ public partial class GatewayStateStore : ObservableObject
 {
     public GatewayStateStore()
     {
-        var pair = GatewayRealityTargetCatalog.GetRandom();
-        gatewaySni = pair.Sni;
-        gatewayTarget = pair.Target;
         shadowTlsCamouflageServer = GatewayCamouflageCatalog.GetRandom();
     }
 
     public ObservableCollection<AdapterChoiceModel> Adapters { get; } = [];
+    public ObservableCollection<RelayConfig> Relays { get; } = [];
 
     [ObservableProperty]
     private AdapterChoiceModel? vpsAdapter;
@@ -46,7 +44,7 @@ public partial class GatewayStateStore : ObservableObject
     private string tunnelRemotePortText = "15000";
 
     [ObservableProperty]
-    private string selectedGatewayProtocol = GatewayProtocols.VlessRealitySingbox;
+    private string selectedGatewayProtocol = GatewayProtocols.VlessTlsSingbox;
 
     [ObservableProperty]
     private string gatewayType = GatewayTypes.Remote;
@@ -85,19 +83,70 @@ public partial class GatewayStateStore : ObservableObject
     private string gatewayBackendPortText = "15000";
 
     [ObservableProperty]
+    private bool gatewayProtocolTlsEnabled;
+
+    [ObservableProperty]
+    private string gatewayProtocolTlsServerName = string.Empty;
+
+    [ObservableProperty]
     private string gatewaySni = string.Empty;
 
     [ObservableProperty]
     private string gatewayTarget = string.Empty;
 
     [ObservableProperty]
+    private string gatewayProtocolCertPath = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayProtocolKeyPath = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayProtocolTlsMode = "uploaded";
+
+    [ObservableProperty]
+    private string gatewayProtocolAlpnCsv = string.Empty;
+
+    [ObservableProperty]
+    private string gatewayProxyUsername = "omni";
+
+    [ObservableProperty]
+    private string gatewayProxyPassword = string.Empty;
+
+    [ObservableProperty]
+    private string vlessTlsFlow = string.Empty;
+
+    [ObservableProperty]
+    private string hysteria2UpMbpsText = "100";
+
+    [ObservableProperty]
+    private string hysteria2DownMbpsText = "100";
+
+    [ObservableProperty]
+    private string hysteria2ObfsPassword = string.Empty;
+
+    [ObservableProperty]
+    private bool hysteria2IgnoreClientBandwidth;
+
+    [ObservableProperty]
+    private string hysteria2MasqueradeUrl = string.Empty;
+
+    [ObservableProperty]
+    private string naiveNetwork = string.Empty;
+
+    [ObservableProperty]
+    private string naiveQuicCongestionControl = string.Empty;
+
+    [ObservableProperty]
     private string shadowTlsCamouflageServer = string.Empty;
 
     [ObservableProperty]
-    private string openVpnNetwork = "10.29.0.0/24";
+    private bool shadowTlsStrictMode;
 
     [ObservableProperty]
-    private string openVpnClientDns = "1.1.1.1,8.8.8.8";
+    private string shadowTlsWildcardSni = string.Empty;
+
+    [ObservableProperty]
+    private string openVpnNetwork = "10.29.0.0/24";
 
     [ObservableProperty]
     private string localGatewayProtocol = LocalGatewayProtocols.VlessTcpPlain;
@@ -118,13 +167,7 @@ public partial class GatewayStateStore : ObservableObject
     private bool localGatewayRuntimeEnabled = true;
 
     [ObservableProperty]
-    private string gatewayDnsMode = "hybrid";
-
-    [ObservableProperty]
     private string gatewayDohEndpointsText = "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query";
-
-    [ObservableProperty]
-    private bool gatewayDnsUdpOnly = true;
 
     [ObservableProperty]
     private string gatewayPanelUrl = string.Empty;
@@ -139,7 +182,7 @@ public partial class GatewayStateStore : ObservableObject
     private string tunnelUser = "OmniRelay";
 
     [ObservableProperty]
-    private string tunnelAuthMethod = TunnelAuthMethods.HostKey;
+    private string tunnelAuthMethod = TunnelAuthMethods.Password;
 
     [ObservableProperty]
     private string tunnelKeyPath = string.Empty;
@@ -164,6 +207,9 @@ public partial class GatewayStateStore : ObservableObject
 
     [ObservableProperty]
     private GatewayStatus? status;
+
+    [ObservableProperty]
+    private AppStatus? appStatus;
 
     [ObservableProperty]
     private string lastAction = "Ready.";

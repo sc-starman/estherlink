@@ -2,7 +2,6 @@ using OmniRelay.Ipc;
 using OmniRelay.Core.Configuration;
 using OmniRelay.Core.Policy;
 using OmniRelay.Service.Runtime;
-using System.Collections.Concurrent;
 
 namespace OmniRelay.Service.Ipc;
 
@@ -13,8 +12,6 @@ public sealed class IpcCommandHandler
     private readonly TunnelConnectionTester _tunnelConnectionTester;
     private readonly FileLogWriter _fileLog;
     private readonly ILogger<IpcCommandHandler> _logger;
-    private readonly ConcurrentDictionary<string, PolicyUpdateSession> _policySessions = new(StringComparer.Ordinal);
-    private static readonly TimeSpan SessionTtl = TimeSpan.FromMinutes(30);
 
     public IpcCommandHandler(
         GatewayRuntime runtime,
@@ -38,16 +35,23 @@ public sealed class IpcCommandHandler
             {
                 IpcCommands.Ping => new IpcResponse(true),
                 IpcCommands.GetStatus => HandleGetStatus(),
+                IpcCommands.GetAppStatus => HandleGetAppStatus(),
+                IpcCommands.ListRelays => HandleListRelays(),
+                IpcCommands.GetRelay => HandleGetRelay(request.JsonPayload),
+                IpcCommands.UpsertRelay => HandleUpsertRelay(request.JsonPayload),
+                IpcCommands.DeleteRelay => HandleDeleteRelay(request.JsonPayload),
+                IpcCommands.SetRelayEnabled => HandleSetRelayEnabled(request.JsonPayload),
                 IpcCommands.SetConfig => HandleSetConfig(request.JsonPayload),
                 IpcCommands.SetLicenseKey => HandleSetLicenseKey(request.JsonPayload),
                 IpcCommands.RequestLicenseTransfer => HandleRequestLicenseTransfer(),
                 IpcCommands.GetCapabilities => HandleGetCapabilities(),
-                IpcCommands.UpdateWhitelist => HandleUpdateWhitelist(request.JsonPayload),
-                IpcCommands.GetPolicyList => HandleGetPolicyList(request.JsonPayload),
-                IpcCommands.BeginPolicyUpdate => HandleBeginPolicyUpdate(request.JsonPayload),
-                IpcCommands.AppendPolicyEntries => HandleAppendPolicyEntries(request.JsonPayload),
-                IpcCommands.CommitPolicyUpdate => HandleCommitPolicyUpdate(request.JsonPayload),
-                IpcCommands.CancelPolicyUpdate => HandleCancelPolicyUpdate(request.JsonPayload),
+                IpcCommands.ListRelayPolicyLists => HandleListRelayPolicyLists(request.JsonPayload),
+                IpcCommands.GetRelayPolicyList => HandleGetRelayPolicyList(request.JsonPayload),
+                IpcCommands.CreateRelayPolicyList => HandleCreateRelayPolicyList(request.JsonPayload),
+                IpcCommands.UpdateRelayPolicyListMeta => HandleUpdateRelayPolicyListMeta(request.JsonPayload),
+                IpcCommands.ReorderRelayPolicyLists => HandleReorderRelayPolicyLists(request.JsonPayload),
+                IpcCommands.ReplaceRelayPolicyListEntries => HandleReplaceRelayPolicyListEntries(request.JsonPayload),
+                IpcCommands.DeleteRelayPolicyList => HandleDeleteRelayPolicyList(request.JsonPayload),
                 IpcCommands.StartProxy => HandleStartProxy(),
                 IpcCommands.StopProxy => HandleStopProxy(),
                 IpcCommands.VerifyLicense => await HandleVerifyLicenseAsync(cancellationToken),
@@ -56,7 +60,7 @@ public sealed class IpcCommandHandler
                 IpcCommands.StartLocalGateway => HandleStartLocalGateway(),
                 IpcCommands.StopLocalGateway => HandleStopLocalGateway(),
                 IpcCommands.RestartLocalGateway => HandleRestartLocalGateway(),
-                IpcCommands.GetLocalGatewayClients => HandleGetLocalGatewayClients(),
+                IpcCommands.GetLocalGatewayClients => HandleGetLocalGatewayClients(request.JsonPayload),
                 IpcCommands.AddLocalGatewayClient => HandleAddLocalGatewayClient(request.JsonPayload),
                 IpcCommands.UpdateLocalGatewayClient => HandleUpdateLocalGatewayClient(request.JsonPayload),
                 IpcCommands.DeleteLocalGatewayClient => HandleDeleteLocalGatewayClient(request.JsonPayload),
@@ -79,21 +83,90 @@ public sealed class IpcCommandHandler
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(new StatusResponse(status)));
     }
 
+    private IpcResponse HandleGetAppStatus()
+    {
+        var status = _runtime.GetAppStatusSnapshot();
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(new AppStatusResponse(status)));
+    }
+
+    private IpcResponse HandleListRelays()
+    {
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(new RelaysResponse(_runtime.ListRelays())));
+    }
+
+    private IpcResponse HandleGetRelay(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<RelayIdRequest>(jsonPayload);
+        if (payload is null || string.IsNullOrWhiteSpace(payload.RelayId))
+        {
+            return new IpcResponse(false, "Relay id is required.");
+        }
+
+        return _runtime.TryGetRelay(payload.RelayId, out var relay)
+            ? new IpcResponse(true, JsonPayload: IpcJson.Serialize(new RelayResponse(relay)))
+            : new IpcResponse(false, "Relay not found.");
+    }
+
+    private IpcResponse HandleUpsertRelay(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<UpsertRelayRequest>(jsonPayload);
+        if (payload?.Relay is null)
+        {
+            return new IpcResponse(false, "Invalid relay payload.");
+        }
+
+        var relay = _runtime.UpsertRelay(payload.Relay);
+        _fileLog.Info($"Relay upserted via IPC. relayId={relay.Id} name={relay.Name}");
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(new RelayResponse(relay)));
+    }
+
+    private IpcResponse HandleDeleteRelay(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<DeleteRelayRequest>(jsonPayload);
+        if (payload is null || string.IsNullOrWhiteSpace(payload.RelayId))
+        {
+            return new IpcResponse(false, "Relay id is required.");
+        }
+
+        return _runtime.DeleteRelay(payload.RelayId)
+            ? new IpcResponse(true)
+            : new IpcResponse(false, "Relay not found.");
+    }
+
+    private IpcResponse HandleSetRelayEnabled(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<SetRelayEnabledRequest>(jsonPayload);
+        if (payload is null || string.IsNullOrWhiteSpace(payload.RelayId))
+        {
+            return new IpcResponse(false, "Relay id is required.");
+        }
+
+        return _runtime.SetRelayEnabled(payload.RelayId, payload.Enabled)
+            ? new IpcResponse(true)
+            : new IpcResponse(false, "Relay not found.");
+    }
+
     private IpcResponse HandleGetCapabilities()
     {
         var capabilities = new[]
         {
             IpcCommands.GetStatus,
+            IpcCommands.GetAppStatus,
+            IpcCommands.ListRelays,
+            IpcCommands.GetRelay,
+            IpcCommands.UpsertRelay,
+            IpcCommands.DeleteRelay,
+            IpcCommands.SetRelayEnabled,
             IpcCommands.SetConfig,
             IpcCommands.SetLicenseKey,
             IpcCommands.RequestLicenseTransfer,
-            IpcCommands.UpdateWhitelist,
-            IpcCommands.GetPolicyList,
-            IpcCommands.BeginPolicyUpdate,
-            IpcCommands.AppendPolicyEntries,
-            IpcCommands.CommitPolicyUpdate,
-            IpcCommands.CancelPolicyUpdate,
-            "blacklist_supported",
+            IpcCommands.ListRelayPolicyLists,
+            IpcCommands.GetRelayPolicyList,
+            IpcCommands.CreateRelayPolicyList,
+            IpcCommands.UpdateRelayPolicyListMeta,
+            IpcCommands.ReorderRelayPolicyLists,
+            IpcCommands.ReplaceRelayPolicyListEntries,
+            IpcCommands.DeleteRelayPolicyList,
             IpcCommands.StartProxy,
             IpcCommands.StopProxy,
             IpcCommands.VerifyLicense,
@@ -127,131 +200,154 @@ public sealed class IpcCommandHandler
         return new IpcResponse(true);
     }
 
-    private IpcResponse HandleUpdateWhitelist(string? jsonPayload)
+    private IpcResponse HandleListRelayPolicyLists(string? jsonPayload)
     {
-        var payload = IpcJson.Deserialize<UpdateWhitelistRequest>(jsonPayload);
-        if (payload is null)
-        {
-            return new IpcResponse(false, "Invalid whitelist payload.");
-        }
-
-        if (!_runtime.TryApplyPolicyUpdate(
-            PolicyListTypes.Whitelist,
-            PolicyUpdateModes.Replace,
-            payload.Entries,
-            out var result,
-            out var error))
-        {
-            return new IpcResponse(false, error ?? "Invalid whitelist.");
-        }
-
-        _fileLog.Info($"Whitelist updated via IPC ({payload.Entries.Count} entries).");
-        var payloadJson = result is null
-            ? null
-            : IpcJson.Serialize(new CommitPolicyUpdateResponse(
-                result.ListType,
-                result.Mode,
-                result.AppliedCount,
-                result.DuplicateDroppedCount,
-                result.InvalidCount,
-                result.Count,
-                result.Revision,
-                result.UpdatedAtUtc));
-        return new IpcResponse(true, JsonPayload: payloadJson);
-    }
-
-    private IpcResponse HandleGetPolicyList(string? jsonPayload)
-    {
-        var payload = IpcJson.Deserialize<GetPolicyListRequest>(jsonPayload);
-        var listType = PolicyListTypes.Normalize(payload?.ListType);
-        var snapshot = _runtime.GetPolicyListSnapshot(listType);
-        var response = new GetPolicyListResponse(
-            snapshot.ListType,
-            snapshot.Entries,
-            snapshot.Count,
+        var payload = IpcJson.Deserialize<ListRelayPolicyListsRequest>(jsonPayload);
+        var relayId = payload?.RelayId ?? string.Empty;
+        var snapshot = _runtime.GetRelayPolicySetSnapshot(relayId);
+        var response = new ListRelayPolicyListsResponse(
+            snapshot.RelayId,
+            snapshot.Lists
+                .Select(x => new RelayPolicyListDto(x.ListId, x.RelayId, x.Label, x.ListType, x.Priority, x.EntryCount))
+                .ToArray(),
             snapshot.Revision,
-            snapshot.UpdatedAtUtc);
+            snapshot.UpdatedAtUtc,
+            snapshot.TotalListCount,
+            snapshot.TotalEntryCount,
+            snapshot.WhitelistListCount,
+            snapshot.BlacklistListCount);
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
     }
 
-    private IpcResponse HandleBeginPolicyUpdate(string? jsonPayload)
+    private IpcResponse HandleGetRelayPolicyList(string? jsonPayload)
     {
-        CleanupStaleSessions();
-        var payload = IpcJson.Deserialize<BeginPolicyUpdateRequest>(jsonPayload);
+        var payload = IpcJson.Deserialize<GetRelayPolicyListRequest>(jsonPayload);
+        if (payload is null || string.IsNullOrWhiteSpace(payload.ListId))
+        {
+            return new IpcResponse(false, "Policy list id is required.");
+        }
+
+        var relayId = payload.RelayId ?? string.Empty;
+        var list = _runtime.GetRelayPolicyListSnapshot(relayId, payload.ListId);
+        if (list is null)
+        {
+            return new IpcResponse(false, "Policy list was not found.");
+        }
+
+        var set = _runtime.GetRelayPolicySetSnapshot(relayId);
+        var response = new GetRelayPolicyListResponse(
+            list.ListId,
+            list.RelayId,
+            list.Label,
+            list.ListType,
+            list.Priority,
+            list.Entries,
+            list.EntryCount,
+            set.Revision,
+            set.UpdatedAtUtc);
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
+    }
+
+    private IpcResponse HandleCreateRelayPolicyList(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<CreateRelayPolicyListRequest>(jsonPayload);
         if (payload is null)
         {
-            return new IpcResponse(false, "Invalid begin-policy-update payload.");
+            return new IpcResponse(false, "Invalid create-relay-policy-list payload.");
         }
 
-        var listType = PolicyListTypes.Normalize(payload.ListType);
-        var mode = PolicyUpdateModes.Normalize(payload.Mode);
-        var sessionId = Guid.NewGuid().ToString("N");
-        _policySessions[sessionId] = new PolicyUpdateSession(listType, mode);
-
-        var response = new BeginPolicyUpdateResponse(sessionId, listType, mode);
+        var summary = _runtime.CreateRelayPolicyList(payload.RelayId ?? string.Empty, payload.Label, payload.ListType, payload.Priority);
+        var set = _runtime.GetRelayPolicySetSnapshot(payload.RelayId ?? string.Empty);
+        var response = new RelayPolicyListMutationResponse(
+            summary.ListId,
+            summary.RelayId,
+            summary.Label,
+            summary.ListType,
+            summary.Priority,
+            summary.EntryCount,
+            set.Revision,
+            set.UpdatedAtUtc);
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
     }
 
-    private IpcResponse HandleAppendPolicyEntries(string? jsonPayload)
+    private IpcResponse HandleUpdateRelayPolicyListMeta(string? jsonPayload)
     {
-        CleanupStaleSessions();
-        var payload = IpcJson.Deserialize<AppendPolicyEntriesRequest>(jsonPayload);
-        if (payload is null || string.IsNullOrWhiteSpace(payload.SessionId))
+        var payload = IpcJson.Deserialize<UpdateRelayPolicyListMetaRequest>(jsonPayload);
+        if (payload is null || string.IsNullOrWhiteSpace(payload.ListId))
         {
-            return new IpcResponse(false, "Invalid append-policy-entries payload.");
+            return new IpcResponse(false, "Invalid update-relay-policy-list-meta payload.");
         }
 
-        if (!_policySessions.TryGetValue(payload.SessionId, out var session))
-        {
-            return new IpcResponse(false, "Policy update session was not found or expired.");
-        }
-
-        session.Entries.AddRange(payload.Entries.Where(x => !string.IsNullOrWhiteSpace(x)));
-        session.Touch();
-        return new IpcResponse(true);
-    }
-
-    private IpcResponse HandleCommitPolicyUpdate(string? jsonPayload)
-    {
-        CleanupStaleSessions();
-        var payload = IpcJson.Deserialize<CommitPolicyUpdateRequest>(jsonPayload);
-        if (payload is null || string.IsNullOrWhiteSpace(payload.SessionId))
-        {
-            return new IpcResponse(false, "Invalid commit-policy-update payload.");
-        }
-
-        if (!_policySessions.TryRemove(payload.SessionId, out var session))
-        {
-            return new IpcResponse(false, "Policy update session was not found or expired.");
-        }
-
-        if (!_runtime.TryApplyPolicyUpdate(session.ListType, session.Mode, session.Entries, out var result, out var error))
-        {
-            return new IpcResponse(false, error ?? "Policy update failed.");
-        }
-
-        var response = new CommitPolicyUpdateResponse(
-            session.ListType,
-            session.Mode,
-            result?.AppliedCount ?? 0,
-            result?.DuplicateDroppedCount ?? 0,
-            result?.InvalidCount ?? 0,
-            result?.Count ?? 0,
-            result?.Revision ?? 0,
-            result?.UpdatedAtUtc ?? DateTimeOffset.MinValue);
+        var summary = _runtime.UpdateRelayPolicyListMeta(payload.RelayId ?? string.Empty, payload.ListId, payload.Label, payload.ListType);
+        var set = _runtime.GetRelayPolicySetSnapshot(payload.RelayId ?? string.Empty);
+        var response = new RelayPolicyListMutationResponse(
+            summary.ListId,
+            summary.RelayId,
+            summary.Label,
+            summary.ListType,
+            summary.Priority,
+            summary.EntryCount,
+            set.Revision,
+            set.UpdatedAtUtc);
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
     }
 
-    private IpcResponse HandleCancelPolicyUpdate(string? jsonPayload)
+    private IpcResponse HandleReorderRelayPolicyLists(string? jsonPayload)
     {
-        CleanupStaleSessions();
-        var payload = IpcJson.Deserialize<CancelPolicyUpdateRequest>(jsonPayload);
-        if (payload is null || string.IsNullOrWhiteSpace(payload.SessionId))
+        var payload = IpcJson.Deserialize<ReorderRelayPolicyListsRequest>(jsonPayload);
+        if (payload is null)
         {
-            return new IpcResponse(false, "Invalid cancel-policy-update payload.");
+            return new IpcResponse(false, "Invalid reorder-relay-policy-lists payload.");
         }
 
-        _policySessions.TryRemove(payload.SessionId, out _);
+        _runtime.ReorderRelayPolicyLists(payload.RelayId ?? string.Empty, payload.OrderedListIds);
+        var set = _runtime.GetRelayPolicySetSnapshot(payload.RelayId ?? string.Empty);
+        var response = new ListRelayPolicyListsResponse(
+            set.RelayId,
+            set.Lists.Select(x => new RelayPolicyListDto(x.ListId, x.RelayId, x.Label, x.ListType, x.Priority, x.EntryCount)).ToArray(),
+            set.Revision,
+            set.UpdatedAtUtc,
+            set.TotalListCount,
+            set.TotalEntryCount,
+            set.WhitelistListCount,
+            set.BlacklistListCount);
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
+    }
+
+    private IpcResponse HandleReplaceRelayPolicyListEntries(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<ReplaceRelayPolicyListEntriesRequest>(jsonPayload);
+        if (payload is null || string.IsNullOrWhiteSpace(payload.ListId))
+        {
+            return new IpcResponse(false, "Invalid replace-relay-policy-list-entries payload.");
+        }
+
+        var result = _runtime.ReplaceRelayPolicyListEntries(payload.RelayId ?? string.Empty, payload.ListId, payload.Entries);
+        var response = new ReplaceRelayPolicyListEntriesResponse(
+            result.ListId,
+            result.AppliedCount,
+            result.DuplicateDroppedCount,
+            result.InvalidCount,
+            result.Count,
+            result.Revision,
+            result.UpdatedAtUtc);
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
+    }
+
+    private IpcResponse HandleDeleteRelayPolicyList(string? jsonPayload)
+    {
+        var payload = IpcJson.Deserialize<DeleteRelayPolicyListRequest>(jsonPayload);
+        if (payload is null || string.IsNullOrWhiteSpace(payload.ListId))
+        {
+            return new IpcResponse(false, "Invalid delete-relay-policy-list payload.");
+        }
+
+        var deleted = _runtime.DeleteRelayPolicyList(payload.RelayId ?? string.Empty, payload.ListId);
+        if (!deleted)
+        {
+            return new IpcResponse(false, "Policy list was not found.");
+        }
+
         return new IpcResponse(true);
     }
 
@@ -307,6 +403,7 @@ public sealed class IpcCommandHandler
             result.ExpiresAtUtc,
             result.FromCache,
             result.Error,
+            result.Source,
             result.Reason,
             result.TransferRequired,
             result.TransferLimitPerRollingYear,
@@ -374,10 +471,16 @@ public sealed class IpcCommandHandler
         return new IpcResponse(true);
     }
 
-    private IpcResponse HandleGetLocalGatewayClients()
+    private IpcResponse HandleGetLocalGatewayClients(string? jsonPayload)
     {
-        var config = _runtime.GetConfigSnapshot().LocalGateway;
-        var clients = _runtime.GetLocalGatewayClientsSnapshot()
+        var payload = IpcJson.Deserialize<RelayIdRequest>(jsonPayload);
+        var relayId = (payload?.RelayId ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(relayId) || !_runtime.TryGetRelay(relayId, out var relay))
+        {
+            return new IpcResponse(false, "Relay id is required and must reference an existing relay.");
+        }
+        var config = relay.LocalGateway;
+        var clients = _runtime.GetLocalGatewayClientsSnapshot(relayId)
             .Select(x => new LocalGatewayClientRecord(
                 x.Id,
                 x.Email,
@@ -386,14 +489,19 @@ public sealed class IpcCommandHandler
                 x.Protocol,
                 x.Username,
                 x.Secret,
+                x.TotalGB,
+                x.ExpiryTime,
+                x.SpeedLimitKbps,
+                x.LastSeenAtUnixMs,
+                x.ActiveConnections,
                 x.CreatedAtUtc))
             .ToArray();
 
-        var payload = new LocalGatewayClientsResponse(
+        var responsePayload = new LocalGatewayClientsResponse(
             LocalGatewayProtocols.Normalize(config.Protocol),
             config.Port,
             clients);
-        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(payload));
+        return new IpcResponse(true, JsonPayload: IpcJson.Serialize(responsePayload));
     }
 
     private IpcResponse HandleAddLocalGatewayClient(string? jsonPayload)
@@ -404,7 +512,12 @@ public sealed class IpcCommandHandler
             return new IpcResponse(false, "Invalid add-local-client payload.");
         }
 
-        if (!_runtime.TryAddLocalGatewayClient(payload.Email, payload.Remark, out var client, out var error) || client is null)
+        if (string.IsNullOrWhiteSpace(payload.RelayId))
+        {
+            return new IpcResponse(false, "Relay id is required.");
+        }
+
+        if (!_runtime.TryAddLocalGatewayClient(payload.Email, payload.Remark, payload.RelayId, out var client, out var error) || client is null)
         {
             return new IpcResponse(false, error ?? "Failed adding local gateway client.");
         }
@@ -417,6 +530,11 @@ public sealed class IpcCommandHandler
             client.Protocol,
             client.Username,
             client.Secret,
+            client.TotalGB,
+            client.ExpiryTime,
+            client.SpeedLimitKbps,
+            client.LastSeenAtUnixMs,
+            client.ActiveConnections,
             client.CreatedAtUtc);
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
     }
@@ -428,6 +546,10 @@ public sealed class IpcCommandHandler
         {
             return new IpcResponse(false, "Invalid update-local-client payload.");
         }
+        if (string.IsNullOrWhiteSpace(payload.RelayId))
+        {
+            return new IpcResponse(false, "Relay id is required.");
+        }
 
         var runtimeModel = new LocalGatewayClient
         {
@@ -438,10 +560,15 @@ public sealed class IpcCommandHandler
             Protocol = payload.Client.Protocol,
             Username = payload.Client.Username,
             Secret = payload.Client.Secret,
+            TotalGB = payload.Client.TotalGB,
+            ExpiryTime = payload.Client.ExpiryTime,
+            SpeedLimitKbps = payload.Client.SpeedLimitKbps,
+            LastSeenAtUnixMs = payload.Client.LastSeenAtUnixMs,
+            ActiveConnections = payload.Client.ActiveConnections,
             CreatedAtUtc = payload.Client.CreatedAtUtc
         };
 
-        if (!_runtime.TryUpdateLocalGatewayClient(runtimeModel, out var error))
+        if (!_runtime.TryUpdateLocalGatewayClient(runtimeModel, payload.RelayId, out var error))
         {
             return new IpcResponse(false, error ?? "Failed updating local gateway client.");
         }
@@ -456,8 +583,12 @@ public sealed class IpcCommandHandler
         {
             return new IpcResponse(false, "Invalid delete-local-client payload.");
         }
+        if (string.IsNullOrWhiteSpace(payload.RelayId))
+        {
+            return new IpcResponse(false, "Relay id is required.");
+        }
 
-        if (!_runtime.TryDeleteLocalGatewayClient(payload.ClientId, out var error))
+        if (!_runtime.TryDeleteLocalGatewayClient(payload.ClientId, payload.RelayId, out var error))
         {
             return new IpcResponse(false, error ?? "Failed deleting local gateway client.");
         }
@@ -472,8 +603,12 @@ public sealed class IpcCommandHandler
         {
             return new IpcResponse(false, "Invalid build-local-client-config payload.");
         }
+        if (string.IsNullOrWhiteSpace(payload.RelayId))
+        {
+            return new IpcResponse(false, "Relay id is required.");
+        }
 
-        if (!_runtime.TryBuildLocalGatewayClientConfig(payload.ClientId, out var configPayload, out var error))
+        if (!_runtime.TryBuildLocalGatewayClientConfig(payload.ClientId, payload.RelayId, out var configPayload, out var error))
         {
             return new IpcResponse(false, error ?? "Failed building local gateway client config.");
         }
@@ -489,35 +624,4 @@ public sealed class IpcCommandHandler
         return new IpcResponse(true, JsonPayload: IpcJson.Serialize(response));
     }
 
-    private void CleanupStaleSessions()
-    {
-        var threshold = DateTimeOffset.UtcNow - SessionTtl;
-        foreach (var kvp in _policySessions)
-        {
-            if (kvp.Value.LastUpdatedUtc < threshold)
-            {
-                _policySessions.TryRemove(kvp.Key, out _);
-            }
-        }
-    }
-
-    private sealed class PolicyUpdateSession
-    {
-        public PolicyUpdateSession(string listType, string mode)
-        {
-            ListType = listType;
-            Mode = mode;
-            LastUpdatedUtc = DateTimeOffset.UtcNow;
-        }
-
-        public string ListType { get; }
-        public string Mode { get; }
-        public List<string> Entries { get; } = [];
-        public DateTimeOffset LastUpdatedUtc { get; private set; }
-
-        public void Touch()
-        {
-            LastUpdatedUtc = DateTimeOffset.UtcNow;
-        }
-    }
 }

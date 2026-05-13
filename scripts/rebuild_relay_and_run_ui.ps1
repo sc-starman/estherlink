@@ -56,6 +56,45 @@ function Stop-UiProcesses {
     Get-Process -Name "OmniRelay.UI" -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
+function Stop-LockingNodeProcesses {
+    param([string]$RepoRootPath)
+
+    Write-Step "Stopping Node.js processes that may lock service OmniPanel artifacts"
+    $serviceBin = (Join-Path $RepoRootPath "src\OmniRelay.Service\bin").ToLowerInvariant()
+    $panelRoot = (Join-Path $RepoRootPath "src\OmniRelay.GatewayPanel").ToLowerInvariant()
+
+    Get-CimInstance Win32_Process -Filter "name = 'node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+        $cmdLine = $_.CommandLine
+        if ($null -eq $cmdLine) { $cmdLine = "" }
+        $cmd = $cmdLine.ToLowerInvariant()
+        if ($cmd.Contains($serviceBin) -or $cmd.Contains($panelRoot)) {
+            try {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+                Write-Host "Stopped node.exe PID=$($_.ProcessId)" -ForegroundColor DarkYellow
+            }
+            catch {
+                Write-Host "Failed to stop node.exe PID=$($_.ProcessId): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+}
+
+function Clean-ProjectArtifacts {
+    param([string]$ProjectPath)
+
+    $projectDir = Split-Path -Parent $ProjectPath
+    $objDir = Join-Path $projectDir "obj"
+    $binDir = Join-Path $projectDir "bin"
+
+    if (Test-Path -LiteralPath $objDir) {
+        Remove-Item -LiteralPath $objDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if (Test-Path -LiteralPath $binDir) {
+        Remove-Item -LiteralPath $binDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Remove-ServiceIfExists {
     param([string]$Name)
 
@@ -90,20 +129,27 @@ function New-RelayService {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $serviceProj = Join-Path $repoRoot "src\OmniRelay.Service\OmniRelay.Service.csproj"
 $uiProj = Join-Path $repoRoot "src\OmniRelay.UI\OmniRelay.UI.csproj"
+$prepareOmniPanelAssetsScript = Join-Path $repoRoot "scripts\prepare_service_omnipanel_assets.ps1"
 $serviceExe = Join-Path $repoRoot "src\OmniRelay.Service\bin\$Configuration\net8.0-windows\OmniRelay.Service.exe"
 $uiExe = Join-Path $repoRoot "src\OmniRelay.UI\bin\$Configuration\net8.0-windows\OmniRelay.UI.exe"
 
 Ensure-Elevated
 Assert-Admin
 Stop-UiProcesses
+Stop-LockingNodeProcesses -RepoRootPath $repoRoot
 
 Write-Step "Stopping and reinstalling Windows relay service"
 Remove-ServiceIfExists -Name $ServiceName
 
+Write-Step "Preparing service OmniPanel artifacts"
+powershell -ExecutionPolicy Bypass -File $prepareOmniPanelAssetsScript
+
 Write-Step "Building relay service"
+Clean-ProjectArtifacts -ProjectPath $serviceProj
 dotnet build $serviceProj -c $Configuration
 
 Write-Step "Building UI"
+Clean-ProjectArtifacts -ProjectPath $uiProj
 dotnet build $uiProj -c $Configuration
 
 if (-not (Test-Path $serviceExe)) {

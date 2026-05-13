@@ -9,36 +9,65 @@ import {
   type GatewayClientCreateOptions,
   type GatewayClientRecord,
   type GatewayInboundSnapshot,
-  type GatewayProtocolProvider
+  type GatewayProtocolCapabilities,
+  type GatewayProtocolProvider,
+  type ProtocolBackupInput,
+  type ProtocolBackupPayload
 } from "@/lib/providers/types";
+import {
+  deleteProtocolClientFromDb,
+  listProtocolClientsFromDb,
+  readRuntimeStatsByClientIds,
+  upsertProtocolClientToDb
+} from "@/lib/providers/singbox-shared";
+import { resolveProtocolConfigPort, resolveProtocolConfigString } from "@/lib/protocol-config";
 
-const OPENVPN_ACCOUNTING_CAPABILITIES = {
+const OPENVPN_REMOTE_CAPABILITIES = {
   supportsTrafficLimit: true,
   supportsDurationLimit: true,
-  supportsUsageAccounting: true
+  supportsUsageAccounting: true,
+  supportsSpeedLimit: true,
+  supportsOnlineStatus: true
+} as const;
+
+const OPENVPN_LOCAL_CAPABILITIES = {
+  supportsTrafficLimit: true,
+  supportsDurationLimit: true,
+  supportsUsageAccounting: true,
+  supportsSpeedLimit: false,
+  supportsOnlineStatus: false
 } as const;
 
 const exec = promisify(execCallback);
-const DEFAULT_SYNC_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
+const DEFAULT_SYNC_COMMAND = "";
 const DEFAULT_ACCOUNTING_DB = "/etc/omnirelay/gateway/connector/accounting.db";
 const LEGACY_ACCOUNTING_DB = "/etc/omnirelay/gateway/openvpn/accounting.db";
 const DEFAULT_STATUS_FILE = "/var/log/openvpn/omnirelay-status.log";
+
+function sqlite3Command(): string {
+  const configured =
+    process.env.OMNIRELAY_SQLITE3_BIN?.trim() ||
+    process.env.SQLITE3_BIN?.trim() ||
+    "sqlite3";
+  return /[\s\\/]/.test(configured) ? `"${configured.replace(/"/g, '\\"')}"` : configured;
+}
 
 interface OpenVpnClientRecord extends GatewayClientRecord {
   username: string;
   password: string;
   totalGB: number;
   expiryTime: number;
+  speedLimitKbps: number;
 }
 
 interface OpenVpnAccountingSource {
-  getCapabilities(): typeof OPENVPN_ACCOUNTING_CAPABILITIES;
+  getCapabilities(isLocal: boolean): GatewayProtocolCapabilities;
   getUsageByClientId(clientIds: string[]): Promise<Map<string, number>>;
 }
 
 class LocalSqliteOpenVpnAccountingSource implements OpenVpnAccountingSource {
-  public getCapabilities(): typeof OPENVPN_ACCOUNTING_CAPABILITIES {
-    return OPENVPN_ACCOUNTING_CAPABILITIES;
+  public getCapabilities(isLocal: boolean): GatewayProtocolCapabilities {
+    return isLocal ? OPENVPN_LOCAL_CAPABILITIES : OPENVPN_REMOTE_CAPABILITIES;
   }
 
   public async getUsageByClientId(clientIds: string[]): Promise<Map<string, number>> {
@@ -77,7 +106,7 @@ class LocalSqliteOpenVpnAccountingSource implements OpenVpnAccountingSource {
 
     try {
       const { stdout } = await exec(
-        `sqlite3 -csv -noheader -cmd ".timeout 5000" -cmd "PRAGMA query_only=ON;" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
+        `${sqlite3Command()} -csv -noheader -cmd ".timeout 5000" -cmd "PRAGMA query_only=ON;" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
       );
       const usageMap = new Map<string, number>();
       for (const line of stdout.split(/\r?\n/)) {
@@ -113,16 +142,26 @@ function parsePort(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
 }
 
-function getClientsFilePath(): string {
-  return process.env.OPENVPN_CLIENTS_FILE?.trim() || "/opt/omnirelay/omni-gateway/openvpn_clients.json";
-}
-
 function getExportsDir(): string {
   return process.env.OPENVPN_EXPORT_DIR?.trim() || "/opt/omnirelay/omni-gateway/openvpn-exports";
 }
 
-function getPublicPort(): number {
-  return parsePort(process.env.OPENVPN_PUBLIC_PORT, 443);
+function getOpenVpnRuntimeDir(): string {
+  const configured = process.env.OPENVPN_STATE_DIR?.trim();
+  if (configured) {
+    return configured;
+  }
+
+  const exportsDir = process.env.OPENVPN_EXPORT_DIR?.trim();
+  if (exportsDir) {
+    return join(dirname(exportsDir), "openvpn");
+  }
+
+  return "/etc/omnirelay/gateway/openvpn";
+}
+
+async function getPublicPort(): Promise<number> {
+  return resolveProtocolConfigPort("openvpn_tcp_singbox", "publicPort", process.env.OPENVPN_PUBLIC_PORT, 443);
 }
 
 function getStatusFilePath(): string {
@@ -131,6 +170,14 @@ function getStatusFilePath(): string {
 
 function escapeSqlLiteral(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+function getAccountingDbCandidates(): string[] {
+  return [
+    process.env.OPENVPN_ACCOUNTING_DB?.trim() || "",
+    DEFAULT_ACCOUNTING_DB,
+    LEGACY_ACCOUNTING_DB
+  ].filter((item, index, array) => item && array.indexOf(item) === index);
 }
 
 async function readLiveUsageByUsername(): Promise<Map<string, number>> {
@@ -304,6 +351,70 @@ function normalizeSudoCommand(command: string): string {
   return trimmed.replace(/^(\S*sudo)\s+/, "$1 -n ");
 }
 
+function isLocalRelayMode(): boolean {
+  return (process.env.OMNIRELAY_LOCAL_RELAY_MODE ?? "").trim().toLowerCase() === "true";
+}
+
+function normalizePemBlock(value: string): string {
+  return value.replace(/\r\n/g, "\n").trim();
+}
+
+async function buildLocalFallbackProfile(host: string, port: number): Promise<string> {
+  const runtimeDir = getOpenVpnRuntimeDir();
+  const readPem = async (fileName: string, label: string): Promise<string> => {
+    const raw = await fs.readFile(join(runtimeDir, fileName), "utf8");
+    const normalized = normalizePemBlock(raw);
+    if (!normalized) {
+      throw new Error(`${label} is empty`);
+    }
+    return normalized;
+  };
+  const readPemAny = async (fileNames: string[], label: string): Promise<string> => {
+    let lastError = "";
+    for (const fileName of fileNames) {
+      try {
+        return await readPem(fileName, label);
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    throw new Error(`OpenVPN ${label} missing or unreadable (${join(runtimeDir, fileNames[0])}): ${lastError}`);
+  };
+
+  const ca = await readPemAny(["ca.crt"], "shared CA cert");
+  const clientCert = await readPemAny(["client-shared.crt", "server.crt", "client.crt"], "shared client cert");
+  const clientKey = await readPemAny(["client-shared.key", "server.key", "client.key"], "shared client key");
+  const taKey = await readPemAny(["ta.key"], "tls-crypt key");
+
+  return [
+    "client",
+    "dev tun",
+    "proto tcp-client",
+    `remote ${host} ${port}`,
+    "nobind",
+    "persist-key",
+    "persist-tun",
+    "auth-user-pass",
+    "remote-cert-tls server",
+    "cipher AES-256-GCM",
+    "auth SHA256",
+    "verb 3",
+    "<ca>",
+    ca,
+    "</ca>",
+    "<cert>",
+    clientCert,
+    "</cert>",
+    "<key>",
+    clientKey,
+    "</key>",
+    "<tls-crypt>",
+    taKey,
+    "</tls-crypt>",
+    ""
+  ].join("\n");
+}
+
 function randomAlphaNum(length: number): string {
   return randomBytes(length)
     .toString("base64")
@@ -346,6 +457,15 @@ function normalizeExpiryTime(value: unknown): number {
   return Math.trunc(numeric);
 }
 
+function normalizeSpeedLimitKbps(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 0;
+  }
+
+  return Math.trunc(numeric);
+}
+
 function toSafeUsername(seed: string): string {
   const normalized = seed
     .toLowerCase()
@@ -371,40 +491,52 @@ function makeUsername(email: string, existing: Set<string>): string {
 }
 
 async function readClients(): Promise<OpenVpnClientRecord[]> {
-  const filePath = getClientsFilePath();
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const payload = JSON.parse(raw) as unknown;
-    if (!Array.isArray(payload)) {
-      return [];
-    }
-
-    return payload
-      .map((item) => ({
-        id: String((item as Record<string, unknown>).id ?? ""),
-        email: String((item as Record<string, unknown>).email ?? ""),
-        enable: Boolean((item as Record<string, unknown>).enable ?? true),
-        username: String((item as Record<string, unknown>).username ?? ""),
-        password: String((item as Record<string, unknown>).password ?? ""),
-        totalGB: normalizeTotalGB((item as Record<string, unknown>).totalGB),
-        expiryTime: normalizeExpiryTime((item as Record<string, unknown>).expiryTime)
-      }))
-      .filter((item) => item.id && item.email && item.username && item.password);
-  } catch {
-    return [];
-  }
+  const rows = await listProtocolClientsFromDb("openvpn_tcp_singbox", getAccountingDbCandidates());
+  return rows
+    .map((row) => ({
+      id: row.id,
+      email: row.email,
+      enable: row.enable,
+      username: String(row.authUsername ?? "").trim(),
+      password: String(row.authSecret ?? "").trim(),
+      totalGB: normalizeTotalGB(row.totalGB),
+      expiryTime: normalizeExpiryTime(row.expiryTime),
+      speedLimitKbps: normalizeSpeedLimitKbps(row.speedLimitKbps)
+    }))
+    .filter((item) => item.id && item.email && item.username && item.password);
 }
 
 async function writeClients(clients: OpenVpnClientRecord[]): Promise<void> {
-  const filePath = getClientsFilePath();
-  await fs.mkdir(dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp`;
+  const protocolId = "openvpn_tcp_singbox";
+  const dbCandidates = getAccountingDbCandidates();
+  const existing = await listProtocolClientsFromDb(protocolId, dbCandidates);
+  for (const row of existing) {
+    await deleteProtocolClientFromDb(row.id, dbCandidates);
+  }
   const sorted = [...clients].sort((left, right) => left.email.localeCompare(right.email));
-  await fs.writeFile(tempPath, `${JSON.stringify(sorted, null, 2)}\n`, { encoding: "utf8", mode: 0o640 });
-  await fs.rename(tempPath, filePath);
+  for (const client of sorted) {
+    await upsertProtocolClientToDb(
+      protocolId,
+      {
+        id: client.id,
+        email: client.email,
+        enable: client.enable,
+        totalGB: client.totalGB,
+        expiryTime: client.expiryTime,
+        speedLimitKbps: client.speedLimitKbps,
+        authUsername: client.username,
+        authSecret: client.password
+      },
+      dbCandidates
+    );
+  }
 }
 
 async function syncOpenVpn(): Promise<void> {
+  if (isLocalRelayMode()) {
+    return;
+  }
+
   const command = normalizeSudoCommand(process.env.OPENVPN_SYNC_COMMAND?.trim() || DEFAULT_SYNC_COMMAND);
   if (!command) {
     return;
@@ -440,15 +572,31 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
   }
 
   public async getInbound(_session: OmniSession): Promise<GatewayInboundSnapshot> {
-    const clients = await readClients();
+    let clients = await readClients();
+    if (clients.length === 0 && isLocalRelayMode()) {
+      const bootstrap: OpenVpnClientRecord = {
+        id: randomUUID(),
+        email: "ovpn_default@local",
+        enable: true,
+        username: "ovpn_default",
+        password: randomAlphaNum(24),
+        totalGB: 0,
+        expiryTime: 0,
+        speedLimitKbps: 0
+      };
+      clients = [bootstrap];
+      await writeClients(clients);
+    }
+    const isLocal = isLocalRelayMode();
     const usageByClientId = await this.accountingSource.getUsageByClientId(clients.map((item) => item.id));
     const liveUsageByUsername = await readLiveUsageByUsername();
-    const capabilities = this.accountingSource.getCapabilities();
+    const runtimeStats = isLocal ? new Map() : await readRuntimeStatsByClientIds(clients.map((item) => item.id));
+    const capabilities = this.accountingSource.getCapabilities(isLocal);
     return {
       inbound: {
         id: 1,
         protocol: this.protocolId,
-        port: getPublicPort(),
+        port: await getPublicPort(),
         remark: "OmniRelay Managed OpenVPN (TCP)",
         enable: true
       },
@@ -457,13 +605,18 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
         usedBytes: Math.max(
           usageByClientId.get(item.id) ?? 0,
           liveUsageByUsername.get(item.username) ?? 0,
-          liveUsageByUsername.get(openVpnCnFromClientId(item.id)) ?? 0
+          liveUsageByUsername.get(openVpnCnFromClientId(item.id)) ?? 0,
+          runtimeStats.get(item.id)?.usedBytes ?? 0
         ),
         id: item.id,
         email: item.email,
         enable: item.enable,
         totalGB: item.totalGB,
-        expiryTime: item.expiryTime
+        expiryTime: item.expiryTime,
+        speedLimitKbps: item.speedLimitKbps,
+        lastSeenAtUnixMs: runtimeStats.get(item.id)?.lastSeenAtUnixMs ?? 0,
+        activeConnections: runtimeStats.get(item.id)?.activeConnections ?? 0,
+        isOnline: runtimeStats.get(item.id)?.isOnline ?? false
       })),
       capabilities
     };
@@ -484,7 +637,8 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       username: makeUsername(normalizedEmail, usernames),
       password: randomAlphaNum(24),
       totalGB: normalizeTotalGB(options?.totalGB),
-      expiryTime: normalizeExpiryTime(options?.expiryTime)
+      expiryTime: normalizeExpiryTime(options?.expiryTime),
+      speedLimitKbps: normalizeSpeedLimitKbps(options?.speedLimitKbps)
     };
 
     clients.push(client);
@@ -496,7 +650,11 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       enable: client.enable,
       totalGB: client.totalGB,
       expiryTime: client.expiryTime,
-      usedBytes: 0
+      speedLimitKbps: client.speedLimitKbps,
+      usedBytes: 0,
+      lastSeenAtUnixMs: 0,
+      activeConnections: 0,
+      isOnline: false
     };
   }
 
@@ -517,7 +675,8 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       email: String(client.email ?? clients[index].email).trim() || clients[index].email,
       enable: Boolean(client.enable),
       totalGB: normalizeTotalGB(client.totalGB ?? clients[index].totalGB),
-      expiryTime: normalizeExpiryTime(client.expiryTime ?? clients[index].expiryTime)
+      expiryTime: normalizeExpiryTime(client.expiryTime ?? clients[index].expiryTime),
+      speedLimitKbps: normalizeSpeedLimitKbps(client.speedLimitKbps ?? clients[index].speedLimitKbps)
     };
 
     await writeClients(clients);
@@ -552,25 +711,48 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       throw new Error("Client not found.");
     }
 
+    const host = await resolveProtocolConfigString(
+      "openvpn_tcp_singbox",
+      "publicHost",
+      process.env.PANEL_PUBLIC_HOST?.trim() || process.env.OPENVPN_PUBLIC_HOST?.trim() || process.env.OPENVPN_HOST?.trim(),
+      "127.0.0.1"
+    );
+    const port = await getPublicPort();
     const profilePath = join(getExportsDir(), `${trimmedId}.ovpn`);
     let profile = "";
     try {
       profile = await fs.readFile(profilePath, "utf8");
     } catch {
-      await syncOpenVpn();
-      profile = await fs.readFile(profilePath, "utf8");
+      if (isLocalRelayMode()) {
+        profile = await buildLocalFallbackProfile(host, port);
+      } else {
+        await syncOpenVpn();
+        profile = await fs.readFile(profilePath, "utf8");
+      }
     }
 
     // Older gateway scripts generated minimal profiles without embedded CA/TLS material.
     // Retry a sync once, then fail with a clear operator-facing error.
     if (!profile.includes("<ca>")) {
-      await syncOpenVpn();
-      profile = await fs.readFile(profilePath, "utf8");
+      if (isLocalRelayMode()) {
+        profile = await buildLocalFallbackProfile(host, port);
+      } else {
+        await syncOpenVpn();
+        profile = await fs.readFile(profilePath, "utf8");
+      }
     }
     if (!profile.includes("<ca>")) {
       throw new Error(
         "OpenVPN profile is missing embedded CA certificate. Upgrade gateway script and run sync-clients, then retry."
       );
+    }
+    if (isLocalRelayMode()) {
+      try {
+        await fs.mkdir(getExportsDir(), { recursive: true });
+        await fs.writeFile(profilePath, profile, { encoding: "utf8", mode: 0o640 });
+      } catch {
+        // Best-effort cache only; the generated profile above is still returned.
+      }
     }
 
     const fileStem = toSafeFileStem(client.email);
@@ -584,5 +766,66 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       ovpnFileName: `${fileStem}-${client.id.slice(0, 8)}.ovpn`,
       ovpnContent: profile
     };
+  }
+
+  public async exportBackup(_session: OmniSession): Promise<ProtocolBackupPayload> {
+    const clients = await readClients();
+    const payload = {
+      protocolId: this.protocolId,
+      exportedAt: new Date().toISOString(),
+      clients
+    };
+    const body = new TextEncoder().encode(`${JSON.stringify(payload, null, 2)}\n`);
+    return {
+      fileName: `openvpn-clients-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+      contentType: "application/json",
+      body
+    };
+  }
+
+  public async importBackup(_session: OmniSession, input: ProtocolBackupInput): Promise<void> {
+    const raw = new TextDecoder().decode(input.body);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("OpenVPN backup file is not valid JSON.");
+    }
+
+    const root = parsed as Record<string, unknown>;
+    const clientsRaw = Array.isArray(root.clients) ? root.clients : null;
+    if (!clientsRaw) {
+      throw new Error("OpenVPN backup is missing 'clients' array.");
+    }
+
+    const imported: OpenVpnClientRecord[] = [];
+    for (const item of clientsRaw) {
+      if (typeof item !== "object" || item === null) {
+        continue;
+      }
+
+      const row = item as Record<string, unknown>;
+      const id = String(row.id ?? "").trim();
+      const email = String(row.email ?? "").trim();
+      const username = String(row.username ?? "").trim();
+      const password = String(row.password ?? "").trim();
+      if (!id || !email || !username || !password) {
+        continue;
+      }
+
+      imported.push({
+        id,
+        email,
+        enable: Boolean(row.enable ?? true),
+        username,
+        password,
+        totalGB: normalizeTotalGB(row.totalGB),
+        expiryTime: normalizeExpiryTime(row.expiryTime),
+        speedLimitKbps: normalizeSpeedLimitKbps(row.speedLimitKbps)
+      });
+    }
+
+    await writeClients(imported);
+    await syncOpenVpn();
   }
 }

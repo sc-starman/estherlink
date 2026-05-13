@@ -6,13 +6,23 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace OmniRelay.UI;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     private ServiceProvider? _serviceProvider;
+    private ITrayIconService? _trayIconService;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        DispatcherUnhandledException += (_, args) =>
+        {
+            MessageBox.Show(
+                args.Exception.Message,
+                "OmniRelay UI error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            args.Handled = true;
+        };
 
         var services = new ServiceCollection();
         ConfigureServices(services);
@@ -21,12 +31,16 @@ public partial class App : Application
         var themeService = _serviceProvider.GetRequiredService<IThemeService>();
         themeService.ApplySavedTheme();
 
+        _trayIconService = _serviceProvider.GetRequiredService<ITrayIconService>();
+        _trayIconService.Initialize();
+
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _trayIconService?.Dispose();
         _serviceProvider?.Dispose();
         base.OnExit(e);
     }
@@ -50,21 +64,14 @@ public partial class App : Application
         services.AddSingleton<IThemeService, ThemeService>();
         services.AddSingleton<INavigationService, NavigationService>();
         services.AddSingleton<GatewayOrchestratorService>();
+        services.AddSingleton<ITrayIconService, TrayIconService>();
 
-        services.AddTransient<DashboardViewModel>();
-        services.AddTransient<RelayManagementViewModel>();
-        services.AddTransient<GatewayManagementViewModel>();
-        services.AddTransient<WhitelistViewModel>();
+        services.AddTransient<RelaysViewModel>();
         services.AddTransient<LicenseViewModel>();
         services.AddTransient<LogsViewModel>();
-        services.AddTransient<SettingsViewModel>();
 
-        services.AddTransient<DashboardPage>();
-        services.AddTransient<RelayManagementPage>();
-        services.AddTransient<GatewayManagementPage>();
-        services.AddTransient<WhitelistPage>();
+        services.AddTransient<RelaysPage>();
         services.AddTransient<LicensePage>();
         services.AddTransient<LogsPage>();
-        services.AddTransient<SettingsPage>();
     }
 }

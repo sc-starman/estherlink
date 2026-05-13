@@ -29,6 +29,7 @@ public sealed class GatewayStatus
     public DateTimeOffset? LicenseCheckedAtUtc { get; set; }
     public DateTimeOffset? LicenseExpiresAtUtc { get; set; }
     public string? LicenseReason { get; set; }
+    public string LicenseSource { get; set; } = "unknown";
     public bool LicenseTransferRequired { get; set; }
     public int LicenseTransferLimitPerRollingYear { get; set; }
     public int LicenseTransfersUsedInWindow { get; set; }

@@ -2,7 +2,7 @@ namespace OmniRelay.UI.Models;
 
 public class GatewayServiceStatus
 {
-    public string ActiveProtocol { get; set; } = GatewayProtocols.VlessRealitySingbox;
+    public string ActiveProtocol { get; set; } = GatewayProtocols.VlessTlsSingbox;
     public string SshState { get; set; } = "unknown";
     public string SingBoxState { get; set; } = "unknown";
     public string OpenVpnState { get; set; } = "unknown";
@@ -22,11 +22,8 @@ public class GatewayServiceStatus
     public bool DnsConfigPresent { get; set; }
     public bool DnsRuleActive { get; set; }
     public bool DohReachableViaTunnel { get; set; }
-    public bool Udp53PathReady { get; set; }
     public bool DnsPathHealthy { get; set; }
     public string InboundId { get; set; } = string.Empty;
-    public string DnsMode { get; set; } = "unknown";
-    public bool DnsUdpOnly { get; set; }
     public string DohEndpoints { get; set; } = string.Empty;
     public bool TunnelHealthy { get; set; }
     public string TunnelReason { get; set; } = string.Empty;

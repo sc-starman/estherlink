@@ -7,13 +7,14 @@ GATEWAYCTL_SOURCE="${BASH_SOURCE[0]:-$0}"
 PROTOCOL_ID="ipsec_l2tp_singbox"
 CONNECTOR_MODE="internal_tunnel"
 
-PROTOCOL_CLIENTS_FILE="/opt/omnirelay/omni-gateway/ipsec_l2tp_clients.json"
+PROTOCOL_CLIENTS_FILE=""
 PROTOCOL_RUNTIME_FILE="${GATEWAY_ROOT_DIR:-/etc/omnirelay/gateway}/ipsec_l2tp_runtime.json"
 PROTOCOL_ENV_FILE="${GATEWAY_ROOT_DIR:-/etc/omnirelay/gateway}/ipsec_l2tp_panel.env"
 IPSEC_PSK_FILE="${GATEWAY_ROOT_DIR:-/etc/omnirelay/gateway}/ipsec/shared_psk"
 IPSEC_INTERFACE="ppp+"
 IPSEC_STATE_SERVICE="strongswan-starter"
 XL2TPD_SERVICE="xl2tpd"
+IPSEC_DNSMASQ_CONFIG_FILE="/etc/dnsmasq.d/omnirelay-ipsec-l2tp.conf"
 OUTPUT_JSON="false"
 COMMAND=""
 PANEL_BASE_PATH=""
@@ -72,22 +73,57 @@ parse_args() {
       --panel-ssl-mode) require_value "$1" "${2:-}"; PANEL_SSL_MODE="$2"; shift 2 ;;
       --panel-cert-file) require_value "$1" "${2:-}"; PANEL_CERT_FILE="$2"; shift 2 ;;
       --panel-key-file) require_value "$1" "${2:-}"; PANEL_KEY_FILE="$2"; shift 2 ;;
-      --dns-mode) require_value "$1" "${2:-}"; DNS_MODE="$2"; shift 2 ;;
       --doh-endpoints) require_value "$1" "${2:-}"; DOH_ENDPOINTS="$2"; shift 2 ;;
-      --dns-udp-only) require_value "$1" "${2:-}"; DNS_UDP_ONLY="$2"; shift 2 ;;
+      --relay-id) require_value "$1" "${2:-}"; RELAY_ID="$2"; shift 2 ;;
       --gateway-sni) require_value "$1" "${2:-}"; shift 2 ;;
       --gateway-target) require_value "$1" "${2:-}"; shift 2 ;;
       --camouflage-server) require_value "$1" "${2:-}"; shift 2 ;;
       --openvpn-network) require_value "$1" "${2:-}"; shift 2 ;;
-      --openvpn-client-dns) require_value "$1" "${2:-}"; shift 2 ;;
       --) shift; break ;;
       *) die "Unknown argument: $1" ;;
     esac
   done
 }
 
+protocol_apply_relay_scope() {
+  PROTOCOL_CLIENTS_FILE=""
+  PROTOCOL_RUNTIME_FILE="${GATEWAY_ROOT_DIR}/ipsec_l2tp_runtime.json"
+  PROTOCOL_ENV_FILE="${GATEWAY_ROOT_DIR}/ipsec_l2tp_panel.env"
+  IPSEC_PSK_FILE="${GATEWAY_ROOT_DIR}/ipsec/shared_psk"
+  IPSEC_DNSMASQ_CONFIG_FILE="/etc/dnsmasq.d/omnirelay-ipsec-l2tp${RELAY_ID:+-${RELAY_ID}}.conf"
+}
+
 protocol_apply_port_defaults() {
   PUBLIC_PORT=1701
+}
+
+protocol_ipsec_owner_file() {
+  printf '/etc/omnirelay/ipsec-l2tp-owner.json'
+}
+
+protocol_claim_ipsec_owner() {
+  [[ -n "${RELAY_ID:-}" ]] || return 0
+  local owner_file owner existing_host
+  owner_file="$(protocol_ipsec_owner_file)"
+  install -d -m 0755 "$(dirname "$owner_file")"
+  if [[ -f "$owner_file" ]]; then
+    owner="$(jq -r '.relayId // empty' "$owner_file" 2>/dev/null || true)"
+    existing_host="$(jq -r '.vpsIp // empty' "$owner_file" 2>/dev/null || true)"
+    if [[ -n "$owner" && "$owner" != "$RELAY_ID" ]]; then
+      die "IPSec/L2TP is already owned by relay '${owner}' on this VPS/public IP (${existing_host:-unknown}); only one IPSec/L2TP relay is supported per public IP."
+    fi
+  fi
+  jq -n --arg relayId "$RELAY_ID" --arg vpsIp "$VPS_IP" --arg updatedAtUtc "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" '{relayId:$relayId,vpsIp:$vpsIp,updatedAtUtc:$updatedAtUtc}' > "$owner_file"
+  chmod 0600 "$owner_file" || true
+}
+
+protocol_release_ipsec_owner() {
+  [[ -n "${RELAY_ID:-}" ]] || return 0
+  local owner_file owner
+  owner_file="$(protocol_ipsec_owner_file)"
+  [[ -f "$owner_file" ]] || return 0
+  owner="$(jq -r '.relayId // empty' "$owner_file" 2>/dev/null || true)"
+  [[ "$owner" == "$RELAY_ID" ]] && rm -f "$owner_file"
 }
 
 protocol_validate_install_args() {
@@ -95,13 +131,24 @@ protocol_validate_install_args() {
 }
 
 protocol_seed_clients() {
-  install -d -m 0755 "$(dirname "$PROTOCOL_CLIENTS_FILE")" "$(dirname "$IPSEC_PSK_FILE")"
-  if [[ ! -f "$PROTOCOL_CLIENTS_FILE" ]]; then
-    jq -n \
-      --arg id "$(connector_random_uuid)" \
-      --arg password "$(connector_random_string 24)" \
-      '[{id:$id,email:"omni-client@local",enable:true,username:"l2tp_client",password:$password,totalGB:0,expiryTime:0}]' > "$PROTOCOL_CLIENTS_FILE"
-    chmod 0640 "$PROTOCOL_CLIENTS_FILE" || true
+  rm -f "${PANEL_APP_DIR}/ipsec_l2tp_clients.json" >/dev/null 2>&1 || true
+  install -d -m 0755 "$(dirname "$IPSEC_PSK_FILE")"
+  connector_ensure_accounting_schema
+  local existing_count
+  existing_count="$(sqlite3 "$CONNECTOR_ACCOUNTING_DB" "SELECT COUNT(1) FROM clients WHERE protocol_id='$(connector_sql_escape "$PROTOCOL_ID")';" 2>/dev/null || echo 0)"
+  [[ "$existing_count" =~ ^[0-9]+$ ]] || existing_count=0
+  if (( existing_count == 0 )); then
+    local id password now
+    id="$(connector_random_uuid)"
+    password="$(connector_random_string 24)"
+    now="$(date +%s)"
+    sqlite3 "$CONNECTOR_ACCOUNTING_DB" <<SQL
+INSERT INTO clients(client_id,protocol_id,email,username,auth_username,auth_secret,enabled,total_bytes_limit,speed_limit_kbps,expiry_unix_ms,created_at,updated_at)
+VALUES('${id}','${PROTOCOL_ID}','omni-client@local','l2tp_client','l2tp_client','${password}',1,0,0,0,${now},${now});
+INSERT OR IGNORE INTO usage_totals(client_id,used_bytes,updated_at) VALUES('${id}',0,${now});
+INSERT OR IGNORE INTO connection_counters(client_id,active_connections,last_seen_at) VALUES('${id}',0,0);
+INSERT OR IGNORE INTO enforcement_state(client_id,disabled_reason,disabled_at,updated_at) VALUES('${id}','',0,0);
+SQL
   fi
   if [[ ! -f "$IPSEC_PSK_FILE" ]]; then
     printf '%s\n' "$(connector_random_string 32)" > "$IPSEC_PSK_FILE"
@@ -145,27 +192,73 @@ protocol_build_config_json() {
         $backendOutbound,
         {type:"direct",tag:"direct"}
       ],
-      route:{rules:[{inbound:["connector-in"],outbound:"tunnel-backend"}],final:"direct"}
+      route:{rules:[{inbound:["connector-in"],outbound:"tunnel-backend"}],final:"tunnel-backend"}
     }'
 }
 
 protocol_write_panel_env() {
   cat > "$PROTOCOL_ENV_FILE" <<EOF
-IPSEC_L2TP_CLIENTS_FILE=${PROTOCOL_CLIENTS_FILE}
 IPSEC_L2TP_PSK_FILE=${IPSEC_PSK_FILE}
 IPSEC_L2TP_ACCOUNTING_DB=${CONNECTOR_ACCOUNTING_DB}
 EOF
   chmod 0600 "$PROTOCOL_ENV_FILE" || true
 }
 
+protocol_ipsec_dns_address() {
+  if [[ -f /etc/xl2tpd/xl2tpd.conf ]]; then
+    awk -F= '/^[[:space:]]*local ip[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' /etc/xl2tpd/xl2tpd.conf
+  fi
+}
+
+protocol_ensure_dnsmasq_runtime() {
+  if command -v dnsmasq >/dev/null 2>&1; then
+    return 0
+  fi
+  connector_configure_proxy
+  apt-get -o Acquire::Retries=4 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -y
+  DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=4 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends dnsmasq
+  connector_clear_proxy
+}
+
+protocol_write_ipsec_dns_config() {
+  local dns_ip
+  dns_ip="$(protocol_ipsec_dns_address || true)"
+  [[ -n "$dns_ip" ]] || return 0
+  install -d -m 0755 "$(dirname "$IPSEC_DNSMASQ_CONFIG_FILE")"
+  {
+    printf 'interface=%s\n' "$IPSEC_INTERFACE"
+    printf 'listen-address=%s\n' "$dns_ip"
+    printf 'bind-dynamic\n'
+    printf 'no-resolv\n'
+    printf 'cache-size=10000\n'
+    printf 'server=%s#%s\n' "$CONNECTOR_DNS_LISTEN_ADDRESS" "$CONNECTOR_DNS_LISTEN_PORT"
+  } > "$IPSEC_DNSMASQ_CONFIG_FILE"
+  chmod 0644 "$IPSEC_DNSMASQ_CONFIG_FILE" || true
+
+  if [[ -f /etc/ppp/options.xl2tpd ]]; then
+    sed -i '/^[[:space:]]*ms-dns[[:space:]]/d' /etc/ppp/options.xl2tpd
+    printf 'ms-dns %s\n' "$dns_ip" >> /etc/ppp/options.xl2tpd
+  fi
+}
+
+protocol_restart_ipsec_dnsmasq() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files dnsmasq.service >/dev/null 2>&1; then
+    systemctl enable dnsmasq >/dev/null 2>&1 || true
+    systemctl restart dnsmasq >/dev/null 2>&1 || true
+  fi
+}
+
 protocol_sync_clients() {
   local config_json
+  rm -f "${PANEL_APP_DIR}/ipsec_l2tp_clients.json" >/dev/null 2>&1 || true
   protocol_seed_clients
   protocol_ensure_runtime
-  connector_sync_accounting_db "$PROTOCOL_CLIENTS_FILE" "$PROTOCOL_ID"
   config_json="$(protocol_build_config_json)"
   connector_render_apply "$CONNECTOR_MODE" "$config_json"
   connector_apply_internal_redirect "$IPSEC_INTERFACE"
+  protocol_ensure_dnsmasq_runtime
+  protocol_write_ipsec_dns_config
+  protocol_restart_ipsec_dnsmasq
 }
 
 protocol_ipsec_state() {
@@ -219,12 +312,13 @@ command_install() {
   connector_require_root
   connector_validate_common_args
   protocol_validate_install_args
+  protocol_claim_ipsec_owner
 
   progress 2 "Initializing connector runtime directories"
   connector_init
   connector_install_gatewayctl "$GATEWAYCTL_SOURCE"
   connector_verify_bootstrap
-  connector_install_runtime ppp xl2tpd strongswan
+  connector_install_runtime ppp xl2tpd strongswan dnsmasq
   connector_clean_legacy
 
   progress 40 "Preparing IPSec/L2TP connector runtime"
@@ -233,14 +327,14 @@ command_install() {
   protocol_sync_clients
 
   progress 72 "Applying DNS profile"
-  connector_dns_apply "$DNS_MODE" "$DOH_ENDPOINTS" "$DNS_UDP_ONLY"
+  connector_dns_apply "$DOH_ENDPOINTS"
 
   progress 82 "Deploying OmniPanel"
   protocol_write_panel_env
   connector_deploy_omnipanel "$PROTOCOL_ID" "$PROTOCOL_ENV_FILE"
 
   connector_write_metadata_base "$PROTOCOL_ID" "$CONNECTOR_MODE"
-  connector_merge_metadata_json "$(jq -c -n --arg clientsFile "$PROTOCOL_CLIENTS_FILE" --arg runtimeFile "$PROTOCOL_RUNTIME_FILE" --arg pskFile "$IPSEC_PSK_FILE" --arg pppSessionsFile "$ACCOUNTING_SYNC_PPP_SESSIONS_FILE" '{ipsecL2tp:{clientsFile:$clientsFile,runtimeFile:$runtimeFile,pskFile:$pskFile},accounting:{source:"ipsec_ppp",clientsFile:$clientsFile,pppSessionsFile:$pppSessionsFile}}')"
+  connector_merge_metadata_json "$(jq -c -n --arg runtimeFile "$PROTOCOL_RUNTIME_FILE" --arg pskFile "$IPSEC_PSK_FILE" --arg pppSessionsFile "$ACCOUNTING_SYNC_PPP_SESSIONS_FILE" '{ipsecL2tp:{runtimeFile:$runtimeFile,pskFile:$pskFile},accounting:{source:"ipsec_ppp",pppSessionsFile:$pppSessionsFile}}')"
   progress 100 "${PROTOCOL_ID} install completed"
 }
 
@@ -248,13 +342,20 @@ command_uninstall() {
   connector_require_root
   connector_clear_internal_redirect "$IPSEC_INTERFACE"
   systemctl disable --now "$XL2TPD_SERVICE" "$IPSEC_STATE_SERVICE" ipsec >/dev/null 2>&1 || true
+  rm -f "$IPSEC_DNSMASQ_CONFIG_FILE"
+  systemctl restart dnsmasq >/dev/null 2>&1 || true
+  protocol_release_ipsec_owner
   connector_uninstall_runtime
 }
 
 command_start() {
   connector_require_root
+  protocol_ensure_dnsmasq_runtime
+  protocol_write_ipsec_dns_config
   connector_start_services
   systemctl enable --now "$IPSEC_STATE_SERVICE" "$XL2TPD_SERVICE" >/dev/null 2>&1 || systemctl enable --now ipsec "$XL2TPD_SERVICE" >/dev/null 2>&1 || true
+  connector_apply_internal_redirect "$IPSEC_INTERFACE"
+  protocol_restart_ipsec_dnsmasq
 }
 
 command_stop() {
@@ -266,7 +367,9 @@ command_stop() {
 command_dns_apply() {
   connector_require_root
   connector_validate_common_args
-  connector_dns_apply "$DNS_MODE" "$DOH_ENDPOINTS" "$DNS_UDP_ONLY"
+  connector_dns_apply "$DOH_ENDPOINTS"
+  protocol_write_ipsec_dns_config
+  protocol_restart_ipsec_dnsmasq
 }
 
 command_dns_status() {
@@ -276,7 +379,7 @@ command_dns_status() {
 command_dns_repair() {
   connector_require_root
   connector_validate_common_args
-  connector_dns_apply "$DNS_MODE" "$DOH_ENDPOINTS" "$DNS_UDP_ONLY"
+  connector_dns_apply "$DOH_ENDPOINTS"
   protocol_sync_clients
 }
 
@@ -287,8 +390,10 @@ main() {
     exit 1
   fi
   shift || true
-  connector_load_metadata_defaults
   parse_args "$@"
+  connector_apply_relay_scope
+  protocol_apply_relay_scope
+  connector_load_metadata_defaults
   protocol_apply_port_defaults
 
   case "$COMMAND" in

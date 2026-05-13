@@ -20,3 +20,48 @@ public sealed record PolicyCommitSummary(
     int Count,
     long Revision,
     DateTimeOffset UpdatedAtUtc);
+
+public sealed record RelayPolicyListsResult(
+    bool Success,
+    string Message,
+    string RelayId,
+    IReadOnlyList<RelayPolicyListItemResult> Lists,
+    long Revision,
+    DateTimeOffset UpdatedAtUtc,
+    int TotalListCount,
+    int TotalEntryCount,
+    int WhitelistListCount,
+    int BlacklistListCount);
+
+public sealed record RelayPolicyListItemResult(
+    string ListId,
+    string RelayId,
+    string Label,
+    string ListType,
+    int Priority,
+    int EntryCount);
+
+public sealed record RelayPolicyListDetailsResult(
+    bool Success,
+    string Message,
+    string ListId,
+    string RelayId,
+    string Label,
+    string ListType,
+    int Priority,
+    IReadOnlyList<string> Entries,
+    int Count,
+    long Revision,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record RelayPolicyMutationResult(
+    bool Success,
+    string Message,
+    string ListId,
+    string RelayId,
+    string Label,
+    string ListType,
+    int Priority,
+    int EntryCount,
+    long Revision,
+    DateTimeOffset UpdatedAtUtc);

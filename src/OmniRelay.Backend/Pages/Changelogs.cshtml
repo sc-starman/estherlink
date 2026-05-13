@@ -1,0 +1,50 @@
+@page "/changelogs"
+@model OmniRelay.Backend.Pages.ChangelogsModel
+@{
+    ViewData["Title"] = S["Changelog.Title"];
+}
+
+<section class="max-w-7xl mx-auto px-4 py-10 space-y-8">
+    <header class="space-y-3">
+        <p class="text-cyan-300 uppercase tracking-[0.18em] text-xs font-semibold">@S["Changelog.Eyebrow"]</p>
+        <h1 class="text-4xl md:text-5xl font-bold leading-tight">@S["Changelog.Title"]</h1>
+        <p class="text-slate-300 max-w-3xl">@S["Changelog.Subtitle"]</p>
+    </header>
+
+    <section class="space-y-4">
+        <h2 class="text-2xl font-semibold">@S["Changelog.Section.Version1"]</h2>
+        <div class="space-y-4">
+            @foreach (var entry in Model.ReleasedChangelogEntries)
+            {
+                <article class="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h3 class="text-xl font-semibold">@S["Changelog.Label.Version"] @entry.Version</h3>
+                        <span class="text-xs text-slate-400">@S["Changelog.Label.Date"] @entry.PublishedOnUtc.ToString("yyyy-MM-dd")</span>
+                    </div>
+                    <ul class="list-disc list-inside text-sm text-slate-300 space-y-2">
+                        @foreach (var highlight in entry.Highlights)
+                        {
+                            <li>@highlight</li>
+                        }
+                    </ul>
+                </article>
+            }
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        <h2 class="text-2xl font-semibold">@S["Changelog.Section.Version2"]</h2>
+        <article class="rounded-2xl border border-cyan-500/30 bg-slate-900/80 p-6 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <h3 class="text-xl font-semibold">@S["Changelog.Label.Version"] @Model.CurrentChangesEntry.Version</h3>
+                <span class="text-xs text-slate-400">@S["Changelog.Label.Date"] @Model.CurrentChangesEntry.PublishedOnUtc.ToString("yyyy-MM-dd")</span>
+            </div>
+            <ul class="list-disc list-inside text-sm text-slate-300 space-y-2">
+                @foreach (var highlight in Model.CurrentChangesEntry.Highlights)
+                {
+                    <li>@highlight</li>
+                }
+            </ul>
+        </article>
+    </section>
+</section>

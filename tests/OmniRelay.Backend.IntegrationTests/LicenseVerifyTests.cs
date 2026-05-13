@@ -25,8 +25,8 @@ public sealed class LicenseVerifyTests : IClassFixture<IntegrationTestWebApplica
                 Id = Guid.NewGuid(),
                 LicenseKey = "TEST-LIC-001",
                 Status = LicenseStatus.Active,
-                Plan = "pro",
-                ExpiresAt = DateTimeOffset.UtcNow.AddDays(10),
+                Plan = "professional",
+                ExpiresAt = null,
                 MaxDevices = 1,
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow
@@ -54,6 +54,10 @@ public sealed class LicenseVerifyTests : IClassFixture<IntegrationTestWebApplica
         Assert.False(string.IsNullOrWhiteSpace(firstBody.KeyId));
         Assert.False(string.IsNullOrWhiteSpace(firstBody.RequestId));
         Assert.False(string.IsNullOrWhiteSpace(firstBody.Signature));
+        Assert.NotNull(firstBody.LicenseCertificate);
+        Assert.Equal("professional", firstBody.LicenseCertificate!.Plan);
+        Assert.Equal("offline-cert-v1", firstBody.LicenseCertificate.KeyId);
+        Assert.True(firstBody.LicenseCertificate.IsPerpetual);
 
         var secondRequest = new LicenseVerifyRequest
         {
@@ -95,11 +99,74 @@ public sealed class LicenseVerifyTests : IClassFixture<IntegrationTestWebApplica
         Assert.Equal("OK", transferBody.Reason);
         Assert.Equal(1, transferBody.TransfersUsedInWindow);
         Assert.Equal(2, transferBody.TransfersRemainingInWindow);
+        Assert.NotNull(transferBody.LicenseCertificate);
+        Assert.NotEqual(firstBody.LicenseCertificate!.DeviceFingerprintHash, transferBody.LicenseCertificate!.DeviceFingerprintHash);
 
         var keys = await client.GetFromJsonAsync<LicensePublicKeysResponse>("/api/license/public-keys");
         Assert.NotNull(keys);
         Assert.NotEmpty(keys.Keys);
         Assert.Contains(keys.Keys, x => x.KeyId == firstBody.KeyId);
+    }
+
+    [Fact]
+    public async Task Verify_ShouldNotReturnOfflineCertificate_ForTrialOrRevoked()
+    {
+        await _factory.ResetDatabaseAsync();
+        await _factory.ExecuteDbContextAsync(async dbContext =>
+        {
+            dbContext.Licenses.AddRange(
+                new LicenseEntity
+                {
+                    Id = Guid.NewGuid(),
+                    LicenseKey = "TEST-TRIAL-001",
+                    Status = LicenseStatus.Active,
+                    Plan = "trial",
+                    ExpiresAt = DateTimeOffset.UtcNow.AddDays(2),
+                    MaxDevices = 1,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                },
+                new LicenseEntity
+                {
+                    Id = Guid.NewGuid(),
+                    LicenseKey = "TEST-REV-001",
+                    Status = LicenseStatus.Revoked,
+                    Plan = "professional",
+                    ExpiresAt = null,
+                    MaxDevices = 1,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                });
+            await dbContext.SaveChangesAsync();
+        });
+
+        var client = _factory.CreateClient();
+        var trialResponse = await client.PostAsJsonAsync("/api/license/verify", new LicenseVerifyRequest
+        {
+            LicenseKey = "TEST-TRIAL-001",
+            AppVersion = "1.2.3",
+            Nonce = "nonce-trial",
+            Fingerprint = ParseJson("""{"machineGuid":"trial","osVersion":"win11"}""")
+        });
+        trialResponse.EnsureSuccessStatusCode();
+        var trialBody = await trialResponse.Content.ReadFromJsonAsync<LicenseVerifyResponse>();
+        Assert.NotNull(trialBody);
+        Assert.True(trialBody.Valid);
+        Assert.Null(trialBody.LicenseCertificate);
+
+        var revokedResponse = await client.PostAsJsonAsync("/api/license/verify", new LicenseVerifyRequest
+        {
+            LicenseKey = "TEST-REV-001",
+            AppVersion = "1.2.3",
+            Nonce = "nonce-rev",
+            Fingerprint = ParseJson("""{"machineGuid":"rev","osVersion":"win11"}""")
+        });
+        revokedResponse.EnsureSuccessStatusCode();
+        var revokedBody = await revokedResponse.Content.ReadFromJsonAsync<LicenseVerifyResponse>();
+        Assert.NotNull(revokedBody);
+        Assert.False(revokedBody.Valid);
+        Assert.Equal("REVOKED", revokedBody.Reason);
+        Assert.Null(revokedBody.LicenseCertificate);
     }
 
     private static System.Text.Json.JsonElement ParseJson(string json)
