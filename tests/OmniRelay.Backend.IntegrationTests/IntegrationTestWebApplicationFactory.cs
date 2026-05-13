@@ -79,6 +79,8 @@ public sealed class IntegrationTestWebApplicationFactory : WebApplicationFactory
         dbContext.DiscountCoupons.RemoveRange(dbContext.DiscountCoupons);
         dbContext.UserLicenses.RemoveRange(dbContext.UserLicenses);
         dbContext.PayKryptWebhookEvents.RemoveRange(dbContext.PayKryptWebhookEvents);
+        dbContext.NewsletterClients.RemoveRange(dbContext.NewsletterClients);
+        dbContext.Newsletters.RemoveRange(dbContext.Newsletters);
         dbContext.Users.RemoveRange(dbContext.Users);
         await dbContext.SaveChangesAsync();
     }

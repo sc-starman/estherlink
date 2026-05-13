@@ -27,6 +27,8 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRo
     public DbSet<CommerceOrderEntity> CommerceOrders => Set<CommerceOrderEntity>();
     public DbSet<PayKryptIntentEntity> PayKryptIntents => Set<PayKryptIntentEntity>();
     public DbSet<PayKryptWebhookEventEntity> PayKryptWebhookEvents => Set<PayKryptWebhookEventEntity>();
+    public DbSet<NewsletterEntity> Newsletters => Set<NewsletterEntity>();
+    public DbSet<NewsletterClientEntity> NewsletterClients => Set<NewsletterClientEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -330,6 +332,64 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, IdentityRo
 
             entity.HasIndex(x => x.EventId).IsUnique();
             entity.HasIndex(x => x.PayloadHash).IsUnique();
+        });
+
+        modelBuilder.Entity<NewsletterEntity>(entity =>
+        {
+            entity.ToTable("newsletters");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.Version).HasColumnName("version").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.State)
+                .HasColumnName("state")
+                .HasConversion(
+                    x => x.ToString().ToLowerInvariant(),
+                    x => Enum.Parse<NewsletterState>(x, true))
+                .HasMaxLength(16)
+                .IsRequired();
+            entity.Property(x => x.TotalUsers).HasColumnName("total_users").IsRequired();
+            entity.Property(x => x.TotalVisited).HasColumnName("total_visited").IsRequired();
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(x => x.StartedAt).HasColumnName("started_at");
+            entity.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            entity.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(1024);
+            entity.HasIndex(x => x.CreatedAt);
+            entity.HasIndex(x => x.State);
+        });
+
+        modelBuilder.Entity<NewsletterClientEntity>(entity =>
+        {
+            entity.ToTable("newsletter_clients");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.NewsletterId).HasColumnName("newsletter_id").IsRequired();
+            entity.Property(x => x.UserId).HasColumnName("user_id").IsRequired();
+            entity.Property(x => x.Email).HasColumnName("email").HasMaxLength(256).IsRequired();
+            entity.Property(x => x.State)
+                .HasColumnName("state")
+                .HasConversion(
+                    x => x.ToString().ToLowerInvariant(),
+                    x => Enum.Parse<NewsletterClientState>(x, true))
+                .HasMaxLength(16)
+                .IsRequired();
+            entity.Property(x => x.SentAt).HasColumnName("sent_at");
+            entity.Property(x => x.VisitedAt).HasColumnName("visited_at");
+            entity.Property(x => x.Error).HasColumnName("error").HasMaxLength(1024);
+            entity.Property(x => x.SendAttempts).HasColumnName("send_attempts").HasDefaultValue(0).IsRequired();
+
+            entity.HasIndex(x => new { x.NewsletterId, x.State });
+            entity.HasIndex(x => new { x.NewsletterId, x.Email }).IsUnique();
+            entity.HasIndex(x => x.VisitedAt);
+
+            entity.HasOne(x => x.Newsletter)
+                .WithMany(x => x.Clients)
+                .HasForeignKey(x => x.NewsletterId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(x => x.User)
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

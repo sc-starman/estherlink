@@ -35,16 +35,53 @@ public sealed class ChangelogsModel : PageModel
     ];
 
     public ChangelogEntry CurrentChangesEntry =>
-        new(
-            "2.1.19",
-            DateTime.UtcNow.Date,
-            [
-                _localizer["Changelog.Current.2.1.19.1"],
-                _localizer["Changelog.Current.2.1.19.2"],
-                _localizer["Changelog.Current.2.1.19.3"],
-                _localizer["Changelog.Current.2.1.19.4"],
-                _localizer["Changelog.Current.2.1.19.5"]
-            ]);
+        new("2.1.24", DateTime.UtcNow.Date, []);
+
+    public string CurrentV2Title => _localizer["Changelog.Current.2.1.24.1"];
+
+    public IReadOnlyList<string> CurrentV2Highlights =>
+    [
+        _localizer["Changelog.Current.2.1.24.2"],
+        _localizer["Changelog.Current.2.1.24.3"],
+        _localizer["Changelog.Current.2.1.24.4"],
+        _localizer["Changelog.Current.2.1.24.5"],
+        _localizer["Changelog.Current.2.1.24.6"],
+        _localizer["Changelog.Current.2.1.24.12"],
+        _localizer["Changelog.Current.2.1.24.13"],
+        _localizer["Changelog.Current.2.1.24.20"],
+        _localizer["Changelog.Current.2.1.24.21"],
+        _localizer["Changelog.Current.2.1.24.22"]
+    ];
+
+    public IReadOnlyList<string> CurrentStealthProtocols =>
+    [
+        _localizer["Changelog.Current.2.1.24.7"],
+        _localizer["Changelog.Current.2.1.24.8"],
+        _localizer["Changelog.Current.2.1.24.9"],
+        _localizer["Changelog.Current.2.1.24.10"],
+        _localizer["Changelog.Current.2.1.24.11"]
+    ];
+
+    public IReadOnlyList<string> CurrentSpeedLimitProtocols =>
+    [
+        _localizer["Changelog.Current.2.1.24.15"],
+        _localizer["Changelog.Current.2.1.24.16"],
+        _localizer["Changelog.Current.2.1.24.17"],
+        _localizer["Changelog.Current.2.1.24.18"],
+        _localizer["Changelog.Current.2.1.24.19"]
+    ];
+
+    public string OmniPanelSectionTitle => _localizer["Changelog.Current.2.1.24.23"];
+    public string OmniPanelFeaturesTitle => _localizer["Changelog.Current.2.1.24.24"];
+
+    public IReadOnlyList<string> OmniPanelFeatures =>
+    [
+        _localizer["Changelog.Current.2.1.24.25"],
+        _localizer["Changelog.Current.2.1.24.26"],
+        _localizer["Changelog.Current.2.1.24.27"],
+        _localizer["Changelog.Current.2.1.24.28"],
+        _localizer["Changelog.Current.2.1.24.29"]
+    ];
 
     public void OnGet()
     {

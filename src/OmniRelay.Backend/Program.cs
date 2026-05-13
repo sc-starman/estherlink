@@ -206,6 +206,10 @@ builder.Services.AddHostedService<PendingPaymentReconcileWorker>();
 builder.Services.AddScoped<ILicenseIssuanceService, LicenseIssuanceService>();
 builder.Services.AddScoped<ITrialPolicyService, TrialPolicyService>();
 builder.Services.AddScoped<IDownloadCatalogService, DownloadCatalogService>();
+builder.Services.AddScoped<INewsletterContentProvider, NewsletterContentProvider>();
+builder.Services.AddScoped<NewsletterService>();
+builder.Services.AddScoped<INewsletterService, NewsletterService>();
+builder.Services.AddHostedService<NewsletterDispatchWorker>();
 builder.Services.AddScoped<SmtpEmailDeliveryService>();
 builder.Services.AddHttpClient<MailServiceEmailDeliveryService>();
 builder.Services.AddScoped<IEmailDeliveryService>(serviceProvider =>
@@ -443,6 +447,36 @@ app.MapMethods("/app/licenses", new[] { "GET", "HEAD" }, () =>
 app.MapMethods("/app/billing", new[] { "GET", "HEAD" }, () =>
         Results.Redirect("/dashboard/billing", permanent: true, preserveMethod: true))
     .AllowAnonymous();
+
+app.MapGet("/nl/{newsletterClientId:guid}", async (
+    Guid newsletterClientId,
+    AppDbContext dbContext,
+    CancellationToken cancellationToken) =>
+{
+    var client = await dbContext.NewsletterClients
+        .FirstOrDefaultAsync(x => x.Id == newsletterClientId, cancellationToken);
+
+    if (client is not null && client.VisitedAt is null)
+    {
+        client.VisitedAt = DateTimeOffset.UtcNow;
+        if (client.State != NewsletterClientState.Failed)
+        {
+            client.State = NewsletterClientState.Visited;
+        }
+
+        var campaign = await dbContext.Newsletters.FirstOrDefaultAsync(x => x.Id == client.NewsletterId, cancellationToken);
+        if (campaign is not null)
+        {
+            campaign.TotalVisited += 1;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    return Results.Redirect("/download");
+})
+.AllowAnonymous()
+.RequireRateLimiting("public");
 
 app.MapRazorPages();
 
