@@ -53,11 +53,14 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     private int _consecutiveFailures;
     private int _currentRecoveryTier;
     private int _reconnectCount;
+    private int _forwardConflictCount;
     private bool _localProbeOk;
     private bool _endToEndProbeOk;
     private bool _remoteProbeModuleAvailable = true;
     private bool _remoteProbeMissingLogged;
     private bool _sshSourceBindEnabled = false;
+    private DateTimeOffset _nextTunnelctlCompatCheckUtc = DateTimeOffset.MinValue;
+    private bool _tunnelctlCompatVerified;
     private bool _bootstrapSocksListening;
     private bool _tunnelConnected;
     private string _tunnelState = "Disconnected";
@@ -643,6 +646,16 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         };
     }
 
+    private static TimeSpan GetForwardConflictCooldown(int conflictCount)
+    {
+        return conflictCount switch
+        {
+            <= 1 => TimeSpan.FromSeconds(15),
+            2 => TimeSpan.FromSeconds(30),
+            _ => TimeSpan.FromSeconds(45)
+        };
+    }
+
     private async Task<(bool Success, string Protocol, string ReasonCode)> ProbeBackendEndpointAsync(int port, CancellationToken cancellationToken)
     {
         if (!await IsLoopbackTcpListeningAsync(port, cancellationToken))
@@ -684,9 +697,12 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         OmniRelay.Core.Configuration.ServiceConfig config,
         CancellationToken cancellationToken)
     {
+        await EnsureTunnelctlCompatibilityAsync(config, cancellationToken);
+        var probeCommand = BuildTunnelctlRemoteCommand(config, "probe --json");
+        _fileLog.Info($"Effective probe target backend=127.0.0.1:{config.TunnelRemotePort}");
         var (ok, stdout, stderr, error) = await ExecuteRemoteGatewayctlCommandAsync(
             config,
-            $"/usr/bin/env bash /usr/local/sbin/omnirelay-tunnelctl probe --backend-host 127.0.0.1 --backend-port {config.TunnelRemotePort} --json",
+            probeCommand,
             RemoteProbeTimeout,
             cancellationToken);
         if (!ok)
@@ -735,7 +751,8 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         string level,
         CancellationToken cancellationToken)
     {
-        var command = $"/usr/bin/env bash /usr/local/sbin/omnirelay-tunnelctl remediate --level {level} --backend-host 127.0.0.1 --backend-port {config.TunnelRemotePort} --json";
+        await EnsureTunnelctlCompatibilityAsync(config, cancellationToken);
+        var command = BuildTunnelctlRemoteCommand(config, $"remediate --level {level} --json");
         var (ok, stdout, stderr, error) = await ExecuteRemoteGatewayctlCommandAsync(
             config,
             command,
@@ -750,6 +767,76 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         }
 
         RecordEvent("info", $"remote remediation completed: {stdout.Trim()}");
+    }
+
+    private string BuildTunnelctlRemoteCommand(OmniRelay.Core.Configuration.ServiceConfig config, string verbArgs)
+    {
+        var backendPort = config.TunnelRemotePort.ToString();
+        var wrapped =
+            $"TUNNEL_BACKEND_HOST=127.0.0.1 TUNNEL_BACKEND_PORT={backendPort} " +
+            $"/usr/local/sbin/omnirelay-tunnelctl {verbArgs} --backend-host 127.0.0.1 --backend-port {backendPort}";
+        return $"bash -lc {ShellSingleQuote(wrapped)}";
+    }
+
+    private async Task EnsureTunnelctlCompatibilityAsync(OmniRelay.Core.Configuration.ServiceConfig config, CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_tunnelctlCompatVerified && now < _nextTunnelctlCompatCheckUtc)
+        {
+            return;
+        }
+
+        var expectedPort = config.TunnelRemotePort;
+        var verifyCommand = BuildTunnelctlRemoteCommand(config, "probe --json");
+        var (ok, stdout, _, _) = await ExecuteRemoteGatewayctlCommandAsync(
+            config,
+            verifyCommand,
+            TimeSpan.FromSeconds(20),
+            cancellationToken);
+        if (ok && TryReadBackendPort(stdout, out var actualPort) && actualPort == expectedPort)
+        {
+            _tunnelctlCompatVerified = true;
+            _nextTunnelctlCompatCheckUtc = now.AddMinutes(10);
+            return;
+        }
+
+        _fileLog.Warn($"remote tunnelctl compatibility check failed; expected backendPort={expectedPort}. attempting auto-heal");
+        var healCommand = "bash -lc 'f=/usr/local/sbin/omnirelay-tunnelctl; [ -f \"$f\" ] && chmod 0755 \"$f\" && sed -i \"s/\\r$//\" \"$f\" || true'";
+        _ = await ExecuteRemoteGatewayctlCommandAsync(config, healCommand, TimeSpan.FromSeconds(20), cancellationToken);
+
+        var (ok2, stdout2, _, _) = await ExecuteRemoteGatewayctlCommandAsync(
+            config,
+            verifyCommand,
+            TimeSpan.FromSeconds(20),
+            cancellationToken);
+        _tunnelctlCompatVerified = ok2 && TryReadBackendPort(stdout2, out var actualPort2) && actualPort2 == expectedPort;
+        _nextTunnelctlCompatCheckUtc = now.Add(_tunnelctlCompatVerified ? TimeSpan.FromMinutes(10) : TimeSpan.FromMinutes(1));
+        _fileLog.Info($"remote tunnelctl auto-heal {(_tunnelctlCompatVerified ? "succeeded" : "failed")}.");
+    }
+
+    private static bool TryReadBackendPort(string? json, out int backendPort)
+    {
+        backendPort = 0;
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("backendPort", out var backendPortProp))
+            {
+                return false;
+            }
+
+            backendPort = backendPortProp.GetInt32();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async Task<(bool Success, string Stdout, string Stderr, string? Error)> ExecuteRemoteGatewayctlCommandAsync(
@@ -1014,6 +1101,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         _process.StandardInput.Close();
         _processStartedAtUtc = DateTimeOffset.UtcNow;
         _reconnectCount++;
+        _forwardConflictCount = 0;
         _lastTunnelError = null;
         _healthReasonCode = null;
         _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow;
@@ -1045,14 +1133,17 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                     if (TryGetRemoteForwardConflictPort(cleaned, out var conflictPort))
                     {
                         var portText = conflictPort > 0 ? conflictPort.ToString() : config.TunnelRemotePort.ToString();
+                        _forwardConflictCount++;
+                        var cooldown = GetForwardConflictCooldown(_forwardConflictCount);
                         var conflictMessage =
                             $"Gateway remote-forward port {portText} is already in use by another SSH session/relay. " +
                             "Stop the other relay/session or use a different Tunnel Remote Port.";
                         _healthReasonCode = "remote_forward_port_in_use";
                         _lastTunnelError = conflictMessage;
                         _fileLog.Warn(conflictMessage);
-                        RecordEvent("warn", conflictMessage);
-                        _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(45));
+                        RecordEvent("warn", $"{conflictMessage} conflictAttempt={_forwardConflictCount} nextRetryIn={cooldown.TotalSeconds:0}s");
+                        _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(cooldown);
+                        await TryScheduleRemoteForwardCleanupAsync(config, CancellationToken.None);
                     }
 
                     if (_sshSourceBindEnabled && IsSshSourceBindFailure(cleaned))
@@ -1354,7 +1445,12 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             "kill -KILL \"$pid\" >/dev/null 2>&1 && killed=$((killed+1)) || true; " +
             "done; " +
             "done; " +
-            "echo \"Remote forward listener cleanup attempted for ports: $ports; killed=$killed\"";
+            "remaining=0; " +
+            "for p in $ports; do " +
+            "c=$(ss -lntp \"( sport = :$p )\" 2>/dev/null | sed -n \"s/.*pid=\\([0-9]\\+\\).*/\\1/p\" | wc -l); " +
+            "remaining=$((remaining+c)); " +
+            "done; " +
+            "echo \"Remote forward listener cleanup attempted for ports: $ports; killed=$killed; remaining_listeners=$remaining\"";
 
         if (!SshTunnelProcessFactory.TryCreateRemoteCommandStartInfo(
                 config,

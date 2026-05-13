@@ -9,8 +9,10 @@ param(
     [switch]$InsecureSkipTlsVerify,
     [string]$ArtifactPath,
     [string]$BuildOutputDirectory = "artifacts\connector-core",
+    [ValidateSet("stable", "beta")]
+    [string]$Channel = "stable",
 
-    [ValidateSet("linux")]
+    [ValidateSet("linux","windows")]
     [string]$Os = "linux",
 
     [ValidateSet("amd64", "arm64")]
@@ -63,12 +65,16 @@ function Resolve-ArtifactPath {
     }
 
     Write-Host "No -ArtifactPath provided. Building connector-core artifact first..." -ForegroundColor Yellow
-    & $buildScript -OutputDirectory $OutputDirectory -Architectures @($TargetArch) 2>&1 | ForEach-Object {
+    & $buildScript -OutputDirectory $OutputDirectory -OperatingSystems @($TargetOs) -Architectures @($TargetArch) 2>&1 | ForEach-Object {
         Write-Host $_
     }
 
     $artifactRoot = Join-Path $RootPath $OutputDirectory
-    $expectedName = "connector-core-$TargetOs-$TargetArch.tar.gz"
+    $expectedName = if ($TargetOs -eq "windows") {
+        "connector-core-$TargetOs-$TargetArch.zip"
+    } else {
+        "connector-core-$TargetOs-$TargetArch.tar.gz"
+    }
     $expectedPath = Join-Path $artifactRoot $expectedName
     if (-not (Test-Path -LiteralPath $expectedPath)) {
         throw "Connector-core artifact not found after build: $expectedPath"
@@ -84,6 +90,7 @@ function Invoke-Upload {
         [Parameter(Mandatory = $true)][string]$PackagePath,
         [Parameter(Mandatory = $true)][string]$TargetOs,
         [Parameter(Mandatory = $true)][string]$TargetArch,
+        [Parameter(Mandatory = $true)][string]$ReleaseChannel,
         [switch]$SkipTlsValidation
     )
 
@@ -99,10 +106,12 @@ function Invoke-Upload {
     $multipart = New-Object System.Net.Http.MultipartFormDataContent
     $fileStream = [System.IO.File]::OpenRead($PackagePath)
     $fileContent = New-Object System.Net.Http.StreamContent($fileStream)
-    $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/gzip")
+    $contentType = if ($TargetOs -eq "windows") { "application/zip" } else { "application/gzip" }
+    $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($contentType)
     $multipart.Add($fileContent, "artifact", [System.IO.Path]::GetFileName($PackagePath))
     $multipart.Add((New-Object System.Net.Http.StringContent($TargetOs)), "os")
     $multipart.Add((New-Object System.Net.Http.StringContent($TargetArch)), "arch")
+    $multipart.Add((New-Object System.Net.Http.StringContent($ReleaseChannel)), "channel")
 
     try {
         $response = $client.PostAsync($Endpoint, $multipart).GetAwaiter().GetResult()
@@ -137,8 +146,13 @@ if ([string]::IsNullOrWhiteSpace($artifact)) {
     throw "Artifact path resolved to empty value."
 }
 
-if (-not $artifact.ToLowerInvariant().EndsWith(".tar.gz")) {
-    throw "Artifact must be .tar.gz: $artifact"
+if ($Os -eq "windows") {
+    if (-not $artifact.ToLowerInvariant().EndsWith(".zip")) {
+        throw "Windows artifact must be .zip: $artifact"
+    }
+}
+elseif (-not $artifact.ToLowerInvariant().EndsWith(".tar.gz")) {
+    throw "Linux artifact must be .tar.gz: $artifact"
 }
 
 if (-not (Test-Path -LiteralPath $artifact)) {
@@ -152,15 +166,23 @@ Write-Host "Uploading connector-core artifact..." -ForegroundColor Cyan
 Write-Host "  File: $artifact"
 Write-Host "  Size: $fileSize bytes"
 Write-Host "  SHA-256: $hash"
+Write-Host "  Channel: $Channel"
 Write-Host "  OS/Arch: $Os/$Arch"
 Write-Host "  Upload Endpoint: $uploadUrl"
 
-$response = Invoke-Upload -Endpoint $uploadUrl -ApiKey $AdminApiKey -PackagePath $artifact -TargetOs $Os -TargetArch $Arch -SkipTlsValidation:$InsecureSkipTlsVerify
+$response = Invoke-Upload -Endpoint $uploadUrl -ApiKey $AdminApiKey -PackagePath $artifact -TargetOs $Os -TargetArch $Arch -ReleaseChannel $Channel -SkipTlsValidation:$InsecureSkipTlsVerify
+
+$downloadPath = if ($Channel -eq "beta") {
+    "/download/connector-core/beta/$Os/$Arch"
+}
+else {
+    "/download/connector-core/$Os/$Arch"
+}
 
 Write-Host ""
 Write-Host "Upload complete." -ForegroundColor Green
 Write-Host "  Server SHA-256: $($response.sha256)"
-Write-Host "  Download URL: $normalizedBaseUrl/download/connector-core/$Os/$Arch"
+Write-Host "  Download URL: $normalizedBaseUrl$downloadPath"
 
 if ($response.sha256 -ne $hash) {
     Write-Warning "Local and server SHA-256 differ. Verify upload path and file consistency."

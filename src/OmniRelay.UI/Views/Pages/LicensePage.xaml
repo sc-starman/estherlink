@@ -12,13 +12,14 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="28" MaxWidth="980">
             <StackPanel Margin="0,0,0,16">
-                <TextBlock Text="License Activation" Style="{StaticResource SectionTitleTextStyle}"/>
+                <!-- <TextBlock Text="License Activation" Style="{StaticResource SectionTitleTextStyle}"/> -->
                 <TextBlock Text="Enter your license key to activate professional features and unlock enterprise security protocols." Style="{StaticResource MutedTextStyle}"/>
             </StackPanel>
 
             <Border Style="{StaticResource CardStyle}" Margin="0,0,0,18">
                 <StackPanel>
                     <Border Padding="10" CornerRadius="8" Margin="0,0,0,10"
+                            Visibility="Collapsed"
                             Background="{DynamicResource Brush.InputBackground}"
                             BorderBrush="{DynamicResource Brush.Border}"
                             BorderThickness="1">
@@ -29,8 +30,18 @@
                                     Margin="10,0,0,0"
                                     DockPanel.Dock="Right"/>
                             <TextBlock Text="{Binding ServiceCompatibilityMessage}"
-                                       Style="{StaticResource MutedTextStyle}"
-                                       VerticalAlignment="Center"/>
+                                       VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource MutedTextStyle}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsServiceCompatible}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                         </DockPanel>
                     </Border>
 

@@ -8,7 +8,10 @@ param(
     [string]$UploadBaseUrl,
     [switch]$InsecureSkipTlsVerify,
     [string]$ArtifactPath,
-    [string]$BuildOutputDirectory = "artifacts\omni-gateway"
+    [string]$BuildOutputDirectory = "artifacts\omni-gateway",
+
+    [ValidateSet("stable", "beta")]
+    [string]$Channel = "stable"
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,6 +77,7 @@ function Invoke-Upload {
         [Parameter(Mandatory = $true)][string]$Endpoint,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$PackagePath,
+        [Parameter(Mandatory = $true)][string]$ReleaseChannel,
         [switch]$SkipTlsValidation
     )
 
@@ -91,6 +95,7 @@ function Invoke-Upload {
     $fileContent = New-Object System.Net.Http.StreamContent($fileStream)
     $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/gzip")
     $multipart.Add($fileContent, "artifact", [System.IO.Path]::GetFileName($PackagePath))
+    $multipart.Add((New-Object System.Net.Http.StringContent($ReleaseChannel)), "channel")
 
     try {
         $response = $client.PostAsync($Endpoint, $multipart).GetAwaiter().GetResult()
@@ -140,14 +145,17 @@ Write-Host "Uploading OmniPanel artifact..." -ForegroundColor Cyan
 Write-Host "  File: $artifact"
 Write-Host "  Size: $fileSize bytes"
 Write-Host "  SHA-256: $hash"
+Write-Host "  Channel: $Channel"
 Write-Host "  Upload Endpoint: $uploadUrl"
 
-$response = Invoke-Upload -Endpoint $uploadUrl -ApiKey $AdminApiKey -PackagePath $artifact -SkipTlsValidation:$InsecureSkipTlsVerify
+$response = Invoke-Upload -Endpoint $uploadUrl -ApiKey $AdminApiKey -PackagePath $artifact -ReleaseChannel $Channel -SkipTlsValidation:$InsecureSkipTlsVerify
+
+$downloadPath = if ($Channel -eq "beta") { "/download/omni-gateway/beta" } else { "/download/omni-gateway" }
 
 Write-Host ""
 Write-Host "Upload complete." -ForegroundColor Green
 Write-Host "  Server SHA-256: $($response.sha256)"
-Write-Host "  Download URL: $normalizedBaseUrl/download/omni-gateway"
+Write-Host "  Download URL: $normalizedBaseUrl$downloadPath"
 
 if ($response.sha256 -ne $hash) {
     Write-Warning "Local and server SHA-256 differ. Verify upload path and file consistency."

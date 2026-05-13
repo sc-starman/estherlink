@@ -9,7 +9,7 @@ namespace OmniRelay.UI.ViewModels;
 
 public partial class LicenseViewModel : ObservableObject
 {
-    private const string RelayRoute = "relay";
+    private const string RelayRoute = "relays";
 
     private readonly GatewayOrchestratorService _orchestrator;
     private readonly GatewayStateStore _state;

@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { getGatewayProvider } from "@/lib/protocol";
+import { getActiveProtocol, getGatewayProvider } from "@/lib/protocol";
+import { getProtocolCapabilities } from "@/lib/protocol-capabilities";
 
 interface AddClientRequest {
   email?: string;
   totalGB?: number;
   expiryTime?: number;
+  speedLimitKbps?: number;
 }
 
 function normalizeTotalGB(value: unknown): number {
@@ -34,6 +36,19 @@ function normalizeExpiryTime(value: unknown): number {
   return Math.trunc(expiryTime);
 }
 
+function normalizeSpeedLimitKbps(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return 0;
+  }
+
+  const speed = Number(value);
+  if (!Number.isFinite(speed) || speed < 0) {
+    throw new Error("speedLimitKbps must be a non-negative integer.");
+  }
+
+  return Math.trunc(speed);
+}
+
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session.isAuthenticated) {
@@ -47,10 +62,17 @@ export async function POST(request: Request) {
   }
 
   try {
+    const activeProtocol = getActiveProtocol();
+    const capabilities = getProtocolCapabilities(activeProtocol);
+    if (!capabilities.supportsClientLifecycle) {
+      return NextResponse.json({ message: "Per-client management is not supported for this protocol." }, { status: 400 });
+    }
+
     const totalGB = normalizeTotalGB(body.totalGB);
     const expiryTime = normalizeExpiryTime(body.expiryTime);
+    const speedLimitKbps = normalizeSpeedLimitKbps(body.speedLimitKbps);
     const provider = getGatewayProvider();
-    const client = await provider.addClient(session, email, { totalGB, expiryTime });
+    const client = await provider.addClient(session, email, { totalGB, expiryTime, speedLimitKbps });
 
     await session.save();
     return NextResponse.json({ ok: true, client });

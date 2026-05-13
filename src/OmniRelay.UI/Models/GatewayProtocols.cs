@@ -2,8 +2,14 @@ namespace OmniRelay.UI.Models;
 
 public static class GatewayProtocols
 {
-    public const string VlessRealitySingbox = "vless_reality_singbox";
     public const string VlessPlainSingbox = "vless_plain_singbox";
+    public const string VlessTlsSingbox = "vless_tls_singbox";
+    public const string MixedSingbox = "mixed_singbox";
+    public const string SocksSingbox = "socks_singbox";
+    public const string HttpSingbox = "http_singbox";
+    public const string Hysteria2Singbox = "hysteria2_singbox";
+    public const string TrojanSingbox = "trojan_singbox";
+    public const string NaiveSingbox = "naive_singbox";
     public const string ShadowsocksSingbox = "shadowsocks_singbox";
     public const string ShadowTlsV3ShadowsocksSingbox = "shadowtls_v3_shadowsocks_singbox";
     public const string OpenVpnTcpSingbox = "openvpn_tcp_singbox";
@@ -11,8 +17,13 @@ public static class GatewayProtocols
 
     public static IReadOnlyList<(string Value, string Label)> All { get; } =
     [
-        (VlessRealitySingbox, "VLESS Reality"),
-        (VlessPlainSingbox, "VLESS (plain, no TLS)"),
+        (VlessTlsSingbox, "VLESS"),
+        (MixedSingbox, "Mixed (HTTP+SOCKS)"),
+        (SocksSingbox, "SOCKS"),
+        (HttpSingbox, "HTTP"),
+        (Hysteria2Singbox, "Hysteria2"),
+        (TrojanSingbox, "Trojan"),
+        (NaiveSingbox, "Naive"),
         (ShadowsocksSingbox, "Shadowsocks"),
         (ShadowTlsV3ShadowsocksSingbox, "ShadowTLS v3 + Shadowsocks"),
         (OpenVpnTcpSingbox, "OpenVPN"),
@@ -32,9 +43,44 @@ public static class GatewayProtocols
             return ShadowsocksSingbox;
         }
 
+        if (string.Equals(normalized, VlessTlsSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            return VlessTlsSingbox;
+        }
+
         if (string.Equals(normalized, VlessPlainSingbox, StringComparison.OrdinalIgnoreCase))
         {
-            return VlessPlainSingbox;
+            return VlessTlsSingbox;
+        }
+
+        if (string.Equals(normalized, MixedSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            return MixedSingbox;
+        }
+
+        if (string.Equals(normalized, SocksSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            return SocksSingbox;
+        }
+
+        if (string.Equals(normalized, HttpSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            return HttpSingbox;
+        }
+
+        if (string.Equals(normalized, Hysteria2Singbox, StringComparison.OrdinalIgnoreCase))
+        {
+            return Hysteria2Singbox;
+        }
+
+        if (string.Equals(normalized, TrojanSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            return TrojanSingbox;
+        }
+
+        if (string.Equals(normalized, NaiveSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            return NaiveSingbox;
         }
 
         if (string.Equals(normalized, OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
@@ -47,7 +93,7 @@ public static class GatewayProtocols
             return IpsecL2tpSingbox;
         }
 
-        return VlessRealitySingbox;
+        return VlessTlsSingbox;
     }
 
     public static string ToLabel(string? value)

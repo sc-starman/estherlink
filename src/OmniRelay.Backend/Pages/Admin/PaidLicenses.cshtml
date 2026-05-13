@@ -19,6 +19,16 @@
             <p>@S["Common.PageXofY", Model.PageNumber, Model.TotalPages]</p>
         </div>
 
+        @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+        {
+            <div class="rounded-lg border border-emerald-700 bg-emerald-900/30 px-4 py-3 text-sm text-emerald-200">@Model.StatusMessage</div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
+        {
+            <div class="rounded-lg border border-rose-700 bg-rose-900/30 px-4 py-3 text-sm text-rose-200">@Model.ErrorMessage</div>
+        }
+
         @if (Model.Items.Count == 0)
         {
             <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">@S["Admin.Paid.Empty"]</div>
@@ -36,9 +46,11 @@
                             <th class="text-left px-4 py-3">@S["Admin.Table.Plan"]</th>
                             <th class="text-left px-4 py-3">@S["Admin.Table.Status"]</th>
                             <th class="text-left px-4 py-3">@S["Admin.Table.Source"]</th>
+                            <th class="text-left px-4 py-3">Transfers Used (365d)</th>
                             <th class="text-left px-4 py-3">@S["Admin.Table.CreatedUtc"]</th>
                             <th class="text-left px-4 py-3">@S["Admin.Table.ExpiresUtc"]</th>
                             <th class="text-left px-4 py-3">@S["Admin.Table.UpdatesUntilUtc"]</th>
+                            <th class="text-left px-4 py-3">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -60,9 +72,22 @@
                             <td class="px-4 py-3">@item.Plan</td>
                             <td class="px-4 py-3">@item.Status.ToString().ToLowerInvariant()</td>
                             <td class="px-4 py-3">@item.Source</td>
+                            <td class="px-4 py-3">@item.TransfersUsedInWindow</td>
                             <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>
                             <td class="px-4 py-3">@(item.ExpiresAt?.ToString("u") ?? S["Common.NotAvailable"])</td>
                             <td class="px-4 py-3">@(item.UpdatesEntitledUntil?.ToString("u") ?? S["Common.NotAvailable"])</td>
+                            <td class="px-4 py-3">
+                                <form method="post" asp-page-handler="ResetTransfers" class="inline">
+                                    <input type="hidden" name="licenseId" value="@item.LicenseId" />
+                                    <input type="hidden" name="pageNumber" value="@Model.PageNumber" />
+                                    <button
+                                        type="submit"
+                                        class="rounded bg-amber-600 px-2 py-1 text-xs font-semibold text-slate-50 hover:bg-amber-500"
+                                        onclick="return confirm('Reset transfer usage for this license?');">
+                                        Reset Transfers
+                                    </button>
+                                </form>
+                            </td>
                         </tr>
                     }
                     </tbody>

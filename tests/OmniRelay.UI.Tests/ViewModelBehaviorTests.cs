@@ -10,87 +10,114 @@ namespace OmniRelay.UI.Tests;
 public class ViewModelBehaviorTests
 {
     [Fact]
-    public async Task DashboardRefresh_DisablesCommandWhileRunning()
+    public void GatewayDeploymentRequest_BuildCommonArgs_IncludesRelayIdWhenScoped()
     {
-        var state = new GatewayStateStore();
-        var gatewayClient = new FakeGatewayClientService
+        var baseRequest = BuildValidGatewayRequest();
+        var request = new GatewayDeploymentRequest
         {
-            GetStatusDelay = TimeSpan.FromMilliseconds(120),
-            StatusToReturn = new GatewayStatus
+            RelayId = "relay_A-1",
+            Config = baseRequest.Config,
+            BootstrapMode = baseRequest.BootstrapMode,
+            SelectedGatewayProtocol = baseRequest.SelectedGatewayProtocol,
+            GatewayPublicPort = baseRequest.GatewayPublicPort,
+            GatewayPanelPort = baseRequest.GatewayPanelPort,
+            GatewaySni = baseRequest.GatewaySni,
+            GatewayTarget = baseRequest.GatewayTarget,
+            GatewayDohEndpoints = baseRequest.GatewayDohEndpoints
+        };
+
+        var args = InvokeBuildCommonArgs(request);
+
+        Assert.Contains("--relay-id", args);
+        Assert.Contains("'relay_A-1'", args);
+    }
+
+    [Fact]
+    public void GatewayDeploymentRequest_BuildCommonArgs_RequiresRelayId()
+    {
+        var args = InvokeBuildCommonArgs(BuildValidGatewayRequest());
+
+        Assert.Contains("--relay-id", args);
+    }
+
+    [Fact]
+    public void GatewayDeploymentRequest_ValidateRequest_RejectsUnsafeRelayId()
+    {
+        var request = new GatewayDeploymentRequest
+        {
+            RelayId = "bad/relay",
+            Config = BuildValidGatewayRequest().Config,
+            SelectedGatewayProtocol = GatewayProtocols.VlessTlsSingbox,
+            GatewayPublicPort = 443,
+            GatewayPanelPort = 2054,
+            GatewaySni = "www.apple.com",
+            GatewayTarget = "www.apple.com:443",
+            GatewayDohEndpoints = "https://1.1.1.1/dns-query"
+        };
+
+        var ex = Assert.ThrowsAny<Exception>(() => InvokeValidateRequest(request));
+
+        Assert.Contains("Relay id", ex.InnerException?.Message ?? ex.Message);
+    }
+
+    [Fact]
+    public void RelaysViewModel_BuildGatewayDeploymentRequest_PropagatesRelayId()
+    {
+        var relay = new RelayConfig
+        {
+            Id = "relay42",
+            Name = "Relay 42",
+            RemoteGateway = new RemoteGatewayConfig
             {
-                ProxyRunning = true,
-                LicenseValid = true,
-                TunnelConnected = true,
-                WhitelistCount = 7,
-                HealthState = "Connected",
-                LastStatusUpdateUtc = DateTimeOffset.UtcNow
+                TunnelHost = "203.0.113.10",
+                Protocol = GatewayProtocols.VlessTlsSingbox
             }
         };
 
-        var serviceControl = new FakeServiceControlService
-        {
-            QueryDelay = TimeSpan.FromMilliseconds(120),
-            ServiceState = "Running"
-        };
+        var request = InvokeRelayBuildGatewayDeploymentRequest(relay);
 
-        var orchestrator = new GatewayOrchestratorService(state, gatewayClient, serviceControl, new FakeGatewayStatePersistenceService());
-        var vm = new DashboardViewModel(orchestrator, state);
-
-        Assert.True(vm.RefreshCommand.CanExecute(null));
-
-        var runTask = vm.RefreshCommand.ExecuteAsync(null);
-        await Task.Delay(25);
-
-        Assert.False(vm.RefreshCommand.CanExecute(null));
-
-        await runTask;
-
-        Assert.True(vm.RefreshCommand.CanExecute(null));
-        Assert.Equal("Running", vm.ServiceState);
-        Assert.Equal("Running", vm.ProxyState);
-        Assert.Equal("Valid", vm.LicenseState);
-        Assert.Equal("Connected", vm.TunnelState);
-        Assert.Equal(7, vm.WhitelistCount);
+        Assert.Equal("relay42", request.RelayId);
     }
 
-    [Fact]
-    public async Task WhitelistUpdate_InvalidEntry_DoesNotCallService()
+    private static GatewayDeploymentRequest BuildValidGatewayRequest()
     {
-        var state = new GatewayStateStore();
-
-        var gatewayClient = new FakeGatewayClientService();
-        var serviceControl = new FakeServiceControlService();
-        var orchestrator = new GatewayOrchestratorService(state, gatewayClient, serviceControl, new FakeGatewayStatePersistenceService());
-        var vm = new WhitelistViewModel(orchestrator)
+        return new GatewayDeploymentRequest
         {
-            WhitelistText = "1.2.3.0/24\nnot-a-cidr"
+            RelayId = "relay-default",
+            Config = new ServiceConfig
+            {
+                TunnelHost = "203.0.113.10",
+                TunnelUser = "omnirelay",
+                TunnelSshPort = 22,
+                TunnelRemotePort = 15000,
+                BootstrapSocksRemotePort = 16080
+            },
+            SelectedGatewayProtocol = GatewayProtocols.VlessTlsSingbox,
+            GatewayPublicPort = 443,
+            GatewayPanelPort = 2054,
+            GatewayDohEndpoints = "https://1.1.1.1/dns-query"
         };
-
-        await vm.UpdateWhitelistCommand.ExecuteAsync(null);
-
-        Assert.Equal("whitelist contains invalid entries.", vm.Feedback);
-        Assert.Contains("Line 2", vm.ValidationSummary);
-        Assert.Equal(0, gatewayClient.UpdateWhitelistCallCount);
     }
 
-    [Fact]
-    public void SettingsSave_PersistsAndAppliesTheme()
+    private static string InvokeBuildCommonArgs(GatewayDeploymentRequest request)
     {
-        var settingsService = new FakeUiSettingsService();
-        var themeService = new FakeThemeService();
-        var vm = new SettingsViewModel(settingsService, themeService)
-        {
-            DarkThemeEnabled = false,
-            RefreshIntervalSeconds = 15
-        };
+        var method = typeof(GatewayDeploymentService).GetMethod("BuildCommonArgs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        return (string)method!.Invoke(null, [request, false])!;
+    }
 
-        vm.SaveCommand.Execute(null);
+    private static void InvokeValidateRequest(GatewayDeploymentRequest request)
+    {
+        var method = typeof(GatewayDeploymentService).GetMethod("ValidateRequest", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        method!.Invoke(null, [request]);
+    }
 
-        Assert.NotNull(settingsService.LastSaved);
-        Assert.Equal("Light", settingsService.LastSaved!.Theme);
-        Assert.Equal(15, settingsService.LastSaved.RefreshIntervalSeconds);
-        Assert.Equal("Light", themeService.LastAppliedTheme);
-        Assert.Equal("Settings saved.", vm.Feedback);
+    private static GatewayDeploymentRequest InvokeRelayBuildGatewayDeploymentRequest(RelayConfig relay)
+    {
+        var method = typeof(RelaysViewModel).GetMethod("BuildGatewayDeploymentRequest", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        return (GatewayDeploymentRequest)method!.Invoke(null, [relay])!;
     }
 
     [Fact]
@@ -110,7 +137,7 @@ public class ViewModelBehaviorTests
         };
 
         var orchestrator = new GatewayOrchestratorService(state, gatewayClient, new FakeServiceControlService(), new FakeGatewayStatePersistenceService());
-        var result = await orchestrator.BuildLocalGatewayClientConfigAsync("abc");
+        var result = await orchestrator.BuildLocalGatewayClientConfigAsync("abc", "relay-test");
 
         Assert.True(result.Success);
         Assert.Equal("openvpn_bundle", result.Mode);
@@ -140,6 +167,48 @@ public class ViewModelBehaviorTests
             return new IpcResponse(true, null, payload);
         }
 
+        public Task<IpcResponse?> GetAppStatusAsync(CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new AppStatusResponse(new AppStatus
+            {
+                ServiceRunning = true,
+                ProxyRunning = StatusToReturn.ProxyRunning,
+                LicenseValid = StatusToReturn.LicenseValid,
+                LicenseCheckedAtUtc = StatusToReturn.LicenseCheckedAtUtc,
+                LicenseExpiresAtUtc = StatusToReturn.LicenseExpiresAtUtc,
+                Relays = []
+            }));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> ListRelaysAsync(CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new RelaysResponse([]));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> GetRelayAsync(string relayId, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new RelayResponse(new RelayConfig { Id = relayId, Name = "Relay" }));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> UpsertRelayAsync(RelayConfig relay, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new RelayResponse(relay));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> DeleteRelayAsync(string relayId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> SetRelayEnabledAsync(string relayId, bool enabled, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
         public Task<IpcResponse?> SetConfigAsync(ServiceConfig config, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
@@ -167,15 +236,15 @@ public class ViewModelBehaviorTests
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
 
-        public Task<IpcResponse?> GetPolicyListAsync(string listType, CancellationToken cancellationToken = default)
+        public Task<IpcResponse?> GetPolicyListAsync(string listType, string? relayId = null, CancellationToken cancellationToken = default)
         {
             var payload = IpcJson.Serialize(new GetPolicyListResponse(listType, [], 0, 1, DateTimeOffset.UtcNow));
             return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
         }
 
-        public Task<IpcResponse?> BeginPolicyUpdateAsync(string listType, string mode, CancellationToken cancellationToken = default)
+        public Task<IpcResponse?> BeginPolicyUpdateAsync(string listType, string mode, string? relayId = null, CancellationToken cancellationToken = default)
         {
-            var payload = IpcJson.Serialize(new BeginPolicyUpdateResponse(Guid.NewGuid().ToString("N"), listType, mode));
+            var payload = IpcJson.Serialize(new BeginPolicyUpdateResponse(Guid.NewGuid().ToString("N"), listType, mode, relayId));
             return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
         }
 
@@ -195,9 +264,49 @@ public class ViewModelBehaviorTests
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
 
+        public Task<IpcResponse?> ListRelayPolicyListsAsync(string? relayId = null, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new ListRelayPolicyListsResponse(relayId ?? string.Empty, [], 1, DateTimeOffset.UtcNow, 0, 0, 0, 0));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> GetRelayPolicyListAsync(string listId, string? relayId = null, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new GetRelayPolicyListResponse(listId, relayId ?? string.Empty, "list", "whitelist", 0, [], 0, 1, DateTimeOffset.UtcNow));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> CreateRelayPolicyListAsync(string label, string listType, string? relayId = null, int? priority = null, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new RelayPolicyListMutationResponse("list1", relayId ?? string.Empty, label, listType, priority ?? 0, 0, 1, DateTimeOffset.UtcNow));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> UpdateRelayPolicyListMetaAsync(string listId, string label, string listType, string? relayId = null, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new RelayPolicyListMutationResponse(listId, relayId ?? string.Empty, label, listType, 0, 0, 1, DateTimeOffset.UtcNow));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> ReorderRelayPolicyListsAsync(IReadOnlyList<string> orderedListIds, string? relayId = null, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
+        public Task<IpcResponse?> ReplaceRelayPolicyListEntriesAsync(string listId, IReadOnlyList<string> entries, string? relayId = null, CancellationToken cancellationToken = default)
+        {
+            var payload = IpcJson.Serialize(new ReplaceRelayPolicyListEntriesResponse(listId, entries.Count, 0, 0, entries.Count, 1, DateTimeOffset.UtcNow));
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
+        }
+
+        public Task<IpcResponse?> DeleteRelayPolicyListAsync(string listId, string? relayId = null, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IpcResponse?>(new IpcResponse(true));
+        }
+
         public Task<IpcResponse?> VerifyLicenseAsync(CancellationToken cancellationToken = default)
         {
-            var payload = IpcJson.Serialize(new VerifyLicenseResponse(true, DateTimeOffset.UtcNow.AddDays(30), false, null));
+            var payload = IpcJson.Serialize(new VerifyLicenseResponse(true, DateTimeOffset.UtcNow.AddDays(30), false, null, "online"));
             return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
         }
 
@@ -236,13 +345,13 @@ public class ViewModelBehaviorTests
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
 
-        public Task<IpcResponse?> GetLocalGatewayClientsAsync(CancellationToken cancellationToken = default)
+        public Task<IpcResponse?> GetLocalGatewayClientsAsync(string relayId, CancellationToken cancellationToken = default)
         {
             var payload = IpcJson.Serialize(new LocalGatewayClientsResponse(LocalGatewayProtocols.VlessTcpPlain, 443, []));
             return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));
         }
 
-        public Task<IpcResponse?> AddLocalGatewayClientAsync(string email, string? remark, CancellationToken cancellationToken = default)
+        public Task<IpcResponse?> AddLocalGatewayClientAsync(string email, string relayId, string? remark, CancellationToken cancellationToken = default)
         {
             var record = new LocalGatewayClientRecord(
                 Guid.NewGuid().ToString("N"),
@@ -252,21 +361,26 @@ public class ViewModelBehaviorTests
                 LocalGatewayProtocols.VlessTcpPlain,
                 "ovpn_test",
                 "secret",
+                0,
+                0,
+                0,
+                0,
+                0,
                 DateTimeOffset.UtcNow);
             return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, IpcJson.Serialize(record)));
         }
 
-        public Task<IpcResponse?> UpdateLocalGatewayClientAsync(LocalGatewayClientRecord client, CancellationToken cancellationToken = default)
+        public Task<IpcResponse?> UpdateLocalGatewayClientAsync(LocalGatewayClientRecord client, string relayId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
 
-        public Task<IpcResponse?> DeleteLocalGatewayClientAsync(string clientId, CancellationToken cancellationToken = default)
+        public Task<IpcResponse?> DeleteLocalGatewayClientAsync(string clientId, string relayId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IpcResponse?>(new IpcResponse(true));
         }
 
-        public Task<IpcResponse?> BuildLocalGatewayClientConfigAsync(string clientId, CancellationToken cancellationToken = default)
+        public Task<IpcResponse?> BuildLocalGatewayClientConfigAsync(string clientId, string relayId, CancellationToken cancellationToken = default)
         {
             var payload = IpcJson.Serialize(ClientConfigToReturn);
             return Task.FromResult<IpcResponse?>(new IpcResponse(true, null, payload));

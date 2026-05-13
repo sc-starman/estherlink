@@ -8,9 +8,9 @@
         Icon="Assets/app.ico"
         WindowStyle="None"
         ResizeMode="CanMinimize"
-        Width="900"
+        Width="800"
         Height="600"
-        MinWidth="900"
+        MinWidth="800"
         MinHeight="600">
     <Grid>
         <Grid.RowDefinitions>
@@ -177,6 +177,43 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Command="{Binding ToggleRelayServiceCommand}"
+                                Width="42"
+                                Height="36"
+                                Padding="0"
+                                Margin="0,0,8,0"
+                                ToolTip="Start/Stop Relay service">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
+                                    <Setter Property="Foreground" Value="#D64242"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsRelayServiceRunning}" Value="True">
+                                            <Setter Property="Foreground" Value="#1A9B45"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <TextBlock Text="&#x23FB;"
+                                       FontSize="18"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                        </Button>
+
+                        <Button Command="{Binding ReinstallStartRelayServiceCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Width="42"
+                                Height="36"
+                                Padding="0"
+                                Margin="0,0,10,0"
+                                ToolTip="Reinstall and start Relay service">
+                            <TextBlock Text="&#x21BB;"
+                                       FontSize="18"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                        </Button>
+
                         <Button Style="{StaticResource SecondaryButtonStyle}" Padding="10,6" Margin="0,0,10,0" Command="{Binding ToggleThemeCommand}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE706;"

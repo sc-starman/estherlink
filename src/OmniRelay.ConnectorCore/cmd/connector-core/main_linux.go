@@ -5,12 +5,12 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -34,7 +34,6 @@ import (
 	sbjson "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
-	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	_ "modernc.org/sqlite"
 )
 
@@ -44,7 +43,7 @@ const (
 	defaultAccountingDB    = "/etc/omnirelay/gateway/connector/accounting.db"
 	defaultStatePath       = "/etc/omnirelay/gateway/connector/connector_core_state.json"
 	defaultLockPath        = "/run/omnirelay-accounting-sync.lock"
-	defaultSyncCommand     = "/usr/local/sbin/omnirelay-gatewayctl sync-clients"
+	defaultSyncCommand     = ""
 	defaultPanelGroup      = "omnigateway"
 	defaultCycleInterval   = 30
 	defaultSyncTimeoutSecs = 90
@@ -52,9 +51,21 @@ const (
 
 var fullTunnelProtocols = map[string]struct{}{
 	"shadowsocks_singbox":              {},
-	"vless_plain_singbox":              {},
-	"vless_reality_singbox":            {},
+	"vless_tls_singbox":                {},
+	"mixed_singbox":                    {},
+	"socks_singbox":                    {},
+	"http_singbox":                     {},
+	"hysteria2_singbox":                {},
+	"trojan_singbox":                   {},
+	"naive_singbox":                    {},
 	"shadowtls_v3_shadowsocks_singbox": {},
+}
+
+var perClientProtocols = map[string]struct{}{
+	"vless_tls_singbox":                {},
+	"shadowsocks_singbox":              {},
+	"shadowtls_v3_shadowsocks_singbox": {},
+	"trojan_singbox":                   {},
 }
 
 type runOptions struct {
@@ -79,11 +90,12 @@ type metadataDocument struct {
 }
 
 type clientPolicy struct {
-	clientID     string
-	username     string
-	enabled      int
-	totalBytes   int64
-	expiryUnixMS int64
+	clientID       string
+	username       string
+	enabled        int
+	totalBytes     int64
+	expiryUnixMS   int64
+	speedLimitKbps int64
 }
 
 type coreState struct {
@@ -95,6 +107,10 @@ type coreState struct {
 	SampledClients     int    `json:"sampledClients"`
 	UpdatedClients     int    `json:"updatedClients"`
 	EnforcementActions int    `json:"enforcementActions"`
+	LimiterPolicyUsers int    `json:"limiterPolicyUsers"`
+	LimiterActiveUsers int    `json:"limiterActiveUsers"`
+	LimiterBypassCount int64  `json:"limiterBypassCount"`
+	LimiterLastError   string `json:"limiterLastError"`
 }
 
 type cycleResult struct {
@@ -102,6 +118,13 @@ type cycleResult struct {
 	updatedClients     int
 	enforcementActions int
 	shouldSync         bool
+}
+
+type limiterSnapshot struct {
+	policyUsers  int
+	limitedUsers int
+	bypassCount  int64
+	lastError    string
 }
 
 type userCounter struct {
@@ -380,8 +403,269 @@ func (w *wrappedPacketConn) Upstream() any {
 	return w.PacketConn
 }
 
+type userRateGate struct {
+	kbps satomic.Int64
+
+	readMu   sync.Mutex
+	readNext time.Time
+
+	writeMu   sync.Mutex
+	writeNext time.Time
+}
+
+func (g *userRateGate) setKbps(v int64) {
+	if v < 0 {
+		v = 0
+	}
+	g.kbps.Store(v)
+}
+
+func (g *userRateGate) throttleRead(bytes int) {
+	g.throttle(bytes, true)
+}
+
+func (g *userRateGate) throttleWrite(bytes int) {
+	g.throttle(bytes, false)
+}
+
+func (g *userRateGate) throttle(bytes int, readDir bool) {
+	if bytes <= 0 {
+		return
+	}
+	kbps := g.kbps.Load()
+	if kbps <= 0 {
+		return
+	}
+	durationNs := int64(math.Ceil((float64(bytes) * 8 * float64(time.Second)) / (float64(kbps) * 1000.0)))
+	if durationNs < 1 {
+		durationNs = 1
+	}
+	duration := time.Duration(durationNs)
+
+	var mu *sync.Mutex
+	var next *time.Time
+	if readDir {
+		mu = &g.readMu
+		next = &g.readNext
+	} else {
+		mu = &g.writeMu
+		next = &g.writeNext
+	}
+
+	mu.Lock()
+	now := time.Now()
+	start := now
+	if next.After(now) {
+		start = *next
+	}
+	wait := start.Sub(now)
+	*next = start.Add(duration)
+	mu.Unlock()
+
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+}
+
+type speedLimitedConn struct {
+	net.Conn
+	gate *userRateGate
+}
+
+func (c *speedLimitedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.gate.throttleRead(n)
+	}
+	return n, err
+}
+
+func (c *speedLimitedConn) Write(b []byte) (int, error) {
+	if len(b) > 0 {
+		c.gate.throttleWrite(len(b))
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *speedLimitedConn) Upstream() any {
+	return c.Conn
+}
+
+type speedLimitedPacketConn struct {
+	N.PacketConn
+	gate *userRateGate
+}
+
+func (c *speedLimitedPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
+	destination, err := c.PacketConn.ReadPacket(buffer)
+	if err == nil && buffer != nil {
+		c.gate.throttleRead(buffer.Len())
+	}
+	return destination, err
+}
+
+func (c *speedLimitedPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
+	if buffer != nil {
+		c.gate.throttleWrite(buffer.Len())
+	}
+	return c.PacketConn.WritePacket(buffer, destination)
+}
+
+func (c *speedLimitedPacketConn) Upstream() any {
+	return c.PacketConn
+}
+
+type speedLimiter struct {
+	mu           sync.Mutex
+	users        map[string]*userRateGate
+	policyUsers  int
+	limitedUsers int
+	lastError    string
+	protocolID   string
+
+	warnMu    sync.Mutex
+	warnUntil map[string]time.Time
+
+	bypassCount satomic.Int64
+}
+
+func newSpeedLimiter() *speedLimiter {
+	return &speedLimiter{
+		users:     make(map[string]*userRateGate),
+		warnUntil: make(map[string]time.Time),
+	}
+}
+
+func (l *speedLimiter) snapshot() limiterSnapshot {
+	l.mu.Lock()
+	snap := limiterSnapshot{
+		policyUsers:  l.policyUsers,
+		limitedUsers: l.limitedUsers,
+		lastError:    l.lastError,
+	}
+	l.mu.Unlock()
+	snap.bypassCount = l.bypassCount.Load()
+	return snap
+}
+
+func (l *speedLimiter) setProtocolID(protocolID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.protocolID = strings.TrimSpace(protocolID)
+}
+
+func (l *speedLimiter) applyPolicies(policies []clientPolicy) error {
+	rates := make(map[string]int64)
+	limitedUsers := 0
+	for _, policy := range policies {
+		rate := policy.speedLimitKbps
+		if rate < 0 {
+			rate = 0
+		}
+
+		keys := make([]string, 0, 2)
+		if clientID := strings.TrimSpace(policy.clientID); clientID != "" {
+			keys = append(keys, clientID)
+		}
+		if username := strings.TrimSpace(policy.username); username != "" {
+			keys = append(keys, username)
+		}
+		if rate > 0 && len(keys) == 0 {
+			return fmt.Errorf("speed_limit_identity_missing")
+		}
+		for _, key := range keys {
+			if existing, ok := rates[key]; ok && existing != rate {
+				return fmt.Errorf("speed_limit_identity_conflict:%s", key)
+			}
+			rates[key] = rate
+		}
+		if rate > 0 {
+			limitedUsers++
+		}
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, gate := range l.users {
+		gate.setKbps(0)
+	}
+	for user, rate := range rates {
+		gate, ok := l.users[user]
+		if !ok {
+			gate = &userRateGate{}
+			l.users[user] = gate
+		}
+		gate.setKbps(rate)
+	}
+	l.policyUsers = len(rates)
+	l.limitedUsers = limitedUsers
+	l.lastError = ""
+	return nil
+}
+
+func (l *speedLimiter) setError(message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lastError = strings.TrimSpace(message)
+}
+
+func (l *speedLimiter) findGate(user string) (*userRateGate, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	gate, ok := l.users[user]
+	return gate, ok
+}
+
+func (l *speedLimiter) warnBypass(user string, reason string) {
+	key := reason + ":" + user
+	now := time.Now()
+	l.warnMu.Lock()
+	nextAllowed, ok := l.warnUntil[key]
+	if ok && now.Before(nextAllowed) {
+		l.warnMu.Unlock()
+		l.bypassCount.Add(1)
+		return
+	}
+	l.warnUntil[key] = now.Add(30 * time.Second)
+	l.warnMu.Unlock()
+	l.bypassCount.Add(1)
+	l.mu.Lock()
+	protocolID := l.protocolID
+	l.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "WARN: speed_limit_bypass protocol=%q reason=%s user=%q\n", protocolID, reason, user)
+}
+
+func (l *speedLimiter) RoutedConnection(_ context.Context, conn net.Conn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) net.Conn {
+	user := strings.TrimSpace(metadata.User)
+	if user == "" {
+		l.warnBypass("", "empty_user")
+		return conn
+	}
+	gate, ok := l.findGate(user)
+	if !ok {
+		l.warnBypass(user, "unknown_user")
+		return conn
+	}
+	return &speedLimitedConn{Conn: conn, gate: gate}
+}
+
+func (l *speedLimiter) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
+	user := strings.TrimSpace(metadata.User)
+	if user == "" {
+		l.warnBypass("", "empty_user")
+		return conn
+	}
+	gate, ok := l.findGate(user)
+	if !ok {
+		l.warnBypass(user, "unknown_user")
+		return conn
+	}
+	return &speedLimitedPacketConn{PacketConn: conn, gate: gate}
+}
+
 type runtimeDaemon struct {
 	opts         runOptions
+	limiter      *speedLimiter
 	stats        *statsTracker
 	conns        *connTracker
 	boxMu        sync.Mutex
@@ -393,9 +677,10 @@ type runtimeDaemon struct {
 
 func newRuntimeDaemon(opts runOptions) *runtimeDaemon {
 	return &runtimeDaemon{
-		opts:  opts,
-		stats: newStatsTracker(),
-		conns: newConnTracker(),
+		opts:    opts,
+		limiter: newSpeedLimiter(),
+		stats:   newStatsTracker(),
+		conns:   newConnTracker(),
 	}
 }
 
@@ -429,6 +714,7 @@ func (d *runtimeDaemon) createBox() (*box.Box, error) {
 	if err != nil {
 		return nil, err
 	}
+	instance.Router().AppendTracker(d.limiter)
 	instance.Router().AppendTracker(d.stats)
 	instance.Router().AppendTracker(d.conns)
 	if err := instance.Start(); err != nil {
@@ -470,9 +756,17 @@ func (d *runtimeDaemon) closeBox() {
 	d.stats.Reset()
 }
 
-func (d *runtimeDaemon) triggerSyncCommand() {
-	if strings.TrimSpace(d.opts.syncCommand) == "" {
+func (d *runtimeDaemon) triggerSyncCommand(protocolID string) {
+	base := strings.TrimSpace(d.opts.syncCommand)
+	if base == "" {
 		return
+	}
+	cmdText := base
+	if !strings.Contains(base, "--protocol") {
+		proto := strings.TrimSpace(protocolID)
+		if proto != "" {
+			cmdText = fmt.Sprintf("%s --protocol %s", base, proto)
+		}
 	}
 	d.syncMu.Lock()
 	if d.syncInFlight {
@@ -490,7 +784,7 @@ func (d *runtimeDaemon) triggerSyncCommand() {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), defaultSyncTimeoutSecs*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "/usr/bin/env", "bash", "-lc", d.opts.syncCommand)
+		cmd := exec.CommandContext(ctx, "/usr/bin/env", "bash", "-lc", cmdText)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			message := strings.TrimSpace(string(output))
@@ -525,8 +819,15 @@ func (d *runtimeDaemon) runCycle() coreState {
 		return state
 	}
 	state.ProtocolID = metadata.ActiveProtocol
+	d.limiter.setProtocolID(metadata.ActiveProtocol)
 
 	if !isFullTunnelProtocol(metadata.ActiveProtocol) || metadata.Accounting.Source != "connector_tracker" {
+		_ = d.limiter.applyPolicies(nil)
+		snapshot := d.limiter.snapshot()
+		state.LimiterPolicyUsers = snapshot.policyUsers
+		state.LimiterActiveUsers = snapshot.limitedUsers
+		state.LimiterBypassCount = snapshot.bypassCount
+		state.LimiterLastError = snapshot.lastError
 		state.LastError = d.getAsyncErr()
 		return state
 	}
@@ -546,10 +847,15 @@ func (d *runtimeDaemon) runCycle() coreState {
 	state.SampledClients = result.sampledClients
 	state.UpdatedClients = result.updatedClients
 	state.EnforcementActions = result.enforcementActions
+	snapshot := d.limiter.snapshot()
+	state.LimiterPolicyUsers = snapshot.policyUsers
+	state.LimiterActiveUsers = snapshot.limitedUsers
+	state.LimiterBypassCount = snapshot.bypassCount
+	state.LimiterLastError = snapshot.lastError
 	state.LastError = d.getAsyncErr()
 
 	if result.shouldSync {
-		d.triggerSyncCommand()
+		d.triggerSyncCommand(metadata.ActiveProtocol)
 	}
 	return state
 }
@@ -570,6 +876,10 @@ func (d *runtimeDaemon) applyConnectorTrackerCycle(now time.Time, metadata metad
 	policies, err := loadClientPolicies(db, metadata.ActiveProtocol)
 	if err != nil {
 		return result, err
+	}
+	if err := d.limiter.applyPolicies(policies); err != nil {
+		d.limiter.setError("policy_apply_failed:" + err.Error())
+		return result, fmt.Errorf("limiter_policy_apply_failed:%w", err)
 	}
 
 	userToClient := make(map[string]string)
@@ -681,6 +991,7 @@ func (d *runtimeDaemon) applyConnectorTrackerCycle(now time.Time, metadata metad
 		}
 
 		if reason != "" {
+			shouldCloseNow := false
 			if enabled != 0 {
 				_, err = tx.Exec(`UPDATE clients SET enabled=0, updated_at=? WHERE client_id=?`, now.Unix(), clientID)
 				if err != nil {
@@ -688,6 +999,11 @@ func (d *runtimeDaemon) applyConnectorTrackerCycle(now time.Time, metadata metad
 				}
 				enableChanges[clientID] = false
 				result.updatedClients++
+				shouldCloseNow = true
+			} else if disabledReason != reason {
+				// Disabled reason changed while already disabled; close once to
+				// ensure existing sessions are evicted exactly at transition time.
+				shouldCloseNow = true
 			}
 			_, err = tx.Exec(
 				`INSERT OR REPLACE INTO enforcement_state(client_id,disabled_reason,disabled_at,updated_at)
@@ -700,7 +1016,9 @@ func (d *runtimeDaemon) applyConnectorTrackerCycle(now time.Time, metadata metad
 			if err != nil {
 				return result, err
 			}
-			disableUsers[clientID] = struct{}{}
+			if shouldCloseNow {
+				disableUsers[clientID] = struct{}{}
+			}
 			continue
 		}
 
@@ -738,6 +1056,11 @@ func (d *runtimeDaemon) applyConnectorTrackerCycle(now time.Time, metadata metad
 			return result, fileErr
 		}
 		if changed {
+			result.shouldSync = true
+		}
+	}
+	if result.updatedClients > 0 {
+		if _, ok := perClientProtocols[strings.TrimSpace(metadata.ActiveProtocol)]; ok {
 			result.shouldSync = true
 		}
 	}
@@ -810,7 +1133,7 @@ func updateClientEnableFlags(path string, changes map[string]bool) (bool, error)
 
 func loadClientPolicies(db *sql.DB, protocolID string) ([]clientPolicy, error) {
 	rows, err := db.Query(
-		`SELECT client_id, username, enabled, total_bytes_limit, expiry_unix_ms
+		`SELECT client_id, username, enabled, total_bytes_limit, expiry_unix_ms, COALESCE(speed_limit_kbps, 0)
 		   FROM clients
 		  WHERE protocol_id = ?`,
 		protocolID,
@@ -823,7 +1146,7 @@ func loadClientPolicies(db *sql.DB, protocolID string) ([]clientPolicy, error) {
 	var out []clientPolicy
 	for rows.Next() {
 		var row clientPolicy
-		if err := rows.Scan(&row.clientID, &row.username, &row.enabled, &row.totalBytes, &row.expiryUnixMS); err != nil {
+		if err := rows.Scan(&row.clientID, &row.username, &row.enabled, &row.totalBytes, &row.expiryUnixMS, &row.speedLimitKbps); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
@@ -885,6 +1208,7 @@ CREATE TABLE IF NOT EXISTS clients (
   username TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   total_bytes_limit INTEGER NOT NULL DEFAULT 0,
+  speed_limit_kbps INTEGER NOT NULL DEFAULT 0,
   expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -923,7 +1247,18 @@ CREATE TABLE IF NOT EXISTS sampler_sessions (
   PRIMARY KEY (source, session_key)
 );
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE clients ADD COLUMN speed_limit_kbps INTEGER NOT NULL DEFAULT 0;`)
+	if err != nil {
+		errText := strings.ToLower(strings.TrimSpace(err.Error()))
+		if strings.Contains(errText, "duplicate column name") || strings.Contains(errText, "already exists") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func panelGroupGID(group string) (int, error) {
@@ -1075,22 +1410,10 @@ func checkCommand(args []string) error {
 	return instance.Close()
 }
 
-func generateRealityKeyPair() error {
-	privateKey, err := wgtypes.GeneratePrivateKey()
-	if err != nil {
-		return err
-	}
-	publicKey := privateKey.PublicKey()
-	fmt.Printf("PrivateKey: %s\n", base64.RawURLEncoding.EncodeToString(privateKey[:]))
-	fmt.Printf("PublicKey: %s\n", base64.RawURLEncoding.EncodeToString(publicKey[:]))
-	return nil
-}
-
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  connector-core run [--config path] [--metadata path] [--accounting-db path] [--state-file path]")
 	fmt.Fprintln(os.Stderr, "  connector-core check [--config path]")
-	fmt.Fprintln(os.Stderr, "  connector-core generate reality-keypair")
 }
 
 func main() {
@@ -1104,13 +1427,6 @@ func main() {
 		err = runCommand(os.Args[2:])
 	case "check":
 		err = checkCommand(os.Args[2:])
-	case "generate":
-		if len(os.Args) >= 3 && os.Args[2] == "reality-keypair" {
-			err = generateRealityKeyPair()
-		} else {
-			usage()
-			os.Exit(2)
-		}
 	default:
 		usage()
 		os.Exit(2)

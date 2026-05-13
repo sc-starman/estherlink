@@ -1,5 +1,5 @@
-using OmniRelay.UI.ViewModels;
 using System.ComponentModel;
+using System.Reflection;
 using System.Windows;
 
 namespace OmniRelay.UI.Views.Dialogs;
@@ -14,7 +14,10 @@ public partial class GatewayOperationDialog : Window
 
     private void OnClosing(object? sender, CancelEventArgs e)
     {
-        if (DataContext is GatewayManagementViewModel vm && vm.IsGatewayOperationRunning)
+        var runningProp = DataContext?.GetType().GetProperty("IsGatewayOperationRunning", BindingFlags.Public | BindingFlags.Instance);
+        if (runningProp?.PropertyType == typeof(bool) &&
+            runningProp.GetValue(DataContext) is bool running &&
+            running)
         {
             e.Cancel = true;
         }

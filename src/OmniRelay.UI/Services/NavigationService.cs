@@ -8,23 +8,16 @@ public sealed class NavigationService : INavigationService
 {
     private readonly List<NavigationItemModel> _items =
     [
-        new() { Route = "dashboard", Title = "Dashboard", IconGlyph = "\uE80F" },
-        new() { Route = "relay", Title = "Relay Service", IconGlyph = "\uE968" },
-        new() { Route = "gateway", Title = "Gateway Control", IconGlyph = "\uE9D9" },
-        new() { Route = "whitelist", Title = "Policies", IconGlyph = "\uE73E" },
+        new() { Route = "relays", Title = "Relays", IconGlyph = "\uE9D9" },
         new() { Route = "license", Title = "License", IconGlyph = "\uE8A7" },
         new() { Route = "logs", Title = "Logs", IconGlyph = "\uE8A5" }
     ];
 
     private readonly Dictionary<string, Type> _routes = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["dashboard"] = typeof(DashboardPage),
-        ["relay"] = typeof(RelayManagementPage),
-        ["gateway"] = typeof(GatewayManagementPage),
-        ["whitelist"] = typeof(WhitelistPage),
+        ["relays"] = typeof(RelaysPage),
         ["license"] = typeof(LicensePage),
-        ["logs"] = typeof(LogsPage),
-        ["settings"] = typeof(SettingsPage)
+        ["logs"] = typeof(LogsPage)
     };
 
     private Frame? _frame;

@@ -40,9 +40,10 @@ public sealed class FileSystemInstallerStorageService : IInstallerStorageService
         return $"OmniRelay-{safeVersion}-windows-x64.msi";
     }
 
-    public string GetOmniGatewayArtifactPath()
+    public string GetOmniGatewayArtifactPath(string channel)
     {
-        return Path.Combine(_rootPath, "omni-gateway", "latest", "omni-gateway.tar.gz");
+        var safeChannel = SanitizeSegment(string.IsNullOrWhiteSpace(channel) ? "stable" : channel.Trim().ToLowerInvariant());
+        return Path.Combine(_rootPath, "omni-gateway", safeChannel, "latest", "omni-gateway.tar.gz");
     }
 
     public string GetOmniGatewayDownloadFileName()
@@ -50,11 +51,12 @@ public sealed class FileSystemInstallerStorageService : IInstallerStorageService
         return "omni-gateway.tar.gz";
     }
 
-    public string GetConnectorCoreArtifactPath(string os, string arch)
+    public string GetConnectorCoreArtifactPath(string channel, string os, string arch)
     {
+        var safeChannel = SanitizeSegment(string.IsNullOrWhiteSpace(channel) ? "stable" : channel.Trim().ToLowerInvariant());
         var safeOs = SanitizeSegment(string.IsNullOrWhiteSpace(os) ? "linux" : os.Trim().ToLowerInvariant());
         var safeArch = SanitizeSegment(string.IsNullOrWhiteSpace(arch) ? "amd64" : arch.Trim().ToLowerInvariant());
-        return Path.Combine(_rootPath, "connector-core", safeOs, safeArch, $"connector-core-{safeOs}-{safeArch}.tar.gz");
+        return Path.Combine(_rootPath, "connector-core", safeChannel, safeOs, safeArch, $"connector-core-{safeOs}-{safeArch}.tar.gz");
     }
 
     public string GetConnectorCoreDownloadFileName(string os, string arch)
@@ -107,6 +109,7 @@ public sealed class FileSystemInstallerStorageService : IInstallerStorageService
 
     public async Task<InstallerSaveResult> SaveOmniGatewayArtifactAsync(
         string sourceFilePath,
+        string channel,
         CancellationToken cancellationToken)
     {
         if (!File.Exists(sourceFilePath))
@@ -114,7 +117,7 @@ public sealed class FileSystemInstallerStorageService : IInstallerStorageService
             throw new FileNotFoundException("Source gateway artifact file was not found.", sourceFilePath);
         }
 
-        var destinationPath = GetOmniGatewayArtifactPath();
+        var destinationPath = GetOmniGatewayArtifactPath(channel);
         var destinationDirectory = Path.GetDirectoryName(destinationPath)
             ?? throw new InvalidOperationException("Destination directory could not be determined.");
 
@@ -145,6 +148,7 @@ public sealed class FileSystemInstallerStorageService : IInstallerStorageService
 
     public async Task<InstallerSaveResult> SaveConnectorCoreArtifactAsync(
         string sourceFilePath,
+        string channel,
         string os,
         string arch,
         CancellationToken cancellationToken)
@@ -154,7 +158,7 @@ public sealed class FileSystemInstallerStorageService : IInstallerStorageService
             throw new FileNotFoundException("Source connector-core artifact file was not found.", sourceFilePath);
         }
 
-        var destinationPath = GetConnectorCoreArtifactPath(os, arch);
+        var destinationPath = GetConnectorCoreArtifactPath(channel, os, arch);
         var destinationDirectory = Path.GetDirectoryName(destinationPath)
             ?? throw new InvalidOperationException("Destination directory could not be determined.");
 

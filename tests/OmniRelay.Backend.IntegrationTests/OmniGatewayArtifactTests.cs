@@ -19,15 +19,7 @@ public sealed class OmniGatewayArtifactTests : IClassFixture<IntegrationTestWebA
     public async Task DownloadOmniGateway_ShouldReturnNotFound_WhenArtifactNotUploaded()
     {
         await _factory.ResetDatabaseAsync();
-        await using (var scope = _factory.Services.CreateAsyncScope())
-        {
-            var storage = scope.ServiceProvider.GetRequiredService<IInstallerStorageService>();
-            var path = storage.GetOmniGatewayArtifactPath();
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
+        await ClearArtifactsAsync();
 
         var client = _factory.CreateClient();
 
@@ -39,6 +31,7 @@ public sealed class OmniGatewayArtifactTests : IClassFixture<IntegrationTestWebA
     public async Task UploadOmniGateway_ShouldRejectInvalidExtension()
     {
         await _factory.ResetDatabaseAsync();
+        await ClearArtifactsAsync();
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-ADMIN-API-KEY", "dev-admin-key");
 
@@ -55,6 +48,7 @@ public sealed class OmniGatewayArtifactTests : IClassFixture<IntegrationTestWebA
     public async Task UploadOmniGateway_ThenDownload_ShouldReturnArtifact()
     {
         await _factory.ResetDatabaseAsync();
+        await ClearArtifactsAsync();
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-ADMIN-API-KEY", "dev-admin-key");
 
@@ -78,6 +72,57 @@ public sealed class OmniGatewayArtifactTests : IClassFixture<IntegrationTestWebA
         Assert.Equal(gzipBytes, downloadedBytes);
     }
 
+    [Fact]
+    public async Task UploadOmniGateway_WithBetaChannel_ShouldDownloadFromBetaRouteOnly()
+    {
+        await _factory.ResetDatabaseAsync();
+        await ClearArtifactsAsync();
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-ADMIN-API-KEY", "dev-admin-key");
+
+        var gzipBytes = BuildMinimalGzip();
+
+        using (var content = new MultipartFormDataContent())
+        using (var fileContent = new ByteArrayContent(gzipBytes))
+        {
+            fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse("application/gzip");
+            content.Add(fileContent, "artifact", "omni-gateway.tar.gz");
+            content.Add(new StringContent("beta"), "channel");
+
+            var uploadResponse = await client.PostAsync("/api/installer/upload-omni-gateway", content);
+            uploadResponse.EnsureSuccessStatusCode();
+        }
+
+        var stableResponse = await client.GetAsync("/download/omni-gateway");
+        Assert.Equal(HttpStatusCode.NotFound, stableResponse.StatusCode);
+
+        var betaResponse = await client.GetAsync("/download/omni-gateway/beta");
+        betaResponse.EnsureSuccessStatusCode();
+
+        var downloadedBytes = await betaResponse.Content.ReadAsByteArrayAsync();
+        Assert.Equal(gzipBytes, downloadedBytes);
+    }
+
+    [Fact]
+    public async Task UploadOmniGateway_WithInvalidChannel_ShouldReturnBadRequest()
+    {
+        await _factory.ResetDatabaseAsync();
+        await ClearArtifactsAsync();
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-ADMIN-API-KEY", "dev-admin-key");
+
+        var gzipBytes = BuildMinimalGzip();
+
+        using var content = new MultipartFormDataContent();
+        using var fileContent = new ByteArrayContent(gzipBytes);
+        fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse("application/gzip");
+        content.Add(fileContent, "artifact", "omni-gateway.tar.gz");
+        content.Add(new StringContent("rc"), "channel");
+
+        var response = await client.PostAsync("/api/installer/upload-omni-gateway", content);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     private static byte[] BuildMinimalGzip()
     {
         using var buffer = new MemoryStream();
@@ -88,5 +133,23 @@ public sealed class OmniGatewayArtifactTests : IClassFixture<IntegrationTestWebA
         }
 
         return buffer.ToArray();
+    }
+
+    private async Task ClearArtifactsAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var storage = scope.ServiceProvider.GetRequiredService<IInstallerStorageService>();
+        var stablePath = storage.GetOmniGatewayArtifactPath("stable");
+        var betaPath = storage.GetOmniGatewayArtifactPath("beta");
+
+        if (File.Exists(stablePath))
+        {
+            File.Delete(stablePath);
+        }
+
+        if (File.Exists(betaPath))
+        {
+            File.Delete(betaPath);
+        }
     }
 }

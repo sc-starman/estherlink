@@ -21,6 +21,7 @@ public sealed class TunnelSupervisorWorker : BackgroundService
     private Process? _process;
     private DateTimeOffset? _processStartedAtUtc;
     private int _reconnectCount;
+    private int _forwardConflictCount;
     private DateTimeOffset? _lastConnectedAtUtc;
     private string? _lastError;
     private long _handledRestartVersion;
@@ -195,6 +196,7 @@ public sealed class TunnelSupervisorWorker : BackgroundService
         _process.StandardInput.Close();
         _processStartedAtUtc = DateTimeOffset.UtcNow;
         _reconnectCount++;
+        _forwardConflictCount = 0;
         _lastError = null;
         _fileLog.Info($"Tunnel process started. pid={_process.Id} reconnectCount={_reconnectCount}");
 
@@ -215,10 +217,15 @@ public sealed class TunnelSupervisorWorker : BackgroundService
                     if (TryGetRemoteForwardConflictPort(cleaned, out var conflictPort))
                     {
                         var portText = conflictPort > 0 ? conflictPort.ToString() : config.TunnelRemotePort.ToString();
+                        _forwardConflictCount++;
+                        var cooldown = GetForwardConflictCooldown(_forwardConflictCount);
                         _lastError =
                             $"Gateway remote-forward port {portText} is already in use by another SSH session/relay. " +
                             "Stop the other relay/session or use a different Tunnel Remote Port.";
+                        _lastError = $"{_lastError} conflictAttempt={_forwardConflictCount} nextRetryIn={cooldown.TotalSeconds:0}s";
                         _fileLog.Warn(_lastError);
+                        await Task.Delay(cooldown, CancellationToken.None);
+                        await TryScheduleRemoteForwardCleanupAsync(config, CancellationToken.None);
                     }
 
                     if (HasRemoteForwardFailure(cleaned) && !TryGetRemoteForwardConflictPort(cleaned, out _))
@@ -275,7 +282,12 @@ public sealed class TunnelSupervisorWorker : BackgroundService
             "kill -KILL \"$pid\" >/dev/null 2>&1 && killed=$((killed+1)) || true; " +
             "done; " +
             "done; " +
-            "echo \"Remote forward listener cleanup attempted for ports: $ports; killed=$killed\"";
+            "remaining=0; " +
+            "for p in $ports; do " +
+            "c=$(ss -lntp \"( sport = :$p )\" 2>/dev/null | sed -n \"s/.*pid=\\([0-9]\\+\\).*/\\1/p\" | wc -l); " +
+            "remaining=$((remaining+c)); " +
+            "done; " +
+            "echo \"Remote forward listener cleanup attempted for ports: $ports; killed=$killed; remaining_listeners=$remaining\"";
 
         if (!SshTunnelProcessFactory.TryCreateRemoteCommandStartInfo(config, remoteCommand, out var psi, out var error) || psi is null)
         {
@@ -442,6 +454,16 @@ public sealed class TunnelSupervisorWorker : BackgroundService
         }
 
         return GetBackoffDelay(attempt);
+    }
+
+    private static TimeSpan GetForwardConflictCooldown(int conflictCount)
+    {
+        return conflictCount switch
+        {
+            <= 1 => TimeSpan.FromSeconds(15),
+            2 => TimeSpan.FromSeconds(30),
+            _ => TimeSpan.FromSeconds(45)
+        };
     }
 
     private static bool HasRemoteForwardFailure(string? error)

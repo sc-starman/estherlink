@@ -18,8 +18,8 @@ builder.Services.AddSingleton<IpcCommandHandler>();
 builder.Services.AddSingleton<Socks5ProxyEngine>();
 builder.Services.AddSingleton<Socks5BootstrapProxyEngine>();
 builder.Services.AddHostedService<IpcServerWorker>();
-builder.Services.AddHostedService<LocalGatewayRuntimeWorker>();
-builder.Services.AddHostedService<TunnelResilienceOrchestratorWorker>();
+builder.Services.AddHostedService<LogRetentionWorker>();
+builder.Services.AddHostedService<RelayRuntimeWorker>();
 
 var host = builder.Build();
 await host.RunAsync();

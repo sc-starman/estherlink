@@ -15,6 +15,7 @@ namespace OmniRelay.Service.Runtime;
 public sealed class LicenseValidator
 {
     private const string VerifyUrl = "https://omnirelay.net/api/license/verify";
+    private const string OfflineCertificateKeyId = "offline-cert-v1";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -22,12 +23,19 @@ public sealed class LicenseValidator
     };
 
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("OmniRelay.LicenseCache.v2");
+    private static readonly byte[] OfflineCertificateRootSeed = SHA256.HashData(Encoding.UTF8.GetBytes("OmniRelay.LicenseCertificate.Root.v1"));
+    private static readonly byte[] OfflineCertificatePublicKey;
     private static readonly TimeSpan HttpConnectTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan HttpRequestTimeout = TimeSpan.FromSeconds(45);
     private static readonly SemaphoreSlim ValidationLock = new(1, 1);
     private static int _diagnosticLogged;
     private readonly ILogger<LicenseValidator> _logger;
     private readonly FileLogWriter _fileLog;
+
+    static LicenseValidator()
+    {
+        Ed25519.KeyPairFromSeed(out OfflineCertificatePublicKey, out _, OfflineCertificateRootSeed);
+    }
 
     public LicenseValidator(
         ILogger<LicenseValidator> logger,
@@ -48,13 +56,30 @@ public sealed class LicenseValidator
         {
             if (Interlocked.Exchange(ref _diagnosticLogged, 1) == 0)
             {
-                _fileLog.Info("License validator HTTP mode: parallel direct/proxy-aware IC1/IC2 race, per-attempt timeout=45s, connect-timeout=30s.");
+                _fileLog.Info("License validator HTTP mode: parallel direct/proxy-aware all-adapter race, per-attempt timeout=45s, connect-timeout=30s.");
             }
 
             var now = DateTimeOffset.UtcNow;
             var licenseKeyHash = Hash(config.LicenseKey);
             var cache = await ReadCacheAsync(cancellationToken);
             var publicKeys = await ReadPublicKeysCacheAsync(cancellationToken);
+            var certificateCache = await ReadCertificateCacheAsync(cancellationToken);
+            var fingerprintPayload = BuildDeviceFingerprintPayload();
+            var fingerprintHash = HashFingerprintPayload(fingerprintPayload);
+
+            if (!forceOnline &&
+                certificateCache is not null &&
+                certificateCache.LicenseKeyHash == licenseKeyHash &&
+                VerifyOfflineCertificate(certificateCache.Certificate, fingerprintHash))
+            {
+                return new LicenseValidationResult(
+                    true,
+                    false,
+                    now,
+                    null,
+                    null,
+                    Source: "certificate");
+            }
 
             if (!forceOnline &&
                 cache is not null &&
@@ -78,7 +103,8 @@ public sealed class LicenseValidator
                     cache.ActiveDeviceIdHint,
                     cache.Reason,
                     cache.RequestId,
-                    cache.KeyId);
+                    cache.KeyId,
+                    "legacy_cache");
             }
 
             if (string.IsNullOrWhiteSpace(config.LicenseKey))
@@ -91,7 +117,7 @@ public sealed class LicenseValidator
                 var verifyUrl = VerifyUrl;
                 var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
 
-                using var fingerprintDoc = JsonDocument.Parse(BuildDeviceFingerprintPayload());
+                using var fingerprintDoc = JsonDocument.Parse(fingerprintPayload);
 
                 var verifyRequest = new LicenseVerifyRequest
                 {
@@ -171,6 +197,20 @@ public sealed class LicenseValidator
 
                 await WriteCacheAsync(newCache, cancellationToken);
 
+                if (parsed.Valid && parsed.LicenseCertificate is not null)
+                {
+                    if (VerifyOfflineCertificate(parsed.LicenseCertificate, fingerprintHash))
+                    {
+                        await WriteCertificateCacheAsync(
+                            new LicenseCertificateCacheEntry(licenseKeyHash, now, parsed.LicenseCertificate),
+                            cancellationToken);
+                    }
+                    else
+                    {
+                        _fileLog.Warn("Server returned invalid offline certificate payload/signature; skipped local certificate cache update.");
+                    }
+                }
+
                 if (!newCache.IsValid || cacheExpiresAt <= now)
                 {
                     return new LicenseValidationResult(
@@ -187,7 +227,8 @@ public sealed class LicenseValidator
                         parsed.ActiveDeviceIdHint,
                         newCache.Reason,
                         parsed.RequestId,
-                        parsed.KeyId);
+                        parsed.KeyId,
+                        "online");
                 }
 
                 _fileLog.Info($"License verified online. keyId={parsed.KeyId} requestId={parsed.RequestId} cacheExpiresAt={cacheExpiresAt:O}");
@@ -205,7 +246,8 @@ public sealed class LicenseValidator
                     parsed.ActiveDeviceIdHint,
                     parsed.Reason,
                     parsed.RequestId,
-                    parsed.KeyId);
+                    parsed.KeyId,
+                    "online");
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
             {
@@ -247,7 +289,8 @@ public sealed class LicenseValidator
                 cache.ActiveDeviceIdHint,
                 "EXPIRED",
                 cache.RequestId,
-                cache.KeyId);
+                cache.KeyId,
+                "legacy_cache");
         }
 
         if (cache is not null &&
@@ -271,7 +314,8 @@ public sealed class LicenseValidator
                 cache.ActiveDeviceIdHint,
                 cache.Reason,
                 cache.RequestId,
-                cache.KeyId);
+                cache.KeyId,
+                "legacy_cache");
         }
 
         return new LicenseValidationResult(
@@ -280,7 +324,8 @@ public sealed class LicenseValidator
             now,
             cache?.LicenseExpiresAtUtc,
             error,
-            Reason: "OFFLINE_FALLBACK_FAILED");
+            Reason: "OFFLINE_FALLBACK_FAILED",
+            Source: "offline_fallback_failed");
     }
 
     private static string BuildPublicKeysUrl(string verifyUrl)
@@ -316,7 +361,7 @@ public sealed class LicenseValidator
         var attempts = BuildAttempts(config);
         if (attempts.Count == 0)
         {
-            return new VerifyAttempt(false, null, null, "No usable IC1/IC2 source adapter IPv4 found for license verification.");
+            return new VerifyAttempt(false, null, null, "No usable IPv4 source adapter found for license verification.");
         }
 
         var raceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -419,7 +464,7 @@ public sealed class LicenseValidator
         var attempts = BuildAttempts(config);
         if (attempts.Count == 0)
         {
-            _fileLog.Warn("Public keys fetch skipped: no usable IC1/IC2 source adapter IPv4 found.");
+            _fileLog.Warn("Public keys fetch skipped: no usable IPv4 source adapter found.");
             return null;
         }
 
@@ -601,6 +646,44 @@ public sealed class LicenseValidator
         }
     }
 
+    private static bool VerifyOfflineCertificate(LicenseCertificate certificate, string fingerprintHash)
+    {
+        if (certificate is null ||
+            !certificate.IsPerpetual ||
+            !string.Equals(certificate.SignatureAlg, "Ed25519", StringComparison.Ordinal) ||
+            !string.Equals(certificate.KeyId, OfflineCertificateKeyId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(certificate.Signature) ||
+            !string.Equals(certificate.DeviceFingerprintHash, fingerprintHash, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var payload =
+            $"licenseId={certificate.LicenseId};" +
+            $"plan={certificate.Plan};" +
+            $"deviceFingerprintHash={certificate.DeviceFingerprintHash};" +
+            $"issuedAt={certificate.IssuedAt.ToUniversalTime():O};" +
+            $"isPerpetual={certificate.IsPerpetual};" +
+            $"updateEntitlementUntil={Format(certificate.UpdateEntitlementUntil)};" +
+            $"signatureAlg={certificate.SignatureAlg};" +
+            $"keyId={certificate.KeyId}";
+
+        try
+        {
+            var signature = Convert.FromBase64String(certificate.Signature);
+            return Ed25519.Verify(signature, Encoding.UTF8.GetBytes(payload), OfflineCertificatePublicKey);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string HashFingerprintPayload(string payload)
+    {
+        return Hash(payload);
+    }
+
     private static string Hash(string value)
     {
         using var sha = SHA256.Create();
@@ -675,6 +758,33 @@ public sealed class LicenseValidator
         var bytes = JsonSerializer.SerializeToUtf8Bytes(entry, JsonOptions);
         var protectedBytes = ProtectedData.Protect(bytes, Entropy, DataProtectionScope.LocalMachine);
         await File.WriteAllBytesAsync(ServicePaths.LicenseCachePath, protectedBytes, cancellationToken);
+    }
+
+    private static async Task<LicenseCertificateCacheEntry?> ReadCertificateCacheAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!File.Exists(ServicePaths.LicenseCertificatePath))
+            {
+                return null;
+            }
+
+            var protectedBytes = await File.ReadAllBytesAsync(ServicePaths.LicenseCertificatePath, cancellationToken);
+            var bytes = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.LocalMachine);
+            return JsonSerializer.Deserialize<LicenseCertificateCacheEntry>(bytes, JsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task WriteCertificateCacheAsync(LicenseCertificateCacheEntry entry, CancellationToken cancellationToken)
+    {
+        ServicePaths.EnsureDirectories();
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(entry, JsonOptions);
+        var protectedBytes = ProtectedData.Protect(bytes, Entropy, DataProtectionScope.LocalMachine);
+        await File.WriteAllBytesAsync(ServicePaths.LicenseCertificatePath, protectedBytes, cancellationToken);
     }
 
     private static async Task<LicensePublicKeysResponse?> ReadPublicKeysCacheAsync(CancellationToken cancellationToken)
@@ -773,11 +883,9 @@ public sealed class LicenseValidator
 
     private static List<NetworkAttempt> BuildAttempts(ServiceConfig config)
     {
-        var adapters = new List<AdapterBindTarget>(capacity: 2);
-        AddAdapter(adapters, "IC1", config.WhitelistAdapterIfIndex);
-        AddAdapter(adapters, "IC2", config.DefaultAdapterIfIndex);
+        var adapters = BuildAllAdapterBindTargets();
 
-        var attempts = new List<NetworkAttempt>(capacity: 4);
+        var attempts = new List<NetworkAttempt>(capacity: adapters.Count * 2);
         foreach (var adapter in adapters)
         {
             attempts.Add(new NetworkAttempt("Direct", UseProxy: false, adapter.BindIp, $"{adapter.Label} ifIndex={adapter.IfIndex} source={adapter.BindIp}"));
@@ -791,24 +899,32 @@ public sealed class LicenseValidator
         return attempts;
     }
 
-    private static void AddAdapter(List<AdapterBindTarget> adapters, string label, int ifIndex)
+    private static List<AdapterBindTarget> BuildAllAdapterBindTargets()
     {
-        if (ifIndex <= 0)
+        var adapters = new List<AdapterBindTarget>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var adapter in NetworkAdapterCatalog.ListIpv4Adapters())
         {
-            return;
+            foreach (var addressText in adapter.IPv4Addresses)
+            {
+                if (!IPAddress.TryParse(addressText, out var bindIp))
+                {
+                    continue;
+                }
+
+                var key = $"{adapter.IfIndex}/{bindIp}";
+                if (!seen.Add(key))
+                {
+                    continue;
+                }
+
+                var label = adapter.HasDefaultGateway ? "Adapter(default-gw)" : "Adapter";
+                adapters.Add(new AdapterBindTarget(label, adapter.IfIndex, bindIp));
+            }
         }
 
-        if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(ifIndex, out var bindIp) || bindIp is null)
-        {
-            return;
-        }
-
-        if (adapters.Any(x => x.IfIndex == ifIndex))
-        {
-            return;
-        }
-
-        adapters.Add(new AdapterBindTarget(label, ifIndex, bindIp));
+        return adapters;
     }
 
     private sealed record AdapterBindTarget(string Label, int IfIndex, IPAddress BindIp);

@@ -9,10 +9,7 @@ assert_eq(){ [[ "$1" == "$2" ]] || die "$3: expected '$1', got '$2'"; }
 
 script_name_for_protocol(){
   case "$1" in
-    vless_reality_singbox) echo "setup_omnirelay_vps_singbox_vless_reality.sh" ;;
-    vless_plain_singbox) echo "setup_omnirelay_vps_singbox_vless_plain.sh" ;;
-    shadowsocks_singbox) echo "setup_omnirelay_vps_singbox_shadowsocks.sh" ;;
-    shadowtls_v3_shadowsocks_singbox) echo "setup_omnirelay_vps_singbox_shadowtls.sh" ;;
+    vless_reality_singbox|vless_plain_singbox|shadowsocks_singbox|shadowtls_v3_shadowsocks_singbox) echo "setup_omnirelay_vps_singbox.sh" ;;
     openvpn_tcp_singbox) echo "setup_omnirelay_vps_openvpn_singbox.sh" ;;
     ipsec_l2tp_singbox) echo "setup_omnirelay_vps_ipsec_l2tp_singbox.sh" ;;
     *) die "Unsupported protocol id: $1" ;;
@@ -96,7 +93,7 @@ install_protocol(){
   case "$protocol" in
     vless_reality_singbox) cmd+=(--gateway-sni "$VLESS_SNI" --gateway-target "$VLESS_TARGET") ;;
     shadowtls_v3_shadowsocks_singbox) cmd+=(--camouflage-server "$SHADOWTLS_CAMOUFLAGE") ;;
-    openvpn_tcp_singbox) cmd+=(--openvpn-network "$OPENVPN_NETWORK" --openvpn-client-dns "$OPENVPN_CLIENT_DNS") ;;
+    openvpn_tcp_singbox) cmd+=(--openvpn-network "$OPENVPN_NETWORK") ;;
   esac
 
   run_root "${cmd[@]}"
@@ -122,7 +119,6 @@ VLESS_SNI="${VLESS_SNI:-www.apple.com}"
 VLESS_TARGET="${VLESS_TARGET:-www.apple.com:443}"
 SHADOWTLS_CAMOUFLAGE="${SHADOWTLS_CAMOUFLAGE:-www.apple.com:443}"
 OPENVPN_NETWORK="${OPENVPN_NETWORK:-10.29.0.0/24}"
-OPENVPN_CLIENT_DNS="${OPENVPN_CLIENT_DNS:-1.1.1.1,8.8.8.8}"
 
 if (( $# > 0 )); then
   protocols=("$@")

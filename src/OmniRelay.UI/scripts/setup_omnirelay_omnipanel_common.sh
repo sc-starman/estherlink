@@ -239,13 +239,14 @@ omnipanel_configure_nginx_proxy() {
   local panel_key_file="$9"
   local detected_ip="${10:-}"
   local vps_ip="${11:-}"
+  local site_name="${12:-omnirelay-omnipanel}"
   local nginx_conf cert_key_pair cert_path key_path panel_ready
 
   panel_domain="$(printf '%s' "$panel_domain" | xargs)"
   panel_domain_only="$(omnipanel_bool "$panel_domain_only")"
   panel_ssl_enabled="$(omnipanel_bool "$panel_ssl_enabled")"
   panel_ssl_mode="$(omnipanel_ssl_mode "$panel_ssl_mode")"
-  nginx_conf="/etc/nginx/sites-available/omnirelay-omnipanel.conf"
+  nginx_conf="/etc/nginx/sites-available/${site_name}.conf"
   panel_ready=false
 
   if [[ "$panel_domain_only" == "true" && -z "$panel_domain" ]]; then
@@ -261,7 +262,7 @@ omnipanel_configure_nginx_proxy() {
   key_path="${cert_key_pair##*;}"
 
   omnipanel_render_nginx "$nginx_conf" "$panel_port" "$internal_port" "$panel_domain" "$panel_domain_only" "$panel_ssl_enabled" "$cert_path" "$key_path"
-  ln -sfn "$nginx_conf" /etc/nginx/sites-enabled/omnirelay-omnipanel.conf
+  ln -sfn "$nginx_conf" "/etc/nginx/sites-enabled/${site_name}.conf"
   rm -f /etc/nginx/sites-enabled/default || true
   nginx -t
   systemctl enable --now nginx

@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
-import { dirname } from "node:path";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { exec as execCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -10,19 +11,42 @@ import {
   type GatewayClientRecord,
   type GatewayInboundSnapshot,
   type GatewayProtocolProvider,
+  type ProtocolBackupInput,
+  type ProtocolBackupPayload,
   resolveGatewayHost
 } from "@/lib/providers/types";
+import {
+  createTarGzProtocolBackup,
+  importTarGzProtocolBackup,
+  readTarGzBundleEntryUtf8,
+  readJsonClientBackup,
+  type BundleDestination
+} from "@/lib/providers/backup";
+import {
+  readRuntimeStatsByClientIds,
+  listProtocolClientsFromDb,
+  upsertProtocolClientToDb,
+  deleteProtocolClientFromDb
+} from "@/lib/providers/singbox-shared";
+import { resolveProtocolConfigString } from "@/lib/protocol-config";
 
 const exec = promisify(execCallback);
-const DEFAULT_SYNC_COMMAND = "/usr/bin/sudo -n /usr/local/sbin/omnirelay-gatewayctl sync-clients";
-const DEFAULT_CLIENTS_FILE = "/opt/omnirelay/omni-gateway/ipsec_l2tp_clients.json";
+const DEFAULT_SYNC_COMMAND = "";
 const DEFAULT_PSK_FILE = "/etc/omnirelay/gateway/ipsec/shared_psk";
 const DEFAULT_ACCOUNTING_DB = "/etc/omnirelay/gateway/connector/accounting.db";
 const LEGACY_ACCOUNTING_DB = "/etc/omnirelay/gateway/ipsec/accounting.db";
+function sqlite3Command(): string {
+  const configured =
+    process.env.OMNIRELAY_SQLITE3_BIN?.trim() ||
+    process.env.SQLITE3_BIN?.trim() ||
+    "sqlite3";
+  return /[\s\\/]/.test(configured) ? `"${configured.replace(/"/g, '\\"')}"` : configured;
+}
 const IPSEC_ACCOUNTING_CAPABILITIES = {
   supportsTrafficLimit: true,
   supportsDurationLimit: true,
-  supportsUsageAccounting: true
+  supportsUsageAccounting: true,
+  supportsOnlineStatus: true
 } as const;
 
 interface IpsecL2tpClientRecord extends GatewayClientRecord {
@@ -47,11 +71,7 @@ class LocalSqliteIpsecL2tpAccountingSource implements IpsecL2tpAccountingSource 
       return new Map();
     }
 
-    const dbCandidates = [
-      process.env.IPSEC_L2TP_ACCOUNTING_DB?.trim() || "",
-      DEFAULT_ACCOUNTING_DB,
-      LEGACY_ACCOUNTING_DB
-    ].filter((item, index, array) => item && array.indexOf(item) === index);
+    const dbCandidates = getAccountingDbCandidates();
 
     let dbPath = "";
     for (const candidate of dbCandidates) {
@@ -78,7 +98,7 @@ class LocalSqliteIpsecL2tpAccountingSource implements IpsecL2tpAccountingSource 
 
     try {
       const { stdout } = await exec(
-        `sqlite3 -csv -noheader -cmd ".timeout 5000" -cmd "PRAGMA query_only=ON;" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
+        `${sqlite3Command()} -csv -noheader -cmd ".timeout 5000" -cmd "PRAGMA query_only=ON;" "${dbPath}" "SELECT c.client_id, COALESCE(u.used_bytes, 0) AS used_bytes FROM clients c LEFT JOIN usage_totals u ON u.client_id = c.client_id WHERE c.client_id IN (${quotedIds});"`
       );
       const usageMap = new Map<string, number>();
       for (const line of stdout.split(/\r?\n/)) {
@@ -115,12 +135,20 @@ function randomAlphaNum(length: number): string {
     .slice(0, length);
 }
 
-function getClientsFilePath(): string {
-  return process.env.IPSEC_L2TP_CLIENTS_FILE?.trim() || DEFAULT_CLIENTS_FILE;
+function getRuntimeFilePath(): string {
+  return process.env.IPSEC_L2TP_RUNTIME_FILE?.trim() || "/etc/omnirelay/gateway/ipsec_l2tp_runtime.json";
 }
 
 function getPskFilePath(): string {
   return process.env.IPSEC_L2TP_PSK_FILE?.trim() || DEFAULT_PSK_FILE;
+}
+
+function getAccountingDbCandidates(): string[] {
+  return [
+    process.env.IPSEC_L2TP_ACCOUNTING_DB?.trim() || "",
+    DEFAULT_ACCOUNTING_DB,
+    LEGACY_ACCOUNTING_DB
+  ].filter((item, index, array) => item && array.indexOf(item) === index);
 }
 
 function escapeSqlLiteral(value: string): string {
@@ -183,37 +211,96 @@ function makeUsername(email: string, existing: Set<string>): string {
 }
 
 async function readClients(): Promise<IpsecL2tpClientRecord[]> {
-  const filePath = getClientsFilePath();
+  const dbPath = getAccountingDbCandidates()[0] || DEFAULT_ACCOUNTING_DB;
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const payload = JSON.parse(raw) as unknown;
-    if (!Array.isArray(payload)) {
+    const { stdout } = await exec(
+      `${sqlite3Command()} -csv -noheader -cmd ".timeout 5000" "${dbPath}" "SELECT client_id,email,enabled,auth_username,auth_secret,total_bytes_limit,expiry_unix_ms FROM clients WHERE protocol_id='ipsec_l2tp_singbox' ORDER BY email COLLATE NOCASE, client_id;"`
+    );
+    const clients: IpsecL2tpClientRecord[] = [];
+    for (const line of stdout.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(",");
+      if (parts.length < 7) continue;
+      const totalBytes = Number.parseInt(parts[5] ?? "0", 10);
+      clients.push({
+        id: parts[0] ?? "",
+        email: parts[1] ?? "",
+        enable: (parts[2] ?? "0") !== "0",
+        username: parts[3] ?? "",
+        password: parts[4] ?? "",
+        totalGB: Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes / (1024 * 1024 * 1024) : 0,
+        expiryTime: normalizeExpiryTime(parts[6])
+      });
+    }
+    return clients.filter((item) => item.id && item.email && item.username && item.password);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err?.code === "ENOENT") {
       return [];
     }
 
-    return payload
-      .map((item) => ({
-        id: String((item as Record<string, unknown>).id ?? ""),
-        email: String((item as Record<string, unknown>).email ?? ""),
-        enable: Boolean((item as Record<string, unknown>).enable ?? true),
-        username: String((item as Record<string, unknown>).username ?? ""),
-        password: String((item as Record<string, unknown>).password ?? ""),
-        totalGB: normalizeTotalGB((item as Record<string, unknown>).totalGB),
-        expiryTime: normalizeExpiryTime((item as Record<string, unknown>).expiryTime)
-      }))
-      .filter((item) => item.id && item.email && item.username && item.password);
-  } catch {
-    return [];
+    if (err?.code === "EACCES" || err?.code === "EPERM") {
+      throw new Error(`IPSec/L2TP clients DB is not readable by OmniPanel user (${dbPath}).`);
+    }
+
+    throw new Error(`IPSec/L2TP clients DB is invalid or unreadable (${dbPath}): ${err?.message ?? "unknown error"}`);
   }
 }
 
 async function writeClients(clients: IpsecL2tpClientRecord[]): Promise<void> {
-  const filePath = getClientsFilePath();
-  await fs.mkdir(dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp`;
+  const protocolId = "ipsec_l2tp_singbox";
+  const dbCandidates = getAccountingDbCandidates();
+  const existing = await listProtocolClientsFromDb(protocolId, dbCandidates);
+  for (const row of existing) {
+    await deleteProtocolClientFromDb(row.id, dbCandidates);
+  }
+
   const sorted = [...clients].sort((left, right) => left.email.localeCompare(right.email));
-  await fs.writeFile(tempPath, `${JSON.stringify(sorted, null, 2)}\n`, { encoding: "utf8", mode: 0o640 });
-  await fs.rename(tempPath, filePath);
+  for (const client of sorted) {
+    await upsertProtocolClientToDb(
+      protocolId,
+      {
+        id: client.id,
+        email: client.email,
+        enable: client.enable,
+        totalGB: client.totalGB,
+        expiryTime: client.expiryTime,
+        speedLimitKbps: 0,
+        authUsername: client.username,
+        authSecret: client.password
+      },
+      dbCandidates
+    );
+  }
+}
+
+function normalizeImportedIpsecClients(input: unknown[]): IpsecL2tpClientRecord[] {
+  return input.map((item) => {
+    if (typeof item !== "object" || item === null) {
+      throw new Error("IPSec/L2TP backup contains an invalid client record.");
+    }
+
+    const record = item as Record<string, unknown>;
+    const id = String(record.id ?? "").trim();
+    const email = String(record.email ?? "").trim();
+    const username = String(record.username ?? "").trim();
+    const password = String(record.password ?? "").trim();
+    if (!id || !email || !username || !password) {
+      throw new Error("IPSec/L2TP import requires id, email, username, and password for every client.");
+    }
+
+    return {
+      ...record,
+      id,
+      email,
+      enable: Boolean(record.enable ?? true),
+      username,
+      password,
+      totalGB: normalizeTotalGB(record.totalGB),
+      expiryTime: normalizeExpiryTime(record.expiryTime)
+    };
+  });
 }
 
 async function readSharedPsk(): Promise<string> {
@@ -225,10 +312,31 @@ async function readSharedPsk(): Promise<string> {
   }
 }
 
+function ipsecBundleDestinations(): BundleDestination[] {
+  return [
+    {
+      archivePath: "ipsec_l2tp_runtime.json",
+      destinationPath: getRuntimeFilePath(),
+      kind: "file",
+      mode: 0o600
+    },
+    {
+      archivePath: "shared_psk",
+      destinationPath: getPskFilePath(),
+      kind: "file",
+      mode: 0o600
+    }
+  ];
+}
+
 async function syncIpsecL2tp(): Promise<void> {
-  const command = normalizeSudoCommand(process.env.IPSEC_L2TP_SYNC_COMMAND?.trim() || DEFAULT_SYNC_COMMAND);
+  const command = normalizeSudoCommand(
+    process.env.IPSEC_L2TP_SYNC_COMMAND?.trim() ||
+      process.env.SINGBOX_RELOAD_COMMAND?.trim() ||
+      DEFAULT_SYNC_COMMAND
+  );
   if (!command) {
-    return;
+    throw new Error("IPSEC_L2TP_SYNC_COMMAND is required in relay-scoped mode.");
   }
 
   try {
@@ -262,7 +370,9 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
 
   public async getInbound(_session: OmniSession): Promise<GatewayInboundSnapshot> {
     const clients = await readClients();
-    const usageByClientId = await this.accountingSource.getUsageByClientId(clients.map((item) => item.id));
+    const clientIds = clients.map((item) => item.id);
+    const runtimeStats = await readRuntimeStatsByClientIds(clientIds, getAccountingDbCandidates());
+    const usageByClientId = await this.accountingSource.getUsageByClientId(clientIds);
     const capabilities = this.accountingSource.getCapabilities();
     return {
       inbound: {
@@ -273,12 +383,15 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
         enable: true
       },
       clients: clients.map((item) => ({
-        usedBytes: usageByClientId.get(item.id) ?? 0,
+        usedBytes: Math.max(runtimeStats.get(item.id)?.usedBytes ?? 0, usageByClientId.get(item.id) ?? 0),
         id: item.id,
         email: item.email,
         enable: item.enable,
         totalGB: item.totalGB,
-        expiryTime: item.expiryTime
+        expiryTime: item.expiryTime,
+        lastSeenAtUnixMs: runtimeStats.get(item.id)?.lastSeenAtUnixMs ?? 0,
+        activeConnections: runtimeStats.get(item.id)?.activeConnections ?? 0,
+        isOnline: runtimeStats.get(item.id)?.isOnline ?? false
       })),
       capabilities
     };
@@ -376,7 +489,7 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
       throw new Error("IPSec shared PSK is not available on gateway.");
     }
 
-    const server = resolveGatewayHost(request);
+    const server = await resolveProtocolConfigString("ipsec_l2tp_singbox", "publicHost", process.env.PANEL_PUBLIC_HOST, resolveGatewayHost(request));
     const setupSteps = [
       "Add a new L2TP/IPSec PSK VPN profile on your device.",
       "Set server/host to the Server value above.",
@@ -410,5 +523,53 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
       },
       setupSteps
     };
+  }
+
+  public async exportBackup(_session: OmniSession): Promise<ProtocolBackupPayload> {
+    const tempDir = await fs.mkdtemp(join(tmpdir(), "omnirelay-ipsec-export-"));
+    const tempClientsPath = join(tempDir, "clients.db.json");
+    const clientsForBackup = await readClients();
+    await fs.writeFile(tempClientsPath, `${JSON.stringify(clientsForBackup, null, 2)}\n`, "utf8");
+
+    const sources = [
+      { sourcePath: tempClientsPath, archivePath: "clients.db.json", required: true },
+      { sourcePath: getRuntimeFilePath(), archivePath: "ipsec_l2tp_runtime.json" },
+      { sourcePath: getPskFilePath(), archivePath: "shared_psk", required: true }
+    ];
+    try {
+      return await createTarGzProtocolBackup(this.protocolId, "ipsec-l2tp-backup", sources);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  public async importBackup(_session: OmniSession, input: ProtocolBackupInput): Promise<void> {
+    if (input.contentType.includes("json") || input.fileName.toLowerCase().endsWith(".json")) {
+      const clients = normalizeImportedIpsecClients(readJsonClientBackup(input, this.protocolId));
+      await writeClients(clients);
+      await syncIpsecL2tp();
+      return;
+    }
+
+    const clientsJson = await readTarGzBundleEntryUtf8(this.protocolId, input, "clients.db.json");
+    if (!clientsJson) {
+      throw new Error("Backup archive is missing clients.db.json.");
+    }
+    const clients = normalizeImportedIpsecClients(JSON.parse(clientsJson) as unknown[]);
+    await writeClients(clients);
+    const tempDir = await fs.mkdtemp(join(tmpdir(), "omnirelay-ipsec-import-"));
+    try {
+      await importTarGzProtocolBackup(this.protocolId, input, [
+        ...ipsecBundleDestinations(),
+        {
+          archivePath: "clients.db.json",
+          destinationPath: join(tempDir, "clients.db.json"),
+          kind: "file"
+        }
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+    await syncIpsecL2tp();
   }
 }

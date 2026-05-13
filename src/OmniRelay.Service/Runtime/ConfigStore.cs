@@ -7,7 +7,7 @@ namespace OmniRelay.Service.Runtime;
 
 public sealed class ConfigStore
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -15,7 +15,7 @@ public sealed class ConfigStore
         WriteIndented = true
     };
 
-    private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("OmniRelay.Config.v1");
+    private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("OmniRelay.Config.v2");
     private readonly FileLogWriter _log;
 
     public ConfigStore(FileLogWriter log)
@@ -40,95 +40,19 @@ public sealed class ConfigStore
                 return PersistedState.Empty;
             }
 
-            var migrated = false;
-            if (stored.SchemaVersion <= 0)
+            var config = new ServiceConfig
             {
-                stored.SchemaVersion = 1;
-                migrated = true;
-            }
+                SchemaVersion = CurrentSchemaVersion,
+                LicenseKey = Decrypt(stored.EncryptedLicenseKey),
+                Relays = (stored.Relays ?? [])
+                    .Where(x => x is not null)
+                    .Select(x => ToRelayConfig(x!))
+                    .Where(x => !string.IsNullOrWhiteSpace(x.Id))
+                    .ToList()
+            };
 
-            if (stored.SchemaVersion < 2)
-            {
-                stored.TunnelAuthMethod = TunnelAuthMethods.HostKey;
-                stored.SchemaVersion = 2;
-                migrated = true;
-            }
-
-            if (stored.SchemaVersion < 3)
-            {
-                stored.SchemaVersion = 3;
-                migrated = true;
-            }
-
-            if (stored.SchemaVersion < 4)
-            {
-                stored.BootstrapSocksLocalPort = 24081;
-                stored.BootstrapSocksRemotePort = 16080;
-                stored.GatewayOnlineInstallEnabled = true;
-                stored.SchemaVersion = 4;
-                migrated = true;
-            }
-
-            if (stored.SchemaVersion < 5)
-            {
-                stored.SchemaVersion = 5;
-                migrated = true;
-            }
-
-            if (stored.SchemaVersion < 6)
-            {
-                stored.GatewayType = GatewayTypes.Normalize(stored.GatewayType);
-                stored.LocalGateway ??= new PersistedLocalGatewayConfig();
-                stored.SchemaVersion = 6;
-                migrated = true;
-            }
-            if (stored.SchemaVersion < 7)
-            {
-                stored.LocalGateway ??= new PersistedLocalGatewayConfig();
-                stored.LocalGateway.RemoteAddress ??= string.Empty;
-                stored.SchemaVersion = 7;
-                migrated = true;
-            }
-
-            var state = new PersistedState(
-                new ServiceConfig
-                {
-                    SchemaVersion = CurrentSchemaVersion,
-                    LocalProxyListenPort = stored.LocalProxyListenPort,
-                    BootstrapSocksLocalPort = stored.BootstrapSocksLocalPort <= 0 ? 24081 : stored.BootstrapSocksLocalPort,
-                    BootstrapSocksRemotePort = stored.BootstrapSocksRemotePort <= 0 ? 16080 : stored.BootstrapSocksRemotePort,
-                    GatewayOnlineInstallEnabled = stored.GatewayOnlineInstallEnabled,
-                    GatewayType = GatewayTypes.Normalize(stored.GatewayType),
-                    WhitelistAdapterIfIndex = stored.WhitelistAdapterIfIndex,
-                    DefaultAdapterIfIndex = stored.DefaultAdapterIfIndex,
-                    TunnelHost = stored.TunnelHost ?? string.Empty,
-                    TunnelSshPort = stored.TunnelSshPort,
-                    TunnelRemotePort = stored.TunnelRemotePort,
-                    TunnelUser = stored.TunnelUser ?? "OmniRelay",
-                    TunnelAuthMethod = TunnelAuthMethods.Normalize(stored.TunnelAuthMethod),
-                    TunnelPrivateKeyPath = stored.TunnelPrivateKeyPath ?? string.Empty,
-                    TunnelPrivateKeyPassphrase = Decrypt(stored.EncryptedTunnelKeyPassphrase),
-                    TunnelPassword = Decrypt(stored.EncryptedTunnelPassword),
-                    LicenseKey = Decrypt(stored.EncryptedLicenseKey),
-                    LocalGateway = new LocalGatewayConfig
-                    {
-                        Protocol = LocalGatewayProtocols.Normalize(stored.LocalGateway?.Protocol),
-                        Port = stored.LocalGateway?.Port is > 0 and <= 65535 ? stored.LocalGateway.Port : 443,
-                        BindAddress = string.IsNullOrWhiteSpace(stored.LocalGateway?.BindAddress) ? "0.0.0.0" : stored.LocalGateway.BindAddress.Trim(),
-                        RemoteAddress = string.IsNullOrWhiteSpace(stored.LocalGateway?.RemoteAddress) ? string.Empty : stored.LocalGateway.RemoteAddress.Trim(),
-                        Remark = string.IsNullOrWhiteSpace(stored.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : stored.LocalGateway.Remark.Trim(),
-                        RuntimeEnabled = stored.LocalGateway?.RuntimeEnabled ?? true
-                    }
-                },
-                stored.WhitelistEntries ?? []);
-
-            if (migrated || (stored.WhitelistEntries?.Count ?? 0) > 0)
-            {
-                Save(state.Config);
-                _log.Info($"Migrated legacy config to schema version {CurrentSchemaVersion}.");
-            }
-
-            return state;
+            EnsureRelayPorts(config.Relays);
+            return new PersistedState(config, []);
         }
         catch (Exception ex)
         {
@@ -142,35 +66,13 @@ public sealed class ConfigStore
         try
         {
             ServicePaths.EnsureDirectories();
+            EnsureRelayPorts(config.Relays);
+
             var stored = new PersistedConfig
             {
                 SchemaVersion = CurrentSchemaVersion,
-                LocalProxyListenPort = config.LocalProxyListenPort,
-                BootstrapSocksLocalPort = config.BootstrapSocksLocalPort,
-                BootstrapSocksRemotePort = config.BootstrapSocksRemotePort,
-                GatewayOnlineInstallEnabled = config.GatewayOnlineInstallEnabled,
-                GatewayType = GatewayTypes.Normalize(config.GatewayType),
-                WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
-                DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
-                TunnelHost = config.TunnelHost,
-                TunnelSshPort = config.TunnelSshPort,
-                TunnelRemotePort = config.TunnelRemotePort,
-                TunnelUser = config.TunnelUser,
-                TunnelAuthMethod = TunnelAuthMethods.Normalize(config.TunnelAuthMethod),
-                TunnelPrivateKeyPath = config.TunnelPrivateKeyPath,
-                EncryptedTunnelKeyPassphrase = Encrypt(config.TunnelPrivateKeyPassphrase),
-                EncryptedTunnelPassword = Encrypt(config.TunnelPassword),
                 EncryptedLicenseKey = Encrypt(config.LicenseKey),
-                LocalGateway = new PersistedLocalGatewayConfig
-                {
-                    Protocol = LocalGatewayProtocols.Normalize(config.LocalGateway?.Protocol),
-                    Port = config.LocalGateway?.Port is > 0 and <= 65535 ? config.LocalGateway.Port : 443,
-                    BindAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.BindAddress) ? "0.0.0.0" : config.LocalGateway.BindAddress.Trim(),
-                    RemoteAddress = string.IsNullOrWhiteSpace(config.LocalGateway?.RemoteAddress) ? string.Empty : config.LocalGateway.RemoteAddress.Trim(),
-                    Remark = string.IsNullOrWhiteSpace(config.LocalGateway?.Remark) ? "OmniRelay Local Gateway" : config.LocalGateway.Remark.Trim(),
-                    RuntimeEnabled = config.LocalGateway?.RuntimeEnabled ?? true
-                },
-                WhitelistEntries = null
+                Relays = config.Relays.Select(ToPersistedRelayConfig).ToList()
             };
 
             var json = JsonSerializer.Serialize(stored, JsonOptions);
@@ -181,6 +83,228 @@ public sealed class ConfigStore
             _log.Error("Failed saving persisted config.", ex);
             throw;
         }
+    }
+
+    internal static void EnsureRelayPorts(IReadOnlyList<RelayConfig> relays)
+    {
+        var used = new HashSet<int>();
+        var usedRemotePorts = new HashSet<int>();
+        var usedLocalGatewayPorts = new HashSet<int>();
+        var usedLocalOmniPanelPorts = new HashSet<int>();
+        var usedRelayIds = new HashSet<string>(StringComparer.Ordinal);
+        var next = 24080;
+        var nextRemote = 15000;
+        var nextLocalGatewayPort = 2443;
+        var nextLocalOmniPanelPort = 2054;
+
+        foreach (var relay in relays)
+        {
+            if (relay is null)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(relay.Id) || !usedRelayIds.Add(relay.Id.Trim()))
+            {
+                relay.Id = Guid.NewGuid().ToString("N");
+            }
+            else
+            {
+                relay.Id = relay.Id.Trim();
+            }
+
+            relay.Name = string.IsNullOrWhiteSpace(relay.Name) ? "Relay" : relay.Name.Trim();
+            relay.GatewayType = GatewayTypes.Normalize(relay.GatewayType);
+            relay.RemoteGateway ??= new RemoteGatewayConfig();
+            relay.LocalGateway ??= new LocalGatewayConfig();
+            relay.OmniPanel ??= new RelayOmniPanelConfig();
+            relay.OmniPanel.Port = relay.OmniPanel.Port is > 0 and <= 65535
+                ? relay.OmniPanel.Port
+                : (relay.RemoteGateway.PanelPort is > 0 and <= 65535 ? relay.RemoteGateway.PanelPort : 2054);
+            relay.OmniPanel.Username = string.IsNullOrWhiteSpace(relay.OmniPanel.Username) ? relay.RemoteGateway.PanelUser : relay.OmniPanel.Username;
+            relay.OmniPanel.Password = string.IsNullOrWhiteSpace(relay.OmniPanel.Password) ? relay.RemoteGateway.PanelPassword : relay.OmniPanel.Password;
+            relay.OmniPanel.Domain = string.IsNullOrWhiteSpace(relay.OmniPanel.Domain) ? relay.RemoteGateway.PanelDomain : relay.OmniPanel.Domain;
+            relay.OmniPanel.DomainOnly = relay.OmniPanel.DomainOnly || relay.RemoteGateway.PanelDomainOnly;
+            relay.OmniPanel.UseSsl = relay.OmniPanel.UseSsl || relay.RemoteGateway.PanelUseSsl;
+            relay.OmniPanel.SslMode = string.IsNullOrWhiteSpace(relay.OmniPanel.SslMode)
+                ? (string.IsNullOrWhiteSpace(relay.RemoteGateway.PanelSslMode) ? "letsencrypt" : relay.RemoteGateway.PanelSslMode.Trim())
+                : relay.OmniPanel.SslMode.Trim();
+            relay.OmniPanel.UploadedCertPath = string.IsNullOrWhiteSpace(relay.OmniPanel.UploadedCertPath) ? relay.RemoteGateway.PanelUploadedCertPath : relay.OmniPanel.UploadedCertPath;
+            relay.OmniPanel.UploadedKeyPath = string.IsNullOrWhiteSpace(relay.OmniPanel.UploadedKeyPath) ? relay.RemoteGateway.PanelUploadedKeyPath : relay.OmniPanel.UploadedKeyPath;
+
+            relay.RemoteGateway.PanelPort = relay.OmniPanel.Port;
+            relay.RemoteGateway.PanelUser = relay.OmniPanel.Username;
+            relay.RemoteGateway.PanelPassword = relay.OmniPanel.Password;
+            relay.RemoteGateway.PanelDomain = relay.OmniPanel.Domain;
+            relay.RemoteGateway.PanelDomainOnly = relay.OmniPanel.DomainOnly;
+            relay.RemoteGateway.PanelUseSsl = relay.OmniPanel.UseSsl;
+            relay.RemoteGateway.PanelSslMode = relay.OmniPanel.SslMode;
+            relay.RemoteGateway.PanelUploadedCertPath = relay.OmniPanel.UploadedCertPath;
+            relay.RemoteGateway.PanelUploadedKeyPath = relay.OmniPanel.UploadedKeyPath;
+
+            if (string.Equals(relay.GatewayType, GatewayTypes.Local, StringComparison.OrdinalIgnoreCase))
+            {
+                if (relay.LocalGateway.Port <= 0 || relay.LocalGateway.Port > 65535 || !usedLocalGatewayPorts.Add(relay.LocalGateway.Port))
+                {
+                    relay.LocalGateway.Port = AllocatePort(usedLocalGatewayPorts, ref nextLocalGatewayPort);
+                }
+
+                if (relay.OmniPanel.Port <= 0 || relay.OmniPanel.Port > 65535 || !usedLocalOmniPanelPorts.Add(relay.OmniPanel.Port))
+                {
+                    relay.OmniPanel.Port = AllocatePort(usedLocalOmniPanelPorts, ref nextLocalOmniPanelPort);
+                    relay.RemoteGateway.PanelPort = relay.OmniPanel.Port;
+                }
+            }
+
+            if (relay.DataPlaneLocalPort <= 0 || !used.Add(relay.DataPlaneLocalPort))
+            {
+                relay.DataPlaneLocalPort = AllocatePort(used, ref next);
+            }
+
+            if (relay.BootstrapSocksLocalPort <= 0 || !used.Add(relay.BootstrapSocksLocalPort))
+            {
+                relay.BootstrapSocksLocalPort = AllocatePort(used, ref next);
+            }
+
+            if (string.Equals(relay.GatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+            {
+                if (relay.RemoteGateway.TunnelRemotePort <= 0 || !usedRemotePorts.Add(relay.RemoteGateway.TunnelRemotePort))
+                {
+                    relay.RemoteGateway.TunnelRemotePort = AllocatePort(usedRemotePorts, ref nextRemote);
+                }
+
+                if (relay.BootstrapSocksRemotePort <= 0 || !usedRemotePorts.Add(relay.BootstrapSocksRemotePort))
+                {
+                    relay.BootstrapSocksRemotePort = AllocatePort(usedRemotePorts, ref nextRemote);
+                }
+            }
+        }
+    }
+
+    private static int AllocatePort(ISet<int> used, ref int next)
+    {
+        while (next <= 65535)
+        {
+            var candidate = next++;
+            if (candidate < 1025 || !used.Add(candidate))
+            {
+                continue;
+            }
+
+            return candidate;
+        }
+
+        throw new InvalidOperationException("No available relay listener ports remain.");
+    }
+
+    private static RelayConfig ToRelayConfig(PersistedRelayConfig stored)
+    {
+        var relay = new RelayConfig
+        {
+            Id = string.IsNullOrWhiteSpace(stored.Id) ? Guid.NewGuid().ToString("N") : stored.Id.Trim(),
+            Name = string.IsNullOrWhiteSpace(stored.Name) ? "Relay" : stored.Name.Trim(),
+            GatewayType = GatewayTypes.Normalize(stored.GatewayType),
+            Enabled = stored.Enabled,
+            IncomingAdapterId = stored.IncomingAdapterId ?? string.Empty,
+            IncomingAdapterIfIndex = stored.IncomingAdapterIfIndex,
+            OutgoingAdapterId = stored.OutgoingAdapterId ?? string.Empty,
+            OutgoingAdapterIfIndex = stored.OutgoingAdapterIfIndex,
+            DataPlaneLocalPort = stored.DataPlaneLocalPort,
+            BootstrapSocksLocalPort = stored.BootstrapSocksLocalPort,
+            BootstrapSocksRemotePort = stored.BootstrapSocksRemotePort,
+            OmniPanel = stored.OmniPanel ?? new RelayOmniPanelConfig(),
+            RemoteGateway = stored.RemoteGateway ?? new RemoteGatewayConfig(),
+            LocalGateway = stored.LocalGateway ?? new LocalGatewayConfig()
+        };
+
+        relay.RemoteGateway.TunnelPrivateKeyPassphrase = Decrypt(stored.EncryptedTunnelKeyPassphrase);
+        relay.RemoteGateway.TunnelPassword = Decrypt(stored.EncryptedTunnelPassword);
+        relay.OmniPanel.Port = relay.OmniPanel.Port is > 0 and <= 65535
+            ? relay.OmniPanel.Port
+            : (relay.RemoteGateway.PanelPort is > 0 and <= 65535 ? relay.RemoteGateway.PanelPort : 2054);
+        relay.OmniPanel.Username = string.IsNullOrWhiteSpace(relay.OmniPanel.Username) ? relay.RemoteGateway.PanelUser : relay.OmniPanel.Username;
+        relay.OmniPanel.Password = string.IsNullOrWhiteSpace(relay.OmniPanel.Password) ? relay.RemoteGateway.PanelPassword : relay.OmniPanel.Password;
+        relay.OmniPanel.Domain = string.IsNullOrWhiteSpace(relay.OmniPanel.Domain) ? relay.RemoteGateway.PanelDomain : relay.OmniPanel.Domain;
+        relay.OmniPanel.DomainOnly = relay.OmniPanel.DomainOnly || relay.RemoteGateway.PanelDomainOnly;
+        relay.OmniPanel.UseSsl = relay.OmniPanel.UseSsl || relay.RemoteGateway.PanelUseSsl;
+        relay.OmniPanel.SslMode = string.IsNullOrWhiteSpace(relay.OmniPanel.SslMode) ? relay.RemoteGateway.PanelSslMode : relay.OmniPanel.SslMode;
+        relay.OmniPanel.UploadedCertPath = string.IsNullOrWhiteSpace(relay.OmniPanel.UploadedCertPath) ? relay.RemoteGateway.PanelUploadedCertPath : relay.OmniPanel.UploadedCertPath;
+        relay.OmniPanel.UploadedKeyPath = string.IsNullOrWhiteSpace(relay.OmniPanel.UploadedKeyPath) ? relay.RemoteGateway.PanelUploadedKeyPath : relay.OmniPanel.UploadedKeyPath;
+
+        relay.RemoteGateway.PanelPort = relay.OmniPanel.Port;
+        relay.RemoteGateway.PanelUser = relay.OmniPanel.Username;
+        relay.RemoteGateway.PanelPassword = relay.OmniPanel.Password;
+        relay.RemoteGateway.PanelDomain = relay.OmniPanel.Domain;
+        relay.RemoteGateway.PanelDomainOnly = relay.OmniPanel.DomainOnly;
+        relay.RemoteGateway.PanelUseSsl = relay.OmniPanel.UseSsl;
+        relay.RemoteGateway.PanelSslMode = relay.OmniPanel.SslMode;
+        relay.RemoteGateway.PanelUploadedCertPath = relay.OmniPanel.UploadedCertPath;
+        relay.RemoteGateway.PanelUploadedKeyPath = relay.OmniPanel.UploadedKeyPath;
+        return relay;
+    }
+
+    private static PersistedRelayConfig ToPersistedRelayConfig(RelayConfig relay)
+    {
+        var remote = relay.RemoteGateway ?? new RemoteGatewayConfig();
+        return new PersistedRelayConfig
+        {
+            Id = relay.Id,
+            Name = relay.Name,
+            GatewayType = GatewayTypes.Normalize(relay.GatewayType),
+            Enabled = relay.Enabled,
+            IncomingAdapterId = relay.IncomingAdapterId,
+            IncomingAdapterIfIndex = relay.IncomingAdapterIfIndex,
+            OutgoingAdapterId = relay.OutgoingAdapterId,
+            OutgoingAdapterIfIndex = relay.OutgoingAdapterIfIndex,
+            DataPlaneLocalPort = relay.DataPlaneLocalPort,
+            BootstrapSocksLocalPort = relay.BootstrapSocksLocalPort,
+            BootstrapSocksRemotePort = relay.BootstrapSocksRemotePort,
+            OmniPanel = new RelayOmniPanelConfig
+            {
+                Port = relay.OmniPanel?.Port is > 0 and <= 65535 ? relay.OmniPanel.Port : remote.PanelPort,
+                Username = relay.OmniPanel?.Username ?? remote.PanelUser,
+                Password = relay.OmniPanel?.Password ?? remote.PanelPassword,
+                Domain = relay.OmniPanel?.Domain ?? remote.PanelDomain,
+                DomainOnly = relay.OmniPanel?.DomainOnly ?? remote.PanelDomainOnly,
+                UseSsl = relay.OmniPanel?.UseSsl ?? remote.PanelUseSsl,
+                SslMode = string.IsNullOrWhiteSpace(relay.OmniPanel?.SslMode) ? remote.PanelSslMode : relay.OmniPanel.SslMode,
+                UploadedCertPath = relay.OmniPanel?.UploadedCertPath ?? remote.PanelUploadedCertPath ?? string.Empty,
+                UploadedKeyPath = relay.OmniPanel?.UploadedKeyPath ?? remote.PanelUploadedKeyPath ?? string.Empty,
+                PublicUrl = relay.OmniPanel?.PublicUrl ?? string.Empty,
+                LastError = relay.OmniPanel?.LastError ?? string.Empty
+            },
+            RemoteGateway = new RemoteGatewayConfig
+            {
+                TunnelHost = remote.TunnelHost,
+                TunnelSshPort = remote.TunnelSshPort,
+                TunnelRemotePort = remote.TunnelRemotePort,
+                TunnelUser = remote.TunnelUser,
+                TunnelAuthMethod = TunnelAuthMethods.Normalize(remote.TunnelAuthMethod),
+                TunnelPrivateKeyPath = remote.TunnelPrivateKeyPath,
+                BootstrapMode = string.IsNullOrWhiteSpace(remote.BootstrapMode) ? "tunnel" : remote.BootstrapMode.Trim(),
+                Protocol = remote.Protocol,
+                PublicPort = remote.PublicPort,
+                PanelPort = remote.PanelPort,
+                PanelUser = remote.PanelUser,
+                PanelPassword = remote.PanelPassword,
+                PanelDomain = remote.PanelDomain,
+                PanelDomainOnly = remote.PanelDomainOnly,
+                PanelUseSsl = remote.PanelUseSsl,
+                PanelSslMode = remote.PanelSslMode,
+                PanelUploadedCertPath = remote.PanelUploadedCertPath,
+                PanelUploadedKeyPath = remote.PanelUploadedKeyPath,
+                ShadowTlsCamouflageServer = remote.ShadowTlsCamouflageServer,
+                OpenVpnNetwork = remote.OpenVpnNetwork,
+                OpenVpnSharedCaCertPath = remote.OpenVpnSharedCaCertPath,
+                OpenVpnSharedClientCertPath = remote.OpenVpnSharedClientCertPath,
+                OpenVpnSharedClientKeyPath = remote.OpenVpnSharedClientKeyPath,
+                OpenVpnSharedTlsCryptKeyPath = remote.OpenVpnSharedTlsCryptKeyPath,
+                DohEndpoints = remote.DohEndpoints,
+            },
+            EncryptedTunnelKeyPassphrase = Encrypt(remote.TunnelPrivateKeyPassphrase),
+            EncryptedTunnelPassword = Encrypt(remote.TunnelPassword),
+            LocalGateway = relay.LocalGateway ?? new LocalGatewayConfig()
+        };
     }
 
     private static string Encrypt(string plainText)
@@ -211,40 +335,33 @@ public sealed class ConfigStore
 
     private sealed class PersistedConfig
     {
-        public int SchemaVersion { get; set; }
-        public int LocalProxyListenPort { get; set; } = 24080;
-        public int BootstrapSocksLocalPort { get; set; } = 24081;
-        public int BootstrapSocksRemotePort { get; set; } = 16080;
-        public bool GatewayOnlineInstallEnabled { get; set; } = true;
-        public string GatewayType { get; set; } = GatewayTypes.Remote;
-        public int WhitelistAdapterIfIndex { get; set; } = -1;
-        public int DefaultAdapterIfIndex { get; set; } = -1;
-        public bool TunnelEnabled { get; set; }
-        public string? TunnelHost { get; set; }
-        public int TunnelSshPort { get; set; } = 22;
-        public int TunnelRemotePort { get; set; } = 15000;
-        public string? TunnelUser { get; set; }
-        public string? TunnelAuthMethod { get; set; }
-        public string? TunnelPrivateKeyPath { get; set; }
-        public string? EncryptedTunnelKeyPassphrase { get; set; }
-        public string? EncryptedTunnelPassword { get; set; }
+        public int SchemaVersion { get; set; } = CurrentSchemaVersion;
         public string? EncryptedLicenseKey { get; set; }
-        public PersistedLocalGatewayConfig? LocalGateway { get; set; }
-        public List<string>? WhitelistEntries { get; set; }
+        public List<PersistedRelayConfig>? Relays { get; set; }
     }
 
-    public sealed class PersistedLocalGatewayConfig
+    private sealed class PersistedRelayConfig
     {
-        public string Protocol { get; set; } = LocalGatewayProtocols.VlessTcpPlain;
-        public int Port { get; set; } = 443;
-        public string BindAddress { get; set; } = "0.0.0.0";
-        public string RemoteAddress { get; set; } = string.Empty;
-        public string Remark { get; set; } = "OmniRelay Local Gateway";
-        public bool RuntimeEnabled { get; set; } = true;
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = "Relay";
+        public string GatewayType { get; set; } = GatewayTypes.Remote;
+        public bool Enabled { get; set; } = true;
+        public string? IncomingAdapterId { get; set; }
+        public int IncomingAdapterIfIndex { get; set; } = -1;
+        public string? OutgoingAdapterId { get; set; }
+        public int OutgoingAdapterIfIndex { get; set; } = -1;
+        public int DataPlaneLocalPort { get; set; }
+        public int BootstrapSocksLocalPort { get; set; }
+        public int BootstrapSocksRemotePort { get; set; } = 16080;
+        public RelayOmniPanelConfig? OmniPanel { get; set; }
+        public RemoteGatewayConfig? RemoteGateway { get; set; }
+        public string? EncryptedTunnelKeyPassphrase { get; set; }
+        public string? EncryptedTunnelPassword { get; set; }
+        public LocalGatewayConfig? LocalGateway { get; set; }
     }
 }
 
 public sealed record PersistedState(ServiceConfig Config, IReadOnlyList<string> WhitelistEntries)
 {
-    public static PersistedState Empty { get; } = new(new ServiceConfig(), []);
+    public static PersistedState Empty { get; } = new(new ServiceConfig { SchemaVersion = ConfigStore.CurrentSchemaVersion }, []);
 }

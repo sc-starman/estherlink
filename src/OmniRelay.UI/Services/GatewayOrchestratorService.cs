@@ -46,8 +46,10 @@ public sealed class GatewayOrchestratorService
             var adapters = NetworkAdapterCatalog.ListIpv4Adapters()
                 .Select(x => new AdapterChoiceModel
                 {
+                    AdapterId = x.AdapterId,
                     IfIndex = x.IfIndex,
-                    Display = $"{x.Name} (IfIndex={x.IfIndex}) | IPv4={string.Join(",", x.IPv4Addresses)} | GW={(x.HasDefaultGateway ? "Yes" : "No")}"
+                    MacAddress = x.MacAddress,
+                    Display = $"{x.Name} (IfIndex={x.IfIndex}) | MAC={x.MacAddress} | IPv4={string.Join(",", x.IPv4Addresses)} | GW={(x.HasDefaultGateway ? "Yes" : "No")}"
                 })
                 .ToList();
 
@@ -95,15 +97,29 @@ public sealed class GatewayOrchestratorService
             _state.GatewayPanelUploadedCertPath = string.Empty;
             _state.GatewayPanelUploadedKeyPath = string.Empty;
             _state.GatewayBackendPortText = NormalizeOrDefault(remoteProfile.GatewayBackendPortText, _state.TunnelRemotePortText);
-            var defaultReality = GatewayRealityTargetCatalog.GetRandom();
-            _state.GatewaySni = NormalizeOrDefault(remoteProfile.GatewaySni, defaultReality.Sni);
-            _state.GatewayTarget = NormalizeOrDefault(remoteProfile.GatewayTarget, defaultReality.Target);
+            _state.GatewaySni = NormalizeOrDefault(remoteProfile.GatewaySni, string.Empty);
+            _state.GatewayTarget = NormalizeOrDefault(remoteProfile.GatewayTarget, string.Empty);
+            _state.GatewayProtocolTlsEnabled = remoteProfile.GatewayProtocolTlsEnabled;
+            _state.GatewayProtocolTlsServerName = NormalizeOrDefault(remoteProfile.GatewayProtocolTlsServerName, string.Empty);
+            _state.GatewayProtocolCertPath = NormalizeOrDefault(remoteProfile.GatewayProtocolCertPath, string.Empty);
+            _state.GatewayProtocolKeyPath = NormalizeOrDefault(remoteProfile.GatewayProtocolKeyPath, string.Empty);
+            _state.GatewayProtocolTlsMode = NormalizeOrDefault(remoteProfile.GatewayProtocolTlsMode, "uploaded");
+            _state.GatewayProtocolAlpnCsv = NormalizeOrDefault(remoteProfile.GatewayProtocolAlpnCsv, string.Empty);
+            _state.GatewayProxyUsername = NormalizeOrDefault(remoteProfile.GatewayProxyUsername, "omni");
+            _state.GatewayProxyPassword = NormalizeOrDefault(remoteProfile.GatewayProxyPassword, string.Empty);
+            _state.VlessTlsFlow = NormalizeOrDefault(remoteProfile.VlessTlsFlow, string.Empty);
+            _state.Hysteria2UpMbpsText = NormalizeOrDefault(remoteProfile.Hysteria2UpMbpsText, "100");
+            _state.Hysteria2DownMbpsText = NormalizeOrDefault(remoteProfile.Hysteria2DownMbpsText, "100");
+            _state.Hysteria2ObfsPassword = NormalizeOrDefault(remoteProfile.Hysteria2ObfsPassword, string.Empty);
+            _state.Hysteria2IgnoreClientBandwidth = remoteProfile.Hysteria2IgnoreClientBandwidth;
+            _state.Hysteria2MasqueradeUrl = NormalizeOrDefault(remoteProfile.Hysteria2MasqueradeUrl, string.Empty);
+            _state.NaiveNetwork = NormalizeOrDefault(remoteProfile.NaiveNetwork, string.Empty);
+            _state.NaiveQuicCongestionControl = NormalizeOrDefault(remoteProfile.NaiveQuicCongestionControl, string.Empty);
             _state.ShadowTlsCamouflageServer = NormalizeOrDefault(remoteProfile.ShadowTlsCamouflageServer, GatewayCamouflageCatalog.GetRandom());
+            _state.ShadowTlsStrictMode = remoteProfile.ShadowTlsStrictMode;
+            _state.ShadowTlsWildcardSni = NormalizeOrDefault(remoteProfile.ShadowTlsWildcardSni, string.Empty);
             _state.OpenVpnNetwork = NormalizeOrDefault(remoteProfile.OpenVpnNetwork, "10.29.0.0/24");
-            _state.OpenVpnClientDns = NormalizeOrDefault(remoteProfile.OpenVpnClientDns, "1.1.1.1,8.8.8.8");
-            _state.GatewayDnsMode = NormalizeDnsModeOrDefault(remoteProfile.GatewayDnsMode, "hybrid");
             _state.GatewayDohEndpointsText = NormalizeOrDefault(remoteProfile.GatewayDohEndpointsText, "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query");
-            _state.GatewayDnsUdpOnly = remoteProfile.GatewayDnsUdpOnly;
             // Install result credentials are one-time only and never reloaded from persisted UI state.
             _state.GatewayPanelUrl = string.Empty;
             _state.GatewayPanelUsername = string.Empty;
@@ -169,6 +185,26 @@ public sealed class GatewayOrchestratorService
                 }
             }
 
+            var appResponse = await _gatewayClient.GetAppStatusAsync(cancellationToken);
+            if (appResponse?.Success == true)
+            {
+                var appPayload = IpcJson.Deserialize<AppStatusResponse>(appResponse.JsonPayload);
+                if (appPayload?.Status is not null)
+                {
+                    _state.AppStatus = appPayload.Status;
+                    SyncRelayList(appPayload.Status.Relays);
+                    if (appPayload.Status.LicenseCheckedAtUtc is not null)
+                    {
+                        _state.LicenseActivated = appPayload.Status.LicenseValid;
+                    }
+
+                    if (appPayload.Status.LicenseExpiresAtUtc is not null)
+                    {
+                        _state.LicenseActivatedExpiresAtUtc = appPayload.Status.LicenseExpiresAtUtc;
+                    }
+                }
+            }
+
             return SetAction(true, "Status refreshed.");
         }
         catch (Exception ex)
@@ -230,6 +266,88 @@ public sealed class GatewayOrchestratorService
         return await WaitForLocalGatewayActivationAsync("start", progress, cancellationToken);
     }
 
+    public async Task<OperationResult> LoadRelaysAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.ListRelaysAsync(cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Relay list fetch failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        var payload = IpcJson.Deserialize<RelaysResponse>(response.JsonPayload);
+        if (payload is null)
+        {
+            return SetAction(false, "Relay list fetch failed: invalid response payload.");
+        }
+
+        _state.Relays.Clear();
+        foreach (var relay in payload.Relays)
+        {
+            if (relay is not null)
+            {
+                _state.Relays.Add(NormalizeRelayForUi(relay));
+            }
+        }
+
+        return SetAction(true, $"Loaded {payload.Relays.Count} relays.");
+    }
+
+    public async Task<(bool Success, string Message, RelayConfig? Relay)> GetRelayAsync(string relayId, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.GetRelayAsync(relayId, cancellationToken);
+        if (response?.Success != true)
+        {
+            return (false, $"Relay fetch failed: {response?.Error ?? "service unavailable"}", null);
+        }
+
+        var payload = IpcJson.Deserialize<RelayResponse>(response.JsonPayload);
+        if (payload?.Relay is null)
+        {
+            return (false, "Relay fetch failed: invalid response payload.", null);
+        }
+
+        return (true, "Relay loaded.", NormalizeRelayForUi(payload.Relay));
+    }
+
+    public async Task<OperationResult> UpsertRelayAsync(RelayConfig relay, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.UpsertRelayAsync(relay, cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Relay save failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        await LoadRelaysAsync(cancellationToken);
+        await RefreshStatusAsync(cancellationToken);
+        return SetAction(true, "Relay saved.");
+    }
+
+    public async Task<OperationResult> DeleteRelayAsync(string relayId, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.DeleteRelayAsync(relayId, cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Relay delete failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        await LoadRelaysAsync(cancellationToken);
+        await RefreshStatusAsync(cancellationToken);
+        return SetAction(true, "Relay deleted.");
+    }
+
+    public async Task<OperationResult> SetRelayEnabledAsync(string relayId, bool enabled, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.SetRelayEnabledAsync(relayId, enabled, cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Relay update failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        await LoadRelaysAsync(cancellationToken);
+        await RefreshStatusAsync(cancellationToken);
+        return SetAction(true, enabled ? "Relay enabled." : "Relay disabled.");
+    }
+
     public async Task<OperationResult> StopLocalGatewayAsync(CancellationToken cancellationToken = default)
     {
         var response = await _gatewayClient.StopLocalGatewayAsync(cancellationToken);
@@ -259,9 +377,9 @@ public sealed class GatewayOrchestratorService
         return await WaitForLocalGatewayActivationAsync("restart", progress, cancellationToken);
     }
 
-    public async Task<LocalGatewayClientsResult> GetLocalGatewayClientsAsync(CancellationToken cancellationToken = default)
+    public async Task<LocalGatewayClientsResult> GetLocalGatewayClientsAsync(string relayId, CancellationToken cancellationToken = default)
     {
-        var response = await _gatewayClient.GetLocalGatewayClientsAsync(cancellationToken);
+        var response = await _gatewayClient.GetLocalGatewayClientsAsync(relayId, cancellationToken);
         if (response?.Success != true)
         {
             var errorMessage = $"Local clients fetch failed: {response?.Error ?? "service unavailable"}";
@@ -282,9 +400,9 @@ public sealed class GatewayOrchestratorService
         return new LocalGatewayClientsResult(true, message, payload.Clients);
     }
 
-    public async Task<OperationResult> AddLocalGatewayClientAsync(string email, string? remark, CancellationToken cancellationToken = default)
+    public async Task<OperationResult> AddLocalGatewayClientAsync(string email, string relayId, string? remark, CancellationToken cancellationToken = default)
     {
-        var response = await _gatewayClient.AddLocalGatewayClientAsync(email, remark, cancellationToken);
+        var response = await _gatewayClient.AddLocalGatewayClientAsync(email, relayId, remark, cancellationToken);
         if (response?.Success != true)
         {
             return SetAction(false, $"Add local client failed: {response?.Error ?? "service unavailable"}");
@@ -293,9 +411,9 @@ public sealed class GatewayOrchestratorService
         return SetAction(true, "Local client added.");
     }
 
-    public async Task<OperationResult> UpdateLocalGatewayClientAsync(LocalGatewayClientRecord client, CancellationToken cancellationToken = default)
+    public async Task<OperationResult> UpdateLocalGatewayClientAsync(LocalGatewayClientRecord client, string relayId, CancellationToken cancellationToken = default)
     {
-        var response = await _gatewayClient.UpdateLocalGatewayClientAsync(client, cancellationToken);
+        var response = await _gatewayClient.UpdateLocalGatewayClientAsync(client, relayId, cancellationToken);
         if (response?.Success != true)
         {
             return SetAction(false, $"Update local client failed: {response?.Error ?? "service unavailable"}");
@@ -304,9 +422,9 @@ public sealed class GatewayOrchestratorService
         return SetAction(true, "Local client updated.");
     }
 
-    public async Task<OperationResult> DeleteLocalGatewayClientAsync(string clientId, CancellationToken cancellationToken = default)
+    public async Task<OperationResult> DeleteLocalGatewayClientAsync(string clientId, string relayId, CancellationToken cancellationToken = default)
     {
-        var response = await _gatewayClient.DeleteLocalGatewayClientAsync(clientId, cancellationToken);
+        var response = await _gatewayClient.DeleteLocalGatewayClientAsync(clientId, relayId, cancellationToken);
         if (response?.Success != true)
         {
             return SetAction(false, $"Delete local client failed: {response?.Error ?? "service unavailable"}");
@@ -315,9 +433,9 @@ public sealed class GatewayOrchestratorService
         return SetAction(true, "Local client deleted.");
     }
 
-    public async Task<LocalGatewayClientConfigBuildResult> BuildLocalGatewayClientConfigAsync(string clientId, CancellationToken cancellationToken = default)
+    public async Task<LocalGatewayClientConfigBuildResult> BuildLocalGatewayClientConfigAsync(string clientId, string relayId, CancellationToken cancellationToken = default)
     {
-        var response = await _gatewayClient.BuildLocalGatewayClientConfigAsync(clientId, cancellationToken);
+        var response = await _gatewayClient.BuildLocalGatewayClientConfigAsync(clientId, relayId, cancellationToken);
         if (response?.Success != true)
         {
             var message = $"Build config failed: {response?.Error ?? "service unavailable"}";
@@ -401,10 +519,10 @@ public sealed class GatewayOrchestratorService
         return SetAction(false, $"IC1 preflight failed. {probe.Message}");
     }
 
-    public async Task<PolicyListResult> GetPolicyListAsync(string listType, CancellationToken cancellationToken = default)
+    public async Task<PolicyListResult> GetPolicyListAsync(string listType, string? relayId = null, CancellationToken cancellationToken = default)
     {
         var normalizedListType = PolicyListTypes.Normalize(listType);
-        var response = await _gatewayClient.GetPolicyListAsync(normalizedListType, cancellationToken);
+        var response = await _gatewayClient.GetPolicyListAsync(normalizedListType, relayId, cancellationToken);
         if (response?.Success != true)
         {
             if (IsMissingPolicyCapability(response?.Error, IpcCommands.GetPolicyList))
@@ -443,12 +561,13 @@ public sealed class GatewayOrchestratorService
         string listType,
         string mode,
         IReadOnlyList<string> entries,
+        string? relayId = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedListType = PolicyListTypes.Normalize(listType);
         var normalizedMode = PolicyUpdateModes.Normalize(mode);
 
-        var begin = await _gatewayClient.BeginPolicyUpdateAsync(normalizedListType, normalizedMode, cancellationToken);
+        var begin = await _gatewayClient.BeginPolicyUpdateAsync(normalizedListType, normalizedMode, relayId, cancellationToken);
         if (begin?.Success != true)
         {
             if (IsMissingPolicyCapability(begin?.Error, IpcCommands.BeginPolicyUpdate))
@@ -542,6 +661,174 @@ public sealed class GatewayOrchestratorService
         }
     }
 
+    public async Task<RelayPolicyListsResult> GetRelayPolicyListsAsync(string relayId, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.ListRelayPolicyListsAsync(relayId, cancellationToken);
+        if (response?.Success != true)
+        {
+            var message = $"Policy list fetch failed: {response?.Error ?? "service unavailable"}";
+            SetAction(false, message);
+            return new RelayPolicyListsResult(false, message, relayId, [], 0, DateTimeOffset.MinValue, 0, 0, 0, 0);
+        }
+
+        var payload = IpcJson.Deserialize<ListRelayPolicyListsResponse>(response.JsonPayload);
+        if (payload is null)
+        {
+            const string invalidPayload = "Policy list fetch failed: invalid response payload.";
+            SetAction(false, invalidPayload);
+            return new RelayPolicyListsResult(false, invalidPayload, relayId, [], 0, DateTimeOffset.MinValue, 0, 0, 0, 0);
+        }
+
+        var lists = payload.Lists
+            .OrderBy(x => x.Priority)
+            .Select(x => new RelayPolicyListItemResult(x.ListId, x.RelayId, x.Label, x.ListType, x.Priority, x.EntryCount))
+            .ToArray();
+        var messageText = $"Loaded {lists.Length} policy list(s).";
+        SetAction(true, messageText);
+        return new RelayPolicyListsResult(
+            true,
+            messageText,
+            payload.RelayId,
+            lists,
+            payload.Revision,
+            payload.UpdatedAtUtc,
+            payload.TotalListCount,
+            payload.TotalEntryCount,
+            payload.WhitelistListCount,
+            payload.BlacklistListCount);
+    }
+
+    public async Task<RelayPolicyListDetailsResult> GetRelayPolicyListDetailsAsync(string relayId, string listId, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.GetRelayPolicyListAsync(listId, relayId, cancellationToken);
+        if (response?.Success != true)
+        {
+            var message = $"Policy list load failed: {response?.Error ?? "service unavailable"}";
+            SetAction(false, message);
+            return new RelayPolicyListDetailsResult(false, message, listId, relayId, string.Empty, PolicyListTypes.Whitelist, 0, [], 0, 0, DateTimeOffset.MinValue);
+        }
+
+        var payload = IpcJson.Deserialize<GetRelayPolicyListResponse>(response.JsonPayload);
+        if (payload is null)
+        {
+            const string invalidPayload = "Policy list load failed: invalid response payload.";
+            SetAction(false, invalidPayload);
+            return new RelayPolicyListDetailsResult(false, invalidPayload, listId, relayId, string.Empty, PolicyListTypes.Whitelist, 0, [], 0, 0, DateTimeOffset.MinValue);
+        }
+
+        SetAction(true, $"Loaded policy list '{payload.Label}'.");
+        return new RelayPolicyListDetailsResult(
+            true,
+            "Loaded.",
+            payload.ListId,
+            payload.RelayId,
+            payload.Label,
+            payload.ListType,
+            payload.Priority,
+            payload.Entries,
+            payload.Count,
+            payload.Revision,
+            payload.UpdatedAtUtc);
+    }
+
+    public async Task<RelayPolicyMutationResult> CreateRelayPolicyListAsync(string relayId, string label, string listType, int? priority = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.CreateRelayPolicyListAsync(label, listType, relayId, priority, cancellationToken);
+        return ParseRelayPolicyMutationResponse(response, "create");
+    }
+
+    public async Task<RelayPolicyMutationResult> UpdateRelayPolicyListMetaAsync(string relayId, string listId, string label, string listType, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.UpdateRelayPolicyListMetaAsync(listId, label, listType, relayId, cancellationToken);
+        return ParseRelayPolicyMutationResponse(response, "update");
+    }
+
+    public async Task<PolicyCommitSummary> ReplaceRelayPolicyListEntriesAsync(string relayId, string listId, IReadOnlyList<string> entries, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.ReplaceRelayPolicyListEntriesAsync(listId, entries, relayId, cancellationToken);
+        if (response?.Success != true)
+        {
+            var message = $"Policy entries update failed: {response?.Error ?? "service unavailable"}";
+            SetAction(false, message);
+            return new PolicyCommitSummary(false, message, listId, "replace", 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+        }
+
+        var payload = IpcJson.Deserialize<ReplaceRelayPolicyListEntriesResponse>(response.JsonPayload);
+        if (payload is null)
+        {
+            const string invalidPayload = "Policy entries update failed: invalid response payload.";
+            SetAction(false, invalidPayload);
+            return new PolicyCommitSummary(false, invalidPayload, listId, "replace", 0, 0, 0, 0, 0, DateTimeOffset.MinValue);
+        }
+
+        var successMessage = $"Policy entries updated. applied={payload.AppliedCount}, duplicates={payload.DuplicateDroppedCount}, invalid={payload.InvalidCount}, total={payload.Count}.";
+        SetAction(true, successMessage);
+        return new PolicyCommitSummary(
+            true,
+            successMessage,
+            payload.ListId,
+            "replace",
+            payload.AppliedCount,
+            payload.DuplicateDroppedCount,
+            payload.InvalidCount,
+            payload.Count,
+            payload.Revision,
+            payload.UpdatedAtUtc);
+    }
+
+    public async Task<OperationResult> ReorderRelayPolicyListsAsync(string relayId, IReadOnlyList<string> orderedListIds, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.ReorderRelayPolicyListsAsync(orderedListIds, relayId, cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Policy reorder failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        return SetAction(true, "Policy lists reordered.");
+    }
+
+    public async Task<OperationResult> DeleteRelayPolicyListAsync(string relayId, string listId, CancellationToken cancellationToken = default)
+    {
+        var response = await _gatewayClient.DeleteRelayPolicyListAsync(listId, relayId, cancellationToken);
+        if (response?.Success != true)
+        {
+            return SetAction(false, $"Policy list delete failed: {response?.Error ?? "service unavailable"}");
+        }
+
+        return SetAction(true, "Policy list deleted.");
+    }
+
+    private RelayPolicyMutationResult ParseRelayPolicyMutationResponse(IpcResponse? response, string actionName)
+    {
+        if (response?.Success != true)
+        {
+            var message = $"Policy list {actionName} failed: {response?.Error ?? "service unavailable"}";
+            SetAction(false, message);
+            return new RelayPolicyMutationResult(false, message, string.Empty, string.Empty, string.Empty, PolicyListTypes.Whitelist, 0, 0, 0, DateTimeOffset.MinValue);
+        }
+
+        var payload = IpcJson.Deserialize<RelayPolicyListMutationResponse>(response.JsonPayload);
+        if (payload is null)
+        {
+            var message = $"Policy list {actionName} failed: invalid response payload.";
+            SetAction(false, message);
+            return new RelayPolicyMutationResult(false, message, string.Empty, string.Empty, string.Empty, PolicyListTypes.Whitelist, 0, 0, 0, DateTimeOffset.MinValue);
+        }
+
+        SetAction(true, $"Policy list {actionName} completed.");
+        return new RelayPolicyMutationResult(
+            true,
+            "OK",
+            payload.ListId,
+            payload.RelayId,
+            payload.Label,
+            payload.ListType,
+            payload.Priority,
+            payload.EntryCount,
+            payload.Revision,
+            payload.UpdatedAtUtc);
+    }
+
     public async Task<OperationResult> VerifyLicenseAsync(CancellationToken cancellationToken = default)
     {
         var readiness = await CheckLicenseServiceCompatibilityAsync(cancellationToken);
@@ -593,6 +880,7 @@ public sealed class GatewayOrchestratorService
         status.LicenseCheckedAtUtc = DateTimeOffset.UtcNow;
         status.LicenseValid = payload.IsValid;
         status.LicenseExpiresAtUtc = payload.ExpiresAtUtc;
+        status.LicenseSource = payload.Source;
         status.LicenseReason = payload.Reason;
         status.LicenseTransferRequired = payload.TransferRequired;
         status.LicenseTransferLimitPerRollingYear = payload.TransferLimitPerRollingYear;
@@ -606,7 +894,10 @@ public sealed class GatewayOrchestratorService
 
         if (payload.IsValid)
         {
-            return SetAction(true, $"License valid. Expires: {payload.ExpiresAtUtc:O}. Source: {(payload.FromCache ? "cache" : "online")}.");
+            var source = string.IsNullOrWhiteSpace(payload.Source)
+                ? (payload.FromCache ? "legacy_cache" : "online")
+                : payload.Source;
+            return SetAction(true, $"License valid. Expires: {payload.ExpiresAtUtc:O}. Source: {source}.");
         }
 
         if (payload.TransferRequired)
@@ -737,6 +1028,20 @@ public sealed class GatewayOrchestratorService
         }
 
         return SetAction(false, $"Tunnel test failed: {response.Error ?? "unknown error"}");
+    }
+
+    public async Task<OperationResult> TestRelayTunnelConnectionAsync(RelayConfig relay, CancellationToken cancellationToken = default)
+    {
+        if (!string.Equals(GatewayTypes.Normalize(relay.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+        {
+            return SetAction(true, "Local Relay mode selected; SSH tunnel test skipped.");
+        }
+
+        var config = BuildServiceConfigForRelay(relay);
+        var response = await _gatewayClient.TestTunnelConnectionAsync(config, cancellationToken);
+        return response?.Success == true
+            ? SetAction(true, "Relay tunnel connection test succeeded.")
+            : SetAction(false, $"Relay tunnel test failed: {response?.Error ?? "service unavailable"}");
     }
 
     public async Task<OperationResult> InstallStartServiceAsync(CancellationToken cancellationToken = default)
@@ -917,10 +1222,83 @@ public sealed class GatewayOrchestratorService
         };
     }
 
+    private static ServiceConfig BuildServiceConfigForRelay(RelayConfig relay)
+    {
+        var remote = relay.RemoteGateway ?? new RemoteGatewayConfig();
+        return new ServiceConfig
+        {
+            GatewayType = GatewayTypes.Normalize(relay.GatewayType),
+            LocalProxyListenPort = NormalizePortOrDefault(relay.DataPlaneLocalPort, 24080),
+            BootstrapSocksLocalPort = NormalizePortOrDefault(relay.BootstrapSocksLocalPort, 24081),
+            BootstrapSocksRemotePort = NormalizePortOrDefault(relay.BootstrapSocksRemotePort, 16080),
+            WhitelistAdapterIfIndex = relay.IncomingAdapterIfIndex,
+            DefaultAdapterIfIndex = relay.OutgoingAdapterIfIndex,
+            TunnelHost = remote.TunnelHost,
+            TunnelSshPort = NormalizePortOrDefault(remote.TunnelSshPort, 22),
+            TunnelRemotePort = NormalizePortOrDefault(remote.TunnelRemotePort, 15000),
+            TunnelUser = string.IsNullOrWhiteSpace(remote.TunnelUser) ? "OmniRelay" : remote.TunnelUser.Trim(),
+            TunnelAuthMethod = TunnelAuthMethods.Normalize(remote.TunnelAuthMethod),
+            TunnelPrivateKeyPath = remote.TunnelPrivateKeyPath,
+            TunnelPrivateKeyPassphrase = remote.TunnelPrivateKeyPassphrase,
+            TunnelPassword = remote.TunnelPassword
+        };
+    }
+
+    private static int NormalizePortOrDefault(int port, int fallback)
+    {
+        return port > 0 && port <= 65535 ? port : fallback;
+    }
+
     private OperationResult SetAction(bool success, string message)
     {
         _state.LastAction = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} {message}";
         return new OperationResult(success, message);
+    }
+
+    private void SyncRelayList(IReadOnlyList<RelayStatus> statuses)
+    {
+        foreach (var status in statuses)
+        {
+            if (status is null || string.IsNullOrWhiteSpace(status.RelayId))
+            {
+                continue;
+            }
+
+            var relayId = status.RelayId.Trim();
+            var relay = _state.Relays.FirstOrDefault(x => x is not null && string.Equals(x.Id, relayId, StringComparison.Ordinal));
+            if (relay is null)
+            {
+                _state.Relays.Add(new RelayConfig
+                {
+                    Id = relayId,
+                    Name = string.IsNullOrWhiteSpace(status.Name) ? "Relay" : status.Name.Trim(),
+                    GatewayType = GatewayTypes.Normalize(status.GatewayType),
+                    Enabled = status.Enabled,
+                    RemoteGateway = new RemoteGatewayConfig(),
+                    LocalGateway = new LocalGatewayConfig()
+                });
+            }
+            else
+            {
+                relay.Name = string.IsNullOrWhiteSpace(status.Name) ? relay.Name : status.Name.Trim();
+                relay.GatewayType = GatewayTypes.Normalize(status.GatewayType);
+                relay.Enabled = status.Enabled;
+                relay.RemoteGateway ??= new RemoteGatewayConfig();
+                relay.LocalGateway ??= new LocalGatewayConfig();
+            }
+        }
+    }
+
+    private static RelayConfig NormalizeRelayForUi(RelayConfig relay)
+    {
+        relay.Id = string.IsNullOrWhiteSpace(relay.Id) ? Guid.NewGuid().ToString("N") : relay.Id.Trim();
+        relay.Name = string.IsNullOrWhiteSpace(relay.Name) ? "Relay" : relay.Name.Trim();
+        relay.GatewayType = GatewayTypes.Normalize(relay.GatewayType);
+        relay.IncomingAdapterId = relay.IncomingAdapterId ?? string.Empty;
+        relay.OutgoingAdapterId = relay.OutgoingAdapterId ?? string.Empty;
+        relay.RemoteGateway ??= new RemoteGatewayConfig();
+        relay.LocalGateway ??= new LocalGatewayConfig();
+        return relay;
     }
 
     private void OnStatePropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -976,12 +1354,27 @@ public sealed class GatewayOrchestratorService
             GatewayBackendPortText = _state.GatewayBackendPortText,
             GatewaySni = _state.GatewaySni,
             GatewayTarget = _state.GatewayTarget,
+            GatewayProtocolTlsEnabled = _state.GatewayProtocolTlsEnabled,
+            GatewayProtocolTlsServerName = _state.GatewayProtocolTlsServerName,
+            GatewayProtocolCertPath = _state.GatewayProtocolCertPath,
+            GatewayProtocolKeyPath = _state.GatewayProtocolKeyPath,
+            GatewayProtocolTlsMode = _state.GatewayProtocolTlsMode,
+            GatewayProtocolAlpnCsv = _state.GatewayProtocolAlpnCsv,
+            GatewayProxyUsername = _state.GatewayProxyUsername,
+            GatewayProxyPassword = _state.GatewayProxyPassword,
+            VlessTlsFlow = _state.VlessTlsFlow,
+            Hysteria2UpMbpsText = _state.Hysteria2UpMbpsText,
+            Hysteria2DownMbpsText = _state.Hysteria2DownMbpsText,
+            Hysteria2ObfsPassword = _state.Hysteria2ObfsPassword,
+            Hysteria2IgnoreClientBandwidth = _state.Hysteria2IgnoreClientBandwidth,
+            Hysteria2MasqueradeUrl = _state.Hysteria2MasqueradeUrl,
+            NaiveNetwork = _state.NaiveNetwork,
+            NaiveQuicCongestionControl = _state.NaiveQuicCongestionControl,
             ShadowTlsCamouflageServer = _state.ShadowTlsCamouflageServer,
+            ShadowTlsStrictMode = _state.ShadowTlsStrictMode,
+            ShadowTlsWildcardSni = _state.ShadowTlsWildcardSni,
             OpenVpnNetwork = _state.OpenVpnNetwork,
-            OpenVpnClientDns = _state.OpenVpnClientDns,
-            GatewayDnsMode = _state.GatewayDnsMode,
             GatewayDohEndpointsText = _state.GatewayDohEndpointsText,
-            GatewayDnsUdpOnly = _state.GatewayDnsUdpOnly,
             TunnelUser = _state.TunnelUser,
             TunnelAuthMethod = _state.TunnelAuthMethod,
             TunnelKeyPath = _state.TunnelKeyPath,
@@ -1029,12 +1422,27 @@ public sealed class GatewayOrchestratorService
             GatewayBackendPortText = _state.GatewayBackendPortText,
             GatewaySni = _state.GatewaySni,
             GatewayTarget = _state.GatewayTarget,
+            GatewayProtocolTlsEnabled = _state.GatewayProtocolTlsEnabled,
+            GatewayProtocolTlsServerName = _state.GatewayProtocolTlsServerName,
+            GatewayProtocolCertPath = _state.GatewayProtocolCertPath,
+            GatewayProtocolKeyPath = _state.GatewayProtocolKeyPath,
+            GatewayProtocolTlsMode = _state.GatewayProtocolTlsMode,
+            GatewayProtocolAlpnCsv = _state.GatewayProtocolAlpnCsv,
+            GatewayProxyUsername = _state.GatewayProxyUsername,
+            GatewayProxyPassword = _state.GatewayProxyPassword,
+            VlessTlsFlow = _state.VlessTlsFlow,
+            Hysteria2UpMbpsText = _state.Hysteria2UpMbpsText,
+            Hysteria2DownMbpsText = _state.Hysteria2DownMbpsText,
+            Hysteria2ObfsPassword = _state.Hysteria2ObfsPassword,
+            Hysteria2IgnoreClientBandwidth = _state.Hysteria2IgnoreClientBandwidth,
+            Hysteria2MasqueradeUrl = _state.Hysteria2MasqueradeUrl,
+            NaiveNetwork = _state.NaiveNetwork,
+            NaiveQuicCongestionControl = _state.NaiveQuicCongestionControl,
             ShadowTlsCamouflageServer = _state.ShadowTlsCamouflageServer,
+            ShadowTlsStrictMode = _state.ShadowTlsStrictMode,
+            ShadowTlsWildcardSni = _state.ShadowTlsWildcardSni,
             OpenVpnNetwork = _state.OpenVpnNetwork,
-            OpenVpnClientDns = _state.OpenVpnClientDns,
-            GatewayDnsMode = _state.GatewayDnsMode,
             GatewayDohEndpointsText = _state.GatewayDohEndpointsText,
-            GatewayDnsUdpOnly = _state.GatewayDnsUdpOnly,
             // Install result credentials are intentionally not persisted.
             GatewayPanelUrl = string.Empty,
             GatewayPanelUsername = string.Empty,
@@ -1050,12 +1458,6 @@ public sealed class GatewayOrchestratorService
         };
 
         _statePersistence.Save(snapshot);
-    }
-
-    private static string NormalizeDnsModeOrDefault(string? value, string fallback)
-    {
-        var normalized = NormalizeOrDefault(value, fallback).Trim().ToLowerInvariant();
-        return normalized is "hybrid" or "doh" or "udp" ? normalized : fallback;
     }
 
     private static GatewayRemoteUiProfileModel ResolveRemoteProfile(GatewayUiStateModel state)
@@ -1088,12 +1490,27 @@ public sealed class GatewayOrchestratorService
             GatewayBackendPortText = state.GatewayBackendPortText,
             GatewaySni = state.GatewaySni,
             GatewayTarget = state.GatewayTarget,
+            GatewayProtocolTlsEnabled = state.GatewayProtocolTlsEnabled,
+            GatewayProtocolTlsServerName = state.GatewayProtocolTlsServerName,
+            GatewayProtocolCertPath = state.GatewayProtocolCertPath,
+            GatewayProtocolKeyPath = state.GatewayProtocolKeyPath,
+            GatewayProtocolTlsMode = state.GatewayProtocolTlsMode,
+            GatewayProtocolAlpnCsv = state.GatewayProtocolAlpnCsv,
+            GatewayProxyUsername = state.GatewayProxyUsername,
+            GatewayProxyPassword = state.GatewayProxyPassword,
+            VlessTlsFlow = state.VlessTlsFlow,
+            Hysteria2UpMbpsText = state.Hysteria2UpMbpsText,
+            Hysteria2DownMbpsText = state.Hysteria2DownMbpsText,
+            Hysteria2ObfsPassword = state.Hysteria2ObfsPassword,
+            Hysteria2IgnoreClientBandwidth = state.Hysteria2IgnoreClientBandwidth,
+            Hysteria2MasqueradeUrl = state.Hysteria2MasqueradeUrl,
+            NaiveNetwork = state.NaiveNetwork,
+            NaiveQuicCongestionControl = state.NaiveQuicCongestionControl,
             ShadowTlsCamouflageServer = state.ShadowTlsCamouflageServer,
+            ShadowTlsStrictMode = state.ShadowTlsStrictMode,
+            ShadowTlsWildcardSni = state.ShadowTlsWildcardSni,
             OpenVpnNetwork = state.OpenVpnNetwork,
-            OpenVpnClientDns = state.OpenVpnClientDns,
-            GatewayDnsMode = state.GatewayDnsMode,
             GatewayDohEndpointsText = state.GatewayDohEndpointsText,
-            GatewayDnsUdpOnly = state.GatewayDnsUdpOnly,
             TunnelUser = state.TunnelUser,
             TunnelAuthMethod = state.TunnelAuthMethod,
             TunnelKeyPath = state.TunnelKeyPath,

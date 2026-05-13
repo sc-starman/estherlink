@@ -18,17 +18,20 @@ public sealed class LicenseService
 
     private readonly AppDbContext _dbContext;
     private readonly LicenseResponseSigner _signer;
+    private readonly LicenseCertificateSigner _certificateSigner;
     private readonly IOptions<LicensingOptions> _options;
     private readonly ILogger<LicenseService> _logger;
 
     public LicenseService(
         AppDbContext dbContext,
         LicenseResponseSigner signer,
+        LicenseCertificateSigner certificateSigner,
         IOptions<LicensingOptions> options,
         ILogger<LicenseService> logger)
     {
         _dbContext = dbContext;
         _signer = signer;
+        _certificateSigner = certificateSigner;
         _options = options;
         _logger = logger;
     }
@@ -60,6 +63,7 @@ public sealed class LicenseService
         var license = await _dbContext.Licenses
             .Include(x => x.Activations)
             .Include(x => x.Transfers)
+            .Include(x => x.UserLicenses)
             .FirstOrDefaultAsync(x => x.LicenseKey == request.LicenseKey, cancellationToken);
 
         if (license is null)
@@ -111,6 +115,7 @@ public sealed class LicenseService
             {
                 ["plan"] = license.Plan
             };
+            response.LicenseCertificate = BuildOfflineCertificate(license, fingerprintHash, now);
             license.UpdatedAt = now;
             await _dbContext.SaveChangesAsync(cancellationToken);
             await SignResponseAsync(response, request.Nonce, cancellationToken);
@@ -147,6 +152,7 @@ public sealed class LicenseService
             {
                 ["plan"] = license.Plan
             };
+            response.LicenseCertificate = BuildOfflineCertificate(license, fingerprintHash, now);
             license.UpdatedAt = now;
             await _dbContext.SaveChangesAsync(cancellationToken);
             await SignResponseAsync(response, request.Nonce, cancellationToken);
@@ -229,6 +235,7 @@ public sealed class LicenseService
         {
             ["plan"] = license.Plan
         };
+        response.LicenseCertificate = BuildOfflineCertificate(license, fingerprintHash, now);
 
         license.MaxDevices = 1;
         license.UpdatedAt = now;
@@ -290,5 +297,35 @@ public sealed class LicenseService
         }
 
         return $"{value[..6]}...{value[^4..]}";
+    }
+
+    private LicenseCertificate? BuildOfflineCertificate(LicenseEntity license, string fingerprintHash, DateTimeOffset now)
+    {
+        if (!string.IsNullOrWhiteSpace(license.Plan) &&
+            string.Equals(license.Plan.Trim(), "trial", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (license.ExpiresAt.HasValue)
+        {
+            return null;
+        }
+
+        var certificate = new LicenseCertificate
+        {
+            LicenseId = license.Id.ToString("D"),
+            Plan = license.Plan,
+            DeviceFingerprintHash = fingerprintHash,
+            IssuedAt = now,
+            IsPerpetual = true,
+            UpdateEntitlementUntil = license.UserLicenses
+                .Where(x => x.UpdatesEntitledUntil.HasValue)
+                .Select(x => x.UpdatesEntitledUntil)
+                .Max()
+        };
+
+        _certificateSigner.Sign(certificate);
+        return certificate;
     }
 }

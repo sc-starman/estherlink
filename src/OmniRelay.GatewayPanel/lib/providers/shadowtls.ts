@@ -1,5 +1,3 @@
-import { promises as fs } from "node:fs";
-import { dirname } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import QRCode from "qrcode";
 import { type OmniSession } from "@/lib/session";
@@ -9,33 +7,44 @@ import {
   type GatewayClientRecord,
   type GatewayInboundSnapshot,
   type GatewayProtocolProvider,
+  type ProtocolBackupInput,
+  type ProtocolBackupPayload,
   resolveGatewayHost
 } from "@/lib/providers/types";
 import {
-  SINGBOX_ACCOUNTING_CAPABILITIES,
+  SINGBOX_PER_CLIENT_CAPABILITIES,
   normalizeClientOptions,
-  readUsageByClientIds,
-  runGatewaySync
+  normalizeExpiryTime,
+  normalizeSpeedLimitKbps,
+  normalizeTotalGB,
+  readRuntimeStatsByClientIds,
+  runGatewaySync,
+  listProtocolClientsFromDb,
+  upsertProtocolClientToDb,
+  deleteProtocolClientFromDb
 } from "@/lib/providers/singbox-shared";
+import { createJsonClientBackup, readJsonClientBackup } from "@/lib/providers/backup";
+import { resolveProtocolConfigPort, resolveProtocolConfigString } from "@/lib/protocol-config";
 
 interface ShadowTlsClientRecord extends GatewayClientRecord {
   ssPassword: string;
   shadowTlsPassword: string;
   totalGB: number;
   expiryTime: number;
+  speedLimitKbps: number;
 }
 
-function getClientsFilePath(): string {
-  return process.env.SHADOWTLS_CLIENTS_FILE?.trim() || "/opt/omnirelay/omni-gateway/shadowtls_clients.json";
+async function getCamouflageServer(): Promise<string> {
+  return resolveProtocolConfigString("shadowtls_v3_shadowsocks_singbox", "camouflageServer", process.env.SHADOWTLS_CAMOUFLAGE_SERVER, "www.apple.com:443");
 }
 
-function getCamouflageServer(): string {
-  return process.env.SHADOWTLS_CAMOUFLAGE_SERVER?.trim() || "www.apple.com:443";
-}
-
-function getPublicPort(): number {
-  const parsed = Number.parseInt((process.env.SHADOWTLS_PUBLIC_PORT ?? process.env.SINGBOX_PUBLIC_PORT ?? "443").trim(), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 443;
+async function getPublicPort(): Promise<number> {
+  return resolveProtocolConfigPort(
+    "shadowtls_v3_shadowsocks_singbox",
+    "publicPort",
+    process.env.SHADOWTLS_PUBLIC_PORT ?? process.env.SINGBOX_PUBLIC_PORT,
+    443
+  );
 }
 
 function randomToken(length: number): string {
@@ -43,36 +52,70 @@ function randomToken(length: number): string {
 }
 
 async function readClients(): Promise<ShadowTlsClientRecord[]> {
-  const filePath = getClientsFilePath();
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const payload = JSON.parse(raw) as unknown;
-    if (!Array.isArray(payload)) {
-      return [];
-    }
-    return payload
-      .map((item) => ({
-        id: String((item as Record<string, unknown>).id ?? ""),
-        email: String((item as Record<string, unknown>).email ?? ""),
-        enable: Boolean((item as Record<string, unknown>).enable ?? true),
-        ssPassword: String((item as Record<string, unknown>).ssPassword ?? ""),
-        shadowTlsPassword: String((item as Record<string, unknown>).shadowTlsPassword ?? ""),
-        totalGB: Number((item as Record<string, unknown>).totalGB ?? 0) || 0,
-        expiryTime: Number((item as Record<string, unknown>).expiryTime ?? 0) || 0
-      }))
-      .filter((item) => item.id && item.email && item.ssPassword && item.shadowTlsPassword);
-  } catch {
-    return [];
-  }
+  const rows = await listProtocolClientsFromDb("shadowtls_v3_shadowsocks_singbox");
+  return rows
+    .map((item) => {
+      const [ssPassword, shadowTlsPassword] = String(item.authSecret ?? "").split(":", 2);
+      return {
+        id: item.id,
+        email: item.email,
+        enable: item.enable,
+        ssPassword: ssPassword ?? "",
+        shadowTlsPassword: shadowTlsPassword ?? "",
+        totalGB: item.totalGB,
+        expiryTime: item.expiryTime,
+        speedLimitKbps: item.speedLimitKbps
+      };
+    })
+    .filter((item) => item.id && item.email && item.ssPassword && item.shadowTlsPassword);
 }
 
 async function writeClients(clients: ShadowTlsClientRecord[]): Promise<void> {
-  const filePath = getClientsFilePath();
-  await fs.mkdir(dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp`;
-  const sorted = [...clients].sort((left, right) => left.email.localeCompare(right.email));
-  await fs.writeFile(tempPath, `${JSON.stringify(sorted, null, 2)}\n`, { encoding: "utf8", mode: 0o640 });
-  await fs.rename(tempPath, filePath);
+  const existing = await listProtocolClientsFromDb("shadowtls_v3_shadowsocks_singbox");
+  for (const row of existing) {
+    await deleteProtocolClientFromDb(row.id);
+  }
+  for (const client of clients) {
+    await upsertProtocolClientToDb("shadowtls_v3_shadowsocks_singbox", {
+      id: client.id,
+      email: client.email,
+      enable: client.enable,
+      totalGB: client.totalGB,
+      expiryTime: client.expiryTime,
+      speedLimitKbps: client.speedLimitKbps,
+      authUsername: "",
+      authSecret: `${client.ssPassword}:${client.shadowTlsPassword}`
+    });
+  }
+}
+
+function normalizeImportedClients(input: unknown[]): ShadowTlsClientRecord[] {
+  return input.map((item) => {
+    if (typeof item !== "object" || item === null) {
+      throw new Error("ShadowTLS backup contains an invalid client record.");
+    }
+
+    const record = item as Record<string, unknown>;
+    const id = String(record.id ?? "").trim();
+    const email = String(record.email ?? "").trim();
+    const ssPassword = String(record.ssPassword ?? "").trim();
+    const shadowTlsPassword = String(record.shadowTlsPassword ?? "").trim();
+    if (!id || !email || !ssPassword || !shadowTlsPassword) {
+      throw new Error("ShadowTLS import requires id, email, ssPassword, and shadowTlsPassword for every client.");
+    }
+
+    return {
+      ...record,
+      id,
+      email,
+      enable: Boolean(record.enable ?? true),
+      ssPassword,
+      shadowTlsPassword,
+      totalGB: normalizeTotalGB(record.totalGB),
+      expiryTime: normalizeExpiryTime(record.expiryTime),
+      speedLimitKbps: normalizeSpeedLimitKbps(record.speedLimitKbps)
+    };
+  });
 }
 
 export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
@@ -80,12 +123,12 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
 
   public async getInbound(_session: OmniSession): Promise<GatewayInboundSnapshot> {
     const clients = await readClients();
-    const usage = await readUsageByClientIds(clients.map((item) => item.id));
+    const runtimeStats = await readRuntimeStatsByClientIds(clients.map((item) => item.id));
     return {
       inbound: {
         id: 1,
         protocol: this.protocolId,
-        port: getPublicPort(),
+        port: await getPublicPort(),
         remark: "OmniRelay Managed ShadowTLS v3 + Shadowsocks",
         enable: true
       },
@@ -95,9 +138,13 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
         enable: item.enable,
         totalGB: item.totalGB,
         expiryTime: item.expiryTime,
-        usedBytes: usage.get(item.id) ?? 0
+        speedLimitKbps: item.speedLimitKbps,
+        usedBytes: runtimeStats.get(item.id)?.usedBytes ?? 0,
+        lastSeenAtUnixMs: runtimeStats.get(item.id)?.lastSeenAtUnixMs ?? 0,
+        activeConnections: runtimeStats.get(item.id)?.activeConnections ?? 0,
+        isOnline: runtimeStats.get(item.id)?.isOnline ?? false
       })),
-      capabilities: SINGBOX_ACCOUNTING_CAPABILITIES
+      capabilities: SINGBOX_PER_CLIENT_CAPABILITIES
     };
   }
 
@@ -116,7 +163,8 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
       ssPassword: randomToken(24),
       shadowTlsPassword: randomToken(32),
       totalGB: normalized.totalGB,
-      expiryTime: normalized.expiryTime
+      expiryTime: normalized.expiryTime,
+      speedLimitKbps: normalized.speedLimitKbps
     };
 
     clients.push(client);
@@ -142,7 +190,8 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
       email: String(client.email ?? clients[index].email).trim() || clients[index].email,
       enable: Boolean(client.enable),
       totalGB: Number(client.totalGB ?? clients[index].totalGB) || 0,
-      expiryTime: Number(client.expiryTime ?? clients[index].expiryTime) || 0
+      expiryTime: Number(client.expiryTime ?? clients[index].expiryTime) || 0,
+      speedLimitKbps: Number(client.speedLimitKbps ?? clients[index].speedLimitKbps) || 0
     };
 
     await writeClients(clients);
@@ -172,9 +221,14 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
       throw new Error("Client not found.");
     }
 
-    const server = resolveGatewayHost(request);
-    const publicPort = getPublicPort();
-    const camouflage = getCamouflageServer();
+    const server = await resolveProtocolConfigString(
+      "shadowtls_v3_shadowsocks_singbox",
+      "publicHost",
+      process.env.PANEL_PUBLIC_HOST,
+      resolveGatewayHost(request)
+    );
+    const publicPort = await getPublicPort();
+    const camouflage = await getCamouflageServer();
     const camouflageHost = camouflage.includes(":") ? camouflage.slice(0, camouflage.lastIndexOf(":")) : camouflage;
 
     const config = {
@@ -207,5 +261,16 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
     const uri = JSON.stringify(config, null, 2);
     const qrCodeDataUrl = await QRCode.toDataURL(uri, { width: 320, margin: 1 });
     return { mode: "qr", uri, qrCodeDataUrl };
+  }
+
+  public async exportBackup(_session: OmniSession): Promise<ProtocolBackupPayload> {
+    const clients = await readClients();
+    return createJsonClientBackup(this.protocolId, clients);
+  }
+
+  public async importBackup(_session: OmniSession, input: ProtocolBackupInput): Promise<void> {
+    const clients = normalizeImportedClients(readJsonClientBackup(input, this.protocolId));
+    await writeClients(clients);
+    await runGatewaySync();
   }
 }
