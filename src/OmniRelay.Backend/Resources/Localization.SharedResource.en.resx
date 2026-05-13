@@ -1594,7 +1594,7 @@
     <value>Version 1: Released updates</value>
   </data>
   <data name="Changelog.Section.Version2" xml:space="preserve">
-    <value>Version 2: Current uncommitted updates</value>
+    <value>Version 2: Multi-Relay, Multi-Protocol</value>
   </data>
   <data name="Changelog.Label.Version" xml:space="preserve">
     <value>Version</value>
@@ -1704,19 +1704,147 @@
   <data name="Changelog.Release.1.34.16.2" xml:space="preserve">
     <value>Improved packaging flow for desktop application distribution.</value>
   </data>
-  <data name="Changelog.Current.2.1.19.1" xml:space="preserve">
+  <data name="Changelog.Current.2.1.24.1" xml:space="preserve">
+    <value>Version 2: Multi-Relay &amp; Multi-Protocol</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.2" xml:space="preserve">
+    <value>You can now deploy multiple relays and protocols, each with its own independent networking configuration, while managing everything together on a single machine with a single license.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.3" xml:space="preserve">
     <value>Major relay-management redesign in desktop UI with new relay pages and dialogs.</value>
   </data>
-  <data name="Changelog.Current.2.1.19.2" xml:space="preserve">
+  <data name="Changelog.Current.2.1.24.4" xml:space="preserve">
     <value>Service runtime refactor adding relay runtime workers, policy/runtime changes, and log retention.</value>
   </data>
-  <data name="Changelog.Current.2.1.19.3" xml:space="preserve">
-    <value>Gateway panel protocol/provider updates, public client API routes, and config import/export improvements.</value>
+  <data name="Changelog.Current.2.1.24.5" xml:space="preserve">
+    <value>DNS-over-HTTPS (DoH) tunneling is now the default and only supported DNS mode for enhanced security and privacy. Additional secure DNS methods are planned for future releases.</value>
   </data>
-  <data name="Changelog.Current.2.1.19.4" xml:space="preserve">
-    <value>Licensing/backend updates including certificate signing, paid-license admin improvements, and artifact handling changes.</value>
+  <data name="Changelog.Current.2.1.24.6" xml:space="preserve">
+    <value>Added support for the latest stealth remote protocols, including:</value>
   </data>
-  <data name="Changelog.Current.2.1.19.5" xml:space="preserve">
-    <value>Installer and build/upload script updates aligned with package version 2.1.19.</value>
+  <data name="Changelog.Current.2.1.24.7" xml:space="preserve">
+    <value>Hysteria2</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.8" xml:space="preserve">
+    <value>Naive</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.9" xml:space="preserve">
+    <value>ShadowTLS</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.10" xml:space="preserve">
+    <value>Trojan</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.11" xml:space="preserve">
+    <value>VLESS TLS</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.12" xml:space="preserve">
+    <value>Added SOCKS and HTTP proxy support for improved compatibility across devices.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.13" xml:space="preserve">
+    <value>Temporarily removed VLESS Reality until stability issues are fully resolved.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.14" xml:space="preserve">
+    <value>Added per-client speed limiting for supported protocols:</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.15" xml:space="preserve">
+    <value>VLESS</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.16" xml:space="preserve">
+    <value>Shadowsocks</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.17" xml:space="preserve">
+    <value>Trojan</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.18" xml:space="preserve">
+    <value>OpenVPN</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.19" xml:space="preserve">
+    <value>IPsec</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.20" xml:space="preserve">
+    <value>Improved stability for local gateway relays.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.21" xml:space="preserve">
+    <value>Lifetime licenses no longer require an internet connection after activation.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.22" xml:space="preserve">
+    <value>Improved client import/export reliability with new cleanup and validation functions.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.23" xml:space="preserve">
+    <value>OmniPanel 1.3.1 Released Alongside This Update</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.24" xml:space="preserve">
+    <value>New Features</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.25" xml:space="preserve">
+    <value>1. Shareable Per-Client Links - Share client configurations and metadata directly with users.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.26" xml:space="preserve">
+    <value>2. Protocol Configuration Controls - Customize how OmniPanel advertises client configurations.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.27" xml:space="preserve">
+    <value>3. Last Online Tracking - Monitor the last successful client connection for improved tracking and diagnostics.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.28" xml:space="preserve">
+    <value>4. Unified API Documentation - Build integrations around OmniPanel without worrying about protocol-specific differences - one API for all supported protocols.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.29" xml:space="preserve">
+    <value>5. SSL Mode Improvements - SSL-mode panel now supports free automatic SSL provisioning via Let's Encrypt.</value>
+  </data>
+  <data name="Changelog.Current.2.1.24.30" xml:space="preserve">
+    <value>v2.1.24</value>
+  </data>
+  <data name="Admin.Sidebar.Newsletter" xml:space="preserve">
+    <value>Newsletter</value>
+  </data>
+  <data name="Admin.Newsletter.Title" xml:space="preserve">
+    <value>Newsletter Campaigns</value>
+  </data>
+  <data name="Admin.Newsletter.Subtitle" xml:space="preserve">
+    <value>Send the latest changelog campaign to confirmed users and track click-through visits.</value>
+  </data>
+  <data name="Admin.Newsletter.SendLatestButton" xml:space="preserve">
+    <value>Send latest version changelog to all users</value>
+  </data>
+  <data name="Admin.Newsletter.Empty" xml:space="preserve">
+    <value>No newsletter campaigns yet.</value>
+  </data>
+  <data name="Admin.Newsletter.Table.TotalUsers" xml:space="preserve">
+    <value>Total users</value>
+  </data>
+  <data name="Admin.Newsletter.Table.TotalVisited" xml:space="preserve">
+    <value>Total visited</value>
+  </data>
+  <data name="Admin.Newsletter.Table.StartedUtc" xml:space="preserve">
+    <value>Started (UTC)</value>
+  </data>
+  <data name="Admin.Newsletter.Table.CompletedUtc" xml:space="preserve">
+    <value>Completed (UTC)</value>
+  </data>
+  <data name="Admin.Newsletter.State.Pending" xml:space="preserve">
+    <value>Pending</value>
+  </data>
+  <data name="Admin.Newsletter.State.Running" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="Admin.Newsletter.State.Done" xml:space="preserve">
+    <value>Done</value>
+  </data>
+  <data name="Admin.Newsletter.SendSingleButton" xml:space="preserve">
+    <value>Send to specific email</value>
+  </data>
+  <data name="Admin.Newsletter.SendSingleTitle" xml:space="preserve">
+    <value>Send newsletter to one email</value>
+  </data>
+  <data name="Admin.Newsletter.SendSingleSubtitle" xml:space="preserve">
+    <value>Enter a confirmed account email to send this campaign only to that user.</value>
+  </data>
+  <data name="Common.Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="Common.Send" xml:space="preserve">
+    <value>Send</value>
   </data>
 </root>
+
+

@@ -39,12 +39,50 @@
                 <h3 class="text-xl font-semibold">@S["Changelog.Label.Version"] @Model.CurrentChangesEntry.Version</h3>
                 <span class="text-xs text-slate-400">@S["Changelog.Label.Date"] @Model.CurrentChangesEntry.PublishedOnUtc.ToString("yyyy-MM-dd")</span>
             </div>
+            <h4 class="text-base font-semibold text-cyan-200">@Model.CurrentV2Title</h4>
             <ul class="list-disc list-inside text-sm text-slate-300 space-y-2">
-                @foreach (var highlight in Model.CurrentChangesEntry.Highlights)
+                @foreach (var highlight in Model.CurrentV2Highlights.Take(5))
+                {
+                    <li>@highlight</li>
+                }
+                <li>
+                    @Model.CurrentV2Highlights[5]
+                    <ul class="list-disc list-inside ml-5 mt-1 space-y-1 text-slate-300">
+                        @foreach (var protocol in Model.CurrentStealthProtocols)
+                        {
+                            <li>@protocol</li>
+                        }
+                    </ul>
+                </li>
+                @foreach (var highlight in Model.CurrentV2Highlights.Skip(6).Take(2))
+                {
+                    <li>@highlight</li>
+                }
+                <li>
+                    @S["Changelog.Current.2.1.24.14"]
+                    <ul class="list-disc list-inside ml-5 mt-1 space-y-1 text-slate-300">
+                        @foreach (var protocol in Model.CurrentSpeedLimitProtocols)
+                        {
+                            <li>@protocol</li>
+                        }
+                    </ul>
+                </li>
+                @foreach (var highlight in Model.CurrentV2Highlights.Skip(8))
                 {
                     <li>@highlight</li>
                 }
             </ul>
+
+            <div class="pt-2 border-t border-slate-800 space-y-2">
+                <h4 class="text-base font-semibold text-cyan-200">@Model.OmniPanelSectionTitle</h4>
+                <p class="text-sm font-medium text-slate-200">@Model.OmniPanelFeaturesTitle</p>
+                <ul class="list-disc list-inside text-sm text-slate-300 space-y-2">
+                    @foreach (var feature in Model.OmniPanelFeatures)
+                    {
+                        <li>@feature</li>
+                    }
+                </ul>
+            </div>
         </article>
     </section>
 </section>

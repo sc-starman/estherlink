@@ -1,0 +1,122 @@
+@page "/admin/newsletter"
+@model OmniRelay.Backend.Pages.Admin.NewsletterModel
+@{
+    ViewData["Title"] = S["Admin.Newsletter.Title"];
+    ViewData["AdminNav"] = "newsletter";
+}
+
+<div class="max-w-7xl mx-auto px-4 py-10 grid md:grid-cols-[240px_1fr] gap-6">
+    <partial name="_AdminSidebar" view-data="ViewData" />
+
+    <section class="space-y-5">
+        <div>
+            <h1 class="text-3xl font-bold">@S["Admin.Newsletter.Title"]</h1>
+            <p class="text-slate-400 mt-1">@S["Admin.Newsletter.Subtitle"]</p>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Model.NoticeMessage))
+        {
+            <div class="rounded-lg border border-emerald-500/50 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-200">@Model.NoticeMessage</div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
+        {
+            <div class="rounded-lg border border-rose-500/50 bg-rose-950/30 px-4 py-3 text-sm text-rose-200">@Model.ErrorMessage</div>
+        }
+
+        <div class="flex flex-wrap items-center gap-3">
+            <form method="post" asp-page-handler="SendLatest">
+                <button type="submit" class="rounded bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400">
+                    @S["Admin.Newsletter.SendLatestButton"]
+                </button>
+            </form>
+            <button type="button" id="open-single-newsletter-modal" class="rounded border border-cyan-500 px-4 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-900/20">
+                @S["Admin.Newsletter.SendSingleButton"]
+            </button>
+        </div>
+
+        @if (Model.Items.Count == 0)
+        {
+            <div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-300">@S["Admin.Newsletter.Empty"]</div>
+        }
+        else
+        {
+            <div class="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-950/70 text-slate-300">
+                        <tr>
+                            <th class="text-left px-4 py-3">@S["Changelog.Label.Version"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Newsletter.Table.TotalUsers"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Newsletter.Table.TotalVisited"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Table.Status"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Table.CreatedUtc"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Newsletter.Table.StartedUtc"]</th>
+                            <th class="text-left px-4 py-3">@S["Admin.Newsletter.Table.CompletedUtc"]</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var item in Model.Items)
+                    {
+                        <tr class="border-t border-slate-800">
+                            <td class="px-4 py-3">@item.Version</td>
+                            <td class="px-4 py-3">@item.TotalUsers</td>
+                            <td class="px-4 py-3">@item.TotalVisited</td>
+                            <td class="px-4 py-3">@Model.GetStateLabel(item.State)</td>
+                            <td class="px-4 py-3">@item.CreatedAt.ToString("u")</td>
+                            <td class="px-4 py-3">@(item.StartedAt?.ToString("u") ?? S["Common.NotAvailable"])</td>
+                            <td class="px-4 py-3">@(item.CompletedAt?.ToString("u") ?? S["Common.NotAvailable"])</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+<div id="single-newsletter-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 px-4">
+    <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-5 space-y-4">
+        <div>
+            <h2 class="text-lg font-semibold">@S["Admin.Newsletter.SendSingleTitle"]</h2>
+            <p class="mt-1 text-sm text-slate-400">@S["Admin.Newsletter.SendSingleSubtitle"]</p>
+        </div>
+        <form method="post" asp-page-handler="SendSingle" class="space-y-3">
+            <div class="space-y-1">
+                <label asp-for="Input.Email" class="text-sm text-slate-300">@S["Contact.Form.Email"]</label>
+                <input asp-for="Input.Email" type="email" required class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none" />
+            </div>
+            <div class="flex items-center justify-end gap-2">
+                <button type="button" id="close-single-newsletter-modal" class="rounded border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">@S["Common.Cancel"]</button>
+                <button type="submit" class="rounded bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400">@S["Common.Send"]</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        (function () {
+            const openBtn = document.getElementById("open-single-newsletter-modal");
+            const closeBtn = document.getElementById("close-single-newsletter-modal");
+            const modal = document.getElementById("single-newsletter-modal");
+            if (!openBtn || !closeBtn || !modal) return;
+
+            openBtn.addEventListener("click", function () {
+                modal.classList.remove("hidden");
+                modal.classList.add("flex");
+            });
+
+            closeBtn.addEventListener("click", function () {
+                modal.classList.add("hidden");
+                modal.classList.remove("flex");
+            });
+
+            modal.addEventListener("click", function (evt) {
+                if (evt.target === modal) {
+                    modal.classList.add("hidden");
+                    modal.classList.remove("flex");
+                }
+            });
+        })();
+    </script>
+}
