@@ -38,7 +38,6 @@ public sealed class NewsletterDispatchWorker : BackgroundService
             using var scope = _scopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var emailDeliveryService = scope.ServiceProvider.GetRequiredService<IEmailDeliveryService>();
-            var contentProvider = scope.ServiceProvider.GetRequiredService<INewsletterContentProvider>();
             var newsletterService = scope.ServiceProvider.GetRequiredService<NewsletterService>();
 
             var campaign = await dbContext.Newsletters
@@ -64,12 +63,9 @@ public sealed class NewsletterDispatchWorker : BackgroundService
                 .Take(DispatchBatchSize)
                 .ToListAsync(cancellationToken);
 
-            var snapshot = contentProvider.GetLatest();
-
             foreach (var client in pendingClients)
             {
-                var trackedLink = newsletterService.BuildTrackedLink(client.Id);
-                var body = NewsletterService.BuildBody(snapshot, client.Email, trackedLink);
+                var body = newsletterService.BuildBody(client.Email, client.Id);
                 var subject = NewsletterService.BuildSubject(campaign.Version);
 
                 try
