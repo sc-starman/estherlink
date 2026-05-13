@@ -1,5 +1,4 @@
 using System.Text;
-using OmniRelay.Backend.Configuration;
 using OmniRelay.Backend.Data;
 using OmniRelay.Backend.Data.Entities;
 using OmniRelay.Backend.Data.Enums;
@@ -9,17 +8,22 @@ namespace OmniRelay.Backend.Services;
 
 public sealed class NewsletterService : INewsletterService
 {
+    private const string TemplateFileName = "newsletterTemplate.md";
     private readonly AppDbContext _dbContext;
     private readonly INewsletterContentProvider _contentProvider;
     private readonly string _trackingBaseUrl;
+    private readonly ILogger<NewsletterService> _logger;
+    private readonly string _templatePath;
 
     public NewsletterService(
         AppDbContext dbContext,
         INewsletterContentProvider contentProvider,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ILogger<NewsletterService> logger)
     {
         _dbContext = dbContext;
         _contentProvider = contentProvider;
+        _logger = logger;
         var configuredDomain = configuration["OMNIRELAY_DOMAIN"]?.Trim();
         _trackingBaseUrl = string.IsNullOrWhiteSpace(configuredDomain)
             ? "https://omnirelay.net"
@@ -27,6 +31,7 @@ public sealed class NewsletterService : INewsletterService
                configuredDomain.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 ? configuredDomain.TrimEnd('/')
                 : $"https://{configuredDomain.TrimEnd('/')}";
+        _templatePath = Path.Combine(AppContext.BaseDirectory, TemplateFileName);
     }
 
     public async Task<NewsletterCreateResult> CreateLatestCampaignAsync(CancellationToken cancellationToken)
@@ -147,24 +152,20 @@ public sealed class NewsletterService : INewsletterService
     public static string BuildSubject(string version)
         => $"OmniRelay {version} is live - Multi-Relay & Multi-Protocol";
 
-    public static string BuildBody(NewsletterSnapshot snapshot, string recipientEmail, string trackedLink)
+    public string BuildBody(string recipientEmail, Guid newsletterClientId)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Hi {recipientEmail},");
-        sb.AppendLine();
-        sb.AppendLine($"{snapshot.Headline} is now live in OmniRelay {snapshot.Version}.");
-        sb.AppendLine();
-        sb.AppendLine("Highlights:");
-        foreach (var item in snapshot.Highlights)
+        try
         {
-            sb.AppendLine($"- {item}");
+            var template = File.ReadAllText(_templatePath);
+            return template
+                .Replace("{{customer_email}}", recipientEmail, StringComparison.Ordinal)
+                .Replace("{{newsletterClientId}}", newsletterClientId.ToString("D"), StringComparison.Ordinal);
         }
-
-        sb.AppendLine();
-        sb.AppendLine($"{snapshot.CtaText}: {trackedLink}");
-        sb.AppendLine();
-        sb.AppendLine("This message was sent to your account email because you are an OmniRelay user.");
-        return sb.ToString();
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unable to read newsletter template from {TemplatePath}", _templatePath);
+            return $"Hi {recipientEmail},{Environment.NewLine}{Environment.NewLine}https://omnirelay.net/nl/{newsletterClientId:D}";
+        }
     }
 
     public string BuildTrackedLink(Guid newsletterClientId)
