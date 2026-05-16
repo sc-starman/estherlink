@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Net;
 using System.Windows;
 using System.Windows.Controls;
 using System.Diagnostics;
@@ -180,6 +181,7 @@ public partial class RelayEditDialog : Window
                 ShadowTlsStrictModeCheckBox.IsChecked = Relay.RemoteGateway.ShadowTlsStrictMode;
                 ShadowTlsWildcardSniTextBox.Text = Relay.RemoteGateway.ShadowTlsWildcardSni;
                 OpenVpnNetworkTextBox.Text = Relay.RemoteGateway.OpenVpnNetwork;
+                IpsecL2tpNetworkTextBox.Text = Relay.RemoteGateway.IpsecL2tpNetwork;
                 OpenVpnSharedCaCertPathTextBox.Text = Relay.RemoteGateway.OpenVpnSharedCaCertPath;
                 OpenVpnSharedClientCertPathTextBox.Text = Relay.RemoteGateway.OpenVpnSharedClientCertPath;
                 OpenVpnSharedClientKeyPathTextBox.Text = Relay.RemoteGateway.OpenVpnSharedClientKeyPath;
@@ -218,6 +220,9 @@ public partial class RelayEditDialog : Window
         OpenVpnNetworkTextBox.Text = string.IsNullOrWhiteSpace(Relay.RemoteGateway.OpenVpnNetwork)
             ? "10.29.0.0/24"
             : Relay.RemoteGateway.OpenVpnNetwork;
+        IpsecL2tpNetworkTextBox.Text = string.IsNullOrWhiteSpace(Relay.RemoteGateway.IpsecL2tpNetwork)
+            ? "10.39.0.0/24"
+            : Relay.RemoteGateway.IpsecL2tpNetwork;
         OpenVpnSharedCaCertPathTextBox.Text = Relay.RemoteGateway.OpenVpnSharedCaCertPath;
         OpenVpnSharedClientCertPathTextBox.Text = Relay.RemoteGateway.OpenVpnSharedClientCertPath;
         OpenVpnSharedClientKeyPathTextBox.Text = Relay.RemoteGateway.OpenVpnSharedClientKeyPath;
@@ -383,6 +388,7 @@ public partial class RelayEditDialog : Window
                                   (!IsRemote && selectedLocalProtocol == CoreLocalGatewayProtocols.OpenVpnTcp);
 
             Relay.RemoteGateway.OpenVpnNetwork = string.IsNullOrWhiteSpace(OpenVpnNetworkTextBox.Text) ? "10.29.0.0/24" : OpenVpnNetworkTextBox.Text.Trim();
+            Relay.RemoteGateway.IpsecL2tpNetwork = string.IsNullOrWhiteSpace(IpsecL2tpNetworkTextBox.Text) ? "10.39.0.0/24" : IpsecL2tpNetworkTextBox.Text.Trim();
             Relay.RemoteGateway.OpenVpnSharedCaCertPath = OpenVpnSharedCaCertPathTextBox.Text.Trim();
             Relay.RemoteGateway.OpenVpnSharedClientCertPath = OpenVpnSharedClientCertPathTextBox.Text.Trim();
             Relay.RemoteGateway.OpenVpnSharedClientKeyPath = OpenVpnSharedClientKeyPathTextBox.Text.Trim();
@@ -390,6 +396,12 @@ public partial class RelayEditDialog : Window
 
             if (openVpnSelected)
             {
+                if (!IsValidIpv4Cidr(Relay.RemoteGateway.OpenVpnNetwork))
+                {
+                    FeedbackTextBlock.Text = "OpenVPN network must be a valid IPv4 CIDR (example: 10.29.0.0/24).";
+                    return false;
+                }
+
                 if (string.IsNullOrWhiteSpace(Relay.RemoteGateway.OpenVpnSharedCaCertPath) ||
                     string.IsNullOrWhiteSpace(Relay.RemoteGateway.OpenVpnSharedClientCertPath) ||
                     string.IsNullOrWhiteSpace(Relay.RemoteGateway.OpenVpnSharedClientKeyPath) ||
@@ -398,6 +410,12 @@ public partial class RelayEditDialog : Window
                     FeedbackTextBlock.Text = "OpenVPN shared bundle is required: CA cert, client cert, client key, and tls-crypt key.";
                     return false;
                 }
+            }
+
+            if (IsRemote && selectedRemoteProtocol == GatewayProtocols.IpsecL2tpSingbox && !IsValidIpv4Cidr(Relay.RemoteGateway.IpsecL2tpNetwork))
+            {
+                FeedbackTextBlock.Text = "IPSec/L2TP network must be a valid IPv4 CIDR (example: 10.39.0.0/24).";
+                return false;
             }
 
             if (IsRemote)
@@ -464,6 +482,12 @@ public partial class RelayEditDialog : Window
     {
         if (!_loading)
         {
+            if (IsRemote &&
+                GatewayProtocols.Normalize(GetSelectedValue(ProtocolCombo, GatewayProtocols.VlessTlsSingbox)) == GatewayProtocols.IpsecL2tpSingbox &&
+                string.IsNullOrWhiteSpace(IpsecL2tpNetworkTextBox.Text))
+            {
+                IpsecL2tpNetworkTextBox.Text = "10.39.0.0/24";
+            }
             if (!IsRemote &&
                 CoreLocalGatewayProtocols.Normalize(GetSelectedValue(ProtocolCombo, CoreLocalGatewayProtocols.VlessTcpPlain)) == CoreLocalGatewayProtocols.OpenVpnTcp &&
                 string.IsNullOrWhiteSpace(OpenVpnNetworkTextBox.Text))
@@ -1293,6 +1317,7 @@ public partial class RelayEditDialog : Window
         SetGridRowVisibility(ClientProtocolGrid, 24, openVpnSelected);
         SetGridRowVisibility(ClientProtocolGrid, 25, openVpnSelected);
         SetGridRowVisibility(ClientProtocolGrid, 26, localOpenVpnSelected);
+        SetGridRowVisibility(ClientProtocolGrid, 27, IsRemote && protocol == GatewayProtocols.IpsecL2tpSingbox);
 
         var isIpsec = IsRemote && protocol == GatewayProtocols.IpsecL2tpSingbox;
         ProtocolPortTextBox.Visibility = isIpsec ? Visibility.Collapsed : Visibility.Visible;
@@ -1378,6 +1403,28 @@ public partial class RelayEditDialog : Window
     private static int ParsePositiveInt(string value, int fallback)
     {
         return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private static bool IsValidIpv4Cidr(string? cidr)
+    {
+        var value = (cidr ?? string.Empty).Trim();
+        var parts = value.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+        {
+            return false;
+        }
+
+        if (!IPAddress.TryParse(parts[0], out var ip) || ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        if (!int.TryParse(parts[1], out var prefix) || prefix < 0 || prefix > 32)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private void BrowseFileInto(TextBox target, string title, string filter)

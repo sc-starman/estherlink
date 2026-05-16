@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Net;
 
 namespace OmniRelay.UI.Services;
 
@@ -1299,7 +1300,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         Action<string>? onLine,
         CancellationToken cancellationToken)
     {
-        var wrapped = WrapCommand(command, sudoPassword);
+        var normalizedCommand = NormalizeShellCommand(command);
+        var wrapped = WrapCommand(normalizedCommand, sudoPassword);
         ProcessStartInfo? BuildStartInfo(out string bindIp, out string? error)
         {
             if (!SshCliStartInfoFactory.TryCreateBoundSshCommandStartInfo(
@@ -1334,6 +1336,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         var success = result.ExitCode == 0;
         var errorMessage = success ? string.Empty : FirstMeaningfulLine(result.Output, string.Empty);
         return new CommandExecutionResult(success, result.Output, errorMessage);
+    }
+
+    private static string NormalizeShellCommand(string command)
+    {
+        return (command ?? string.Empty).Replace("\r\n", "\n").Replace("\r", "\n");
     }
 
     private async Task<CliExecutionResult> RunCliWithHostKeyRepairAsync(
@@ -1544,7 +1551,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             args.Add("--tls-key-file");
             args.Add(ShellQuote(request.GatewayProtocolKeyPath.Trim()));
             args.Add("--vless-flow");
-            args.Add(ShellQuote(request.VlessTlsFlow.Trim()));
+            args.Add(ShellQuote(request.GatewayProtocolTlsEnabled ? request.VlessTlsFlow.Trim() : string.Empty));
             return string.Join(" ", args);
         }
 
@@ -1638,6 +1645,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
         if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase))
         {
+            args.Add("--ipsec-network");
+            args.Add(ShellQuote(request.IpsecL2tpNetwork.Trim()));
             return string.Join(" ", args);
         }
 
@@ -1753,6 +1762,21 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             throw new InvalidOperationException("OpenVPN tunnel network is required.");
         }
+        else if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase)
+                 && !IsValidIpv4Cidr(request.OpenVpnNetwork))
+        {
+            throw new InvalidOperationException("OpenVPN tunnel network must be a valid IPv4 CIDR.");
+        }
+        else if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase)
+                 && string.IsNullOrWhiteSpace(request.IpsecL2tpNetwork))
+        {
+            throw new InvalidOperationException("IPSec/L2TP tunnel network is required.");
+        }
+        else if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase)
+                 && !IsValidIpv4Cidr(request.IpsecL2tpNetwork))
+        {
+            throw new InvalidOperationException("IPSec/L2TP tunnel network must be a valid IPv4 CIDR.");
+        }
         else if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(request.OpenVpnSharedCaCertLocalPath) ||
@@ -1771,8 +1795,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             }
         }
 
-        if (string.Equals(selectedProtocol, GatewayProtocols.VlessTlsSingbox, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(selectedProtocol, GatewayProtocols.TrojanSingbox, StringComparison.OrdinalIgnoreCase)
+        if (string.Equals(selectedProtocol, GatewayProtocols.TrojanSingbox, StringComparison.OrdinalIgnoreCase)
             || string.Equals(selectedProtocol, GatewayProtocols.Hysteria2Singbox, StringComparison.OrdinalIgnoreCase)
             || string.Equals(selectedProtocol, GatewayProtocols.NaiveSingbox, StringComparison.OrdinalIgnoreCase))
         {
@@ -1785,6 +1808,13 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             {
                 throw new InvalidOperationException("Protocol TLS certificate and key are required.");
             }
+        }
+
+        if (string.Equals(selectedProtocol, GatewayProtocols.VlessTlsSingbox, StringComparison.OrdinalIgnoreCase)
+            && request.GatewayProtocolTlsEnabled
+            && (string.IsNullOrWhiteSpace(request.GatewayProtocolCertPath) || string.IsNullOrWhiteSpace(request.GatewayProtocolKeyPath)))
+        {
+            throw new InvalidOperationException("Protocol TLS certificate and key are required when TLS is enabled.");
         }
 
         if (string.IsNullOrWhiteSpace(request.GatewayDohEndpoints))
@@ -1829,6 +1859,28 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         }
 
         return new string(buffer);
+    }
+
+    private static bool IsValidIpv4Cidr(string? cidr)
+    {
+        var value = (cidr ?? string.Empty).Trim();
+        var parts = value.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+        {
+            return false;
+        }
+
+        if (!IPAddress.TryParse(parts[0], out var ip) || ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        if (!int.TryParse(parts[1], out var prefix) || prefix < 0 || prefix > 32)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool TryParseProgressLine(string line, out int percent, out string message)

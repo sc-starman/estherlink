@@ -50,6 +50,7 @@ public sealed class GatewayUiStateModel
     public bool ShadowTlsStrictMode { get; set; }
     public string ShadowTlsWildcardSni { get; set; } = string.Empty;
     public string OpenVpnNetwork { get; set; } = "10.29.0.0/24";
+    public string IpsecL2tpNetwork { get; set; } = "10.39.0.0/24";
     public string GatewayDohEndpointsText { get; set; } = "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query";
     public string GatewayPanelUrl { get; set; } = string.Empty;
     public string GatewayPanelUsername { get; set; } = string.Empty;
@@ -109,6 +110,7 @@ public sealed class GatewayRemoteUiProfileModel
     public bool ShadowTlsStrictMode { get; set; }
     public string ShadowTlsWildcardSni { get; set; } = string.Empty;
     public string OpenVpnNetwork { get; set; } = "10.29.0.0/24";
+    public string IpsecL2tpNetwork { get; set; } = "10.39.0.0/24";
     public string GatewayDohEndpointsText { get; set; } = "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query";
     public string TunnelUser { get; set; } = "OmniRelay";
     public string TunnelAuthMethod { get; set; } = "password";

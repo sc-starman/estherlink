@@ -149,6 +149,9 @@ public partial class GatewayStateStore : ObservableObject
     private string openVpnNetwork = "10.29.0.0/24";
 
     [ObservableProperty]
+    private string ipsecL2tpNetwork = "10.39.0.0/24";
+
+    [ObservableProperty]
     private string localGatewayProtocol = LocalGatewayProtocols.VlessTcpPlain;
 
     [ObservableProperty]

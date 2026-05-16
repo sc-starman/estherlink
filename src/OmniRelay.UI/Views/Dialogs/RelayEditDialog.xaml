@@ -58,6 +58,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Text="Incoming Network (IN)" Style="{StaticResource FormLabelStyle}"/>
                         <ComboBox x:Name="IncomingAdapterCombo" Grid.Row="0" Grid.Column="1" DisplayMemberPath="Display" Style="{StaticResource FormComboBoxStyle}" SelectionChanged="IncomingAdapterCombo_SelectionChanged"/>
@@ -274,6 +275,8 @@
                         </WrapPanel>
                         <TextBlock Grid.Row="26" Text="OpenVPN Public IP / Domain" Style="{StaticResource FormLabelStyle}"/>
                         <TextBox x:Name="OpenVpnPublicHostTextBox" Grid.Row="26" Grid.Column="1" Style="{StaticResource FormTextBoxStyle}"/>
+                        <TextBlock Grid.Row="27" Text="IPSec/L2TP Network" Style="{StaticResource FormLabelStyle}"/>
+                        <TextBox x:Name="IpsecL2tpNetworkTextBox" Grid.Row="27" Grid.Column="1" Style="{StaticResource FormTextBoxStyle}"/>
                     </Grid>
                 </ScrollViewer>
             </TabItem>

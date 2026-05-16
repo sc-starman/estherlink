@@ -29,6 +29,14 @@ async function getPublicPort(): Promise<number> {
   return resolveProtocolConfigPort("vless_tls_singbox", "publicPort", process.env.SINGBOX_PUBLIC_PORT, 443);
 }
 
+function isVlessTlsEnabled(): boolean {
+  const raw = String(process.env.SINGBOX_VLESS_TLS_ENABLED ?? "").trim().toLowerCase();
+  if (!raw) {
+    return true;
+  }
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 export class VlessPlainSingboxProvider implements GatewayProtocolProvider {
   public readonly protocolId = "vless_tls_singbox";
 
@@ -125,7 +133,11 @@ export class VlessPlainSingboxProvider implements GatewayProtocolProvider {
 
     const host = await resolveProtocolConfigString("vless_tls_singbox", "publicHost", process.env.PANEL_PUBLIC_HOST, resolveGatewayHost(request));
     const port = await getPublicPort();
-    const query = new URLSearchParams({ type: "tcp", security: "tls", encryption: "none" });
+    const query = new URLSearchParams({
+      type: "tcp",
+      security: isVlessTlsEnabled() ? "tls" : "none",
+      encryption: "none"
+    });
     const uri = `vless://${client.id}@${host}:${port}?${query.toString()}#${encodeURIComponent(client.email)}`;
     const qrCodeDataUrl = await QRCode.toDataURL(uri, { width: 320, margin: 1 });
     return { mode: "qr", uri, qrCodeDataUrl };

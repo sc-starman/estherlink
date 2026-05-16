@@ -42,6 +42,7 @@ public sealed class GatewayDeploymentRequest
     public bool ShadowTlsStrictMode { get; init; }
     public string ShadowTlsWildcardSni { get; init; } = string.Empty;
     public string OpenVpnNetwork { get; init; } = "10.29.0.0/24";
+    public string IpsecL2tpNetwork { get; init; } = "10.39.0.0/24";
     public string OpenVpnSharedCaCertLocalPath { get; init; } = string.Empty;
     public string OpenVpnSharedClientCertLocalPath { get; init; } = string.Empty;
     public string OpenVpnSharedClientKeyLocalPath { get; init; } = string.Empty;

@@ -75,6 +75,7 @@ public sealed class RemoteGatewayConfig
     public bool ShadowTlsStrictMode { get; set; }
     public string ShadowTlsWildcardSni { get; set; } = string.Empty;
     public string OpenVpnNetwork { get; set; } = "10.29.0.0/24";
+    public string IpsecL2tpNetwork { get; set; } = "10.39.0.0/24";
     public string OpenVpnSharedCaCertPath { get; set; } = string.Empty;
     public string OpenVpnSharedClientCertPath { get; set; } = string.Empty;
     public string OpenVpnSharedClientKeyPath { get; set; } = string.Empty;

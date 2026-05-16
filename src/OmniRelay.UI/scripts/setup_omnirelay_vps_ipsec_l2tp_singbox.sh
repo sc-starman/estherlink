@@ -14,7 +14,9 @@ IPSEC_PSK_FILE="${GATEWAY_ROOT_DIR:-/etc/omnirelay/gateway}/ipsec/shared_psk"
 IPSEC_INTERFACE="ppp+"
 IPSEC_STATE_SERVICE="strongswan-starter"
 XL2TPD_SERVICE="xl2tpd"
+IPSEC_L2TP_NETWORK="10.39.0.0/24"
 IPSEC_DNSMASQ_CONFIG_FILE="/etc/dnsmasq.d/omnirelay-ipsec-l2tp.conf"
+IPSEC_DNS_REDIRECT_CHAIN="OMNIDNSREDIRIPSEC"
 OUTPUT_JSON="false"
 COMMAND=""
 PANEL_BASE_PATH=""
@@ -79,6 +81,7 @@ parse_args() {
       --gateway-target) require_value "$1" "${2:-}"; shift 2 ;;
       --camouflage-server) require_value "$1" "${2:-}"; shift 2 ;;
       --openvpn-network) require_value "$1" "${2:-}"; shift 2 ;;
+      --ipsec-network) require_value "$1" "${2:-}"; IPSEC_L2TP_NETWORK="$2"; shift 2 ;;
       --) shift; break ;;
       *) die "Unknown argument: $1" ;;
     esac
@@ -91,6 +94,7 @@ protocol_apply_relay_scope() {
   PROTOCOL_ENV_FILE="${GATEWAY_ROOT_DIR}/ipsec_l2tp_panel.env"
   IPSEC_PSK_FILE="${GATEWAY_ROOT_DIR}/ipsec/shared_psk"
   IPSEC_DNSMASQ_CONFIG_FILE="/etc/dnsmasq.d/omnirelay-ipsec-l2tp${RELAY_ID:+-${RELAY_ID}}.conf"
+  IPSEC_DNS_REDIRECT_CHAIN="OMNIDNSREDIRIP$(printf '%.10s' "${RELAY_HASH:-$(connector_short_hash "$RELAY_ID")}")"
 }
 
 protocol_apply_port_defaults() {
@@ -128,6 +132,7 @@ protocol_release_ipsec_owner() {
 
 protocol_validate_install_args() {
   [[ "$PANEL_PORT" != "1701" ]] || die "--panel-port must differ from 1701 for ${PROTOCOL_ID}"
+  protocol_ipsec_network_parts >/dev/null || die "--ipsec-network must be a valid IPv4 CIDR (example: 10.39.0.0/24)"
 }
 
 protocol_seed_clients() {
@@ -152,7 +157,12 @@ SQL
   fi
   if [[ ! -f "$IPSEC_PSK_FILE" ]]; then
     printf '%s\n' "$(connector_random_string 32)" > "$IPSEC_PSK_FILE"
-    chmod 0600 "$IPSEC_PSK_FILE" || true
+  fi
+  if id -u "$PANEL_USER_ACCOUNT" >/dev/null 2>&1; then
+    chown "root:${PANEL_USER_ACCOUNT}" "$IPSEC_PSK_FILE" 2>/dev/null || true
+    chmod 0640 "$IPSEC_PSK_FILE" 2>/dev/null || true
+  else
+    chmod 0600 "$IPSEC_PSK_FILE" 2>/dev/null || true
   fi
 }
 
@@ -170,7 +180,8 @@ protocol_ensure_runtime() {
 
   jq -n \
     --argjson connectorRedirectPort "$redirect_port" \
-    '{connectorRedirectPort:$connectorRedirectPort,updatedAtUtc:(now|todate)}' > "$PROTOCOL_RUNTIME_FILE"
+    --arg ipsecL2tpNetwork "$IPSEC_L2TP_NETWORK" \
+    '{connectorRedirectPort:$connectorRedirectPort,ipsecL2tpNetwork:$ipsecL2tpNetwork,updatedAtUtc:(now|todate)}' > "$PROTOCOL_RUNTIME_FILE"
   chmod 0600 "$PROTOCOL_RUNTIME_FILE" || true
 }
 
@@ -204,6 +215,108 @@ EOF
   chmod 0600 "$PROTOCOL_ENV_FILE" || true
 }
 
+protocol_write_ppp_options() {
+  cat > /etc/ppp/options.xl2tpd <<'EOF'
+ipcp-accept-local
+ipcp-accept-remote
+noccp
+auth
+mtu 1400
+mru 1400
+nodefaultroute
+lock
+proxyarp
+connect-delay 5000
+refuse-pap
+refuse-chap
+refuse-mschap
+require-mschap-v2
+require-mppe-128
+EOF
+  chmod 0644 /etc/ppp/options.xl2tpd || true
+}
+
+protocol_ipsec_network_parts() {
+  python3 - "$IPSEC_L2TP_NETWORK" <<'PY'
+import ipaddress
+import sys
+
+cidr = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+try:
+    net = ipaddress.ip_network(cidr, strict=False)
+except Exception:
+    sys.exit(1)
+if net.version != 4:
+    sys.exit(1)
+hosts = list(net.hosts())
+if len(hosts) < 4:
+    sys.exit(1)
+local_ip = hosts[0]
+pool_start = hosts[1]
+pool_end = hosts[-1]
+print(str(local_ip))
+print(str(pool_start))
+print(str(pool_end))
+PY
+}
+
+protocol_write_xl2tpd_config() {
+  local local_ip pool_start pool_end
+  mapfile -t parts < <(protocol_ipsec_network_parts)
+  local_ip="${parts[0]:-}"
+  pool_start="${parts[1]:-}"
+  pool_end="${parts[2]:-}"
+  [[ -n "$local_ip" && -n "$pool_start" && -n "$pool_end" ]] || die "failed to calculate IPSec/L2TP address pool from --ipsec-network"
+
+  cat > /etc/xl2tpd/xl2tpd.conf <<EOF
+[global]
+ipsec saref = no
+listen-addr = 0.0.0.0
+
+[lns default]
+ip range = ${pool_start}-${pool_end}
+local ip = ${local_ip}
+require chap = yes
+refuse pap = yes
+require authentication = yes
+name = l2tpd
+ppp debug = no
+pppoptfile = /etc/ppp/options.xl2tpd
+length bit = yes
+EOF
+  chmod 0644 /etc/xl2tpd/xl2tpd.conf || true
+}
+
+protocol_write_ipsec_config() {
+  cat > /etc/ipsec.conf <<'EOF'
+config setup
+  uniqueids=no
+
+conn L2TP-PSK
+  keyexchange=ikev1
+  authby=psk
+  type=transport
+  left=%defaultroute
+  leftprotoport=17/1701
+  right=%any
+  rightprotoport=17/%any
+  ike=aes256-sha1-modp2048,aes128-sha1-modp2048!
+  esp=aes256-sha1,aes128-sha1!
+  auto=add
+EOF
+
+  local psk
+  psk="$(tr -d '\r\n' < "$IPSEC_PSK_FILE")"
+  printf '%%any %%any : PSK "%s"\n' "$psk" > /etc/ipsec.secrets
+  chmod 0600 /etc/ipsec.secrets || true
+}
+
+protocol_write_l2tp_runtime_config() {
+  protocol_write_xl2tpd_config
+  protocol_write_ppp_options
+  protocol_write_ipsec_config
+}
+
 protocol_ipsec_dns_address() {
   if [[ -f /etc/xl2tpd/xl2tpd.conf ]]; then
     awk -F= '/^[[:space:]]*local ip[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' /etc/xl2tpd/xl2tpd.conf
@@ -226,7 +339,6 @@ protocol_write_ipsec_dns_config() {
   [[ -n "$dns_ip" ]] || return 0
   install -d -m 0755 "$(dirname "$IPSEC_DNSMASQ_CONFIG_FILE")"
   {
-    printf 'interface=%s\n' "$IPSEC_INTERFACE"
     printf 'listen-address=%s\n' "$dns_ip"
     printf 'bind-dynamic\n'
     printf 'no-resolv\n'
@@ -248,10 +360,26 @@ protocol_restart_ipsec_dnsmasq() {
   fi
 }
 
+protocol_apply_dns_redirect() {
+  iptables -t nat -N "$IPSEC_DNS_REDIRECT_CHAIN" >/dev/null 2>&1 || true
+  iptables -t nat -F "$IPSEC_DNS_REDIRECT_CHAIN" >/dev/null 2>&1 || true
+  iptables -t nat -A "$IPSEC_DNS_REDIRECT_CHAIN" -p udp --dport 53 -j REDIRECT --to-ports 53
+  iptables -t nat -A "$IPSEC_DNS_REDIRECT_CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports 53
+  iptables -t nat -C PREROUTING -i ppp+ -j "$IPSEC_DNS_REDIRECT_CHAIN" >/dev/null 2>&1 || \
+    iptables -t nat -A PREROUTING -i ppp+ -j "$IPSEC_DNS_REDIRECT_CHAIN"
+}
+
+protocol_clear_dns_redirect() {
+  iptables -t nat -D PREROUTING -i ppp+ -j "$IPSEC_DNS_REDIRECT_CHAIN" >/dev/null 2>&1 || true
+  iptables -t nat -F "$IPSEC_DNS_REDIRECT_CHAIN" >/dev/null 2>&1 || true
+  iptables -t nat -X "$IPSEC_DNS_REDIRECT_CHAIN" >/dev/null 2>&1 || true
+}
+
 protocol_sync_clients() {
   local config_json
   rm -f "${PANEL_APP_DIR}/ipsec_l2tp_clients.json" >/dev/null 2>&1 || true
   protocol_seed_clients
+  protocol_write_l2tp_runtime_config
   protocol_ensure_runtime
   config_json="$(protocol_build_config_json)"
   connector_render_apply "$CONNECTOR_MODE" "$config_json"
@@ -259,6 +387,7 @@ protocol_sync_clients() {
   protocol_ensure_dnsmasq_runtime
   protocol_write_ipsec_dns_config
   protocol_restart_ipsec_dnsmasq
+  protocol_apply_dns_redirect
 }
 
 protocol_ipsec_state() {
@@ -343,6 +472,7 @@ command_uninstall() {
   connector_clear_internal_redirect "$IPSEC_INTERFACE"
   systemctl disable --now "$XL2TPD_SERVICE" "$IPSEC_STATE_SERVICE" ipsec >/dev/null 2>&1 || true
   rm -f "$IPSEC_DNSMASQ_CONFIG_FILE"
+  protocol_clear_dns_redirect
   systemctl restart dnsmasq >/dev/null 2>&1 || true
   protocol_release_ipsec_owner
   connector_uninstall_runtime
@@ -350,12 +480,14 @@ command_uninstall() {
 
 command_start() {
   connector_require_root
+  protocol_write_l2tp_runtime_config
   protocol_ensure_dnsmasq_runtime
   protocol_write_ipsec_dns_config
   connector_start_services
   systemctl enable --now "$IPSEC_STATE_SERVICE" "$XL2TPD_SERVICE" >/dev/null 2>&1 || systemctl enable --now ipsec "$XL2TPD_SERVICE" >/dev/null 2>&1 || true
   connector_apply_internal_redirect "$IPSEC_INTERFACE"
   protocol_restart_ipsec_dnsmasq
+  protocol_apply_dns_redirect
 }
 
 command_stop() {
@@ -370,6 +502,7 @@ command_dns_apply() {
   connector_dns_apply "$DOH_ENDPOINTS"
   protocol_write_ipsec_dns_config
   protocol_restart_ipsec_dnsmasq
+  protocol_apply_dns_redirect
 }
 
 command_dns_status() {

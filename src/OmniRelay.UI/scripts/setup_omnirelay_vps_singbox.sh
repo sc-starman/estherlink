@@ -149,12 +149,16 @@ protocol_apply_relay_scope() {
 
 protocol_validate_install_args() {
   case "$PROTOCOL_ID" in
-    vless_tls_singbox|hysteria2_singbox|trojan_singbox|naive_singbox)
+    hysteria2_singbox|trojan_singbox|naive_singbox)
       [[ "$TLS_ENABLED" == "true" ]] || die "--tls-enabled true is required for ${PROTOCOL_ID}"
       [[ -n "$TLS_CERT_FILE" ]] || die "--tls-cert-file is required for ${PROTOCOL_ID}"
       [[ -n "$TLS_KEY_FILE" ]] || die "--tls-key-file is required for ${PROTOCOL_ID}"
       ;;
   esac
+  if [[ "$PROTOCOL_ID" == "vless_tls_singbox" && "$TLS_ENABLED" == "true" ]]; then
+    [[ -n "$TLS_CERT_FILE" ]] || die "--tls-cert-file is required for ${PROTOCOL_ID} when --tls-enabled true"
+    [[ -n "$TLS_KEY_FILE" ]] || die "--tls-key-file is required for ${PROTOCOL_ID} when --tls-enabled true"
+  fi
   if [[ "$PROTOCOL_ID" == "shadowtls_v3_shadowsocks_singbox" ]]; then
     [[ -n "$CAMOUFLAGE_SERVER" ]] || die "--camouflage-server is required for ${PROTOCOL_ID}"
   fi
@@ -261,9 +265,10 @@ protocol_validate_runtime() {
       [[ -n "$(jq -r '.ssServerPassword // empty' <<<"$runtime")" ]] || die "Shadowsocks runtime server password is missing."
       ;;
     vless_tls_singbox)
-      [[ "$(jq -r '.tls.enabled // false' <<<"$runtime")" == "true" ]] || die "VLESS runtime TLS is disabled."
-      [[ -n "$(jq -r '.tls.certFile // empty' <<<"$runtime")" ]] || die "VLESS runtime TLS certificate path is missing."
-      [[ -n "$(jq -r '.tls.keyFile // empty' <<<"$runtime")" ]] || die "VLESS runtime TLS key path is missing."
+      if [[ "$(jq -r '.tls.enabled // false' <<<"$runtime")" == "true" ]]; then
+        [[ -n "$(jq -r '.tls.certFile // empty' <<<"$runtime")" ]] || die "VLESS runtime TLS certificate path is missing."
+        [[ -n "$(jq -r '.tls.keyFile // empty' <<<"$runtime")" ]] || die "VLESS runtime TLS key path is missing."
+      fi
       ;;
   esac
 }
@@ -285,7 +290,7 @@ protocol_build_config_json() {
 
   case "$PROTOCOL_ID" in
     vless_tls_singbox)
-      jq -c -n --argjson publicPort "$PUBLIC_PORT" --argjson tls "$runtime_tls" --argjson users "$users_json" --argjson backendOutbound "$backend_outbound" --arg flow "$(jq -r '.vlessFlow // empty' <<<"$runtime")" '{log:{level:"warn"},inbounds:[{type:"vless",tag:"vless-in",listen:"::",listen_port:$publicPort,users:([ $users[] | if ($flow|length)>0 then . + {flow:$flow} else . end ]),tls:{enabled:($tls.enabled==true),server_name:$tls.serverName,certificate_path:$tls.certFile,key_path:$tls.keyFile}}],outbounds:[$backendOutbound,{type:"direct",tag:"direct"}],route:{final:"tunnel-backend"}}'
+      jq -c -n --argjson publicPort "$PUBLIC_PORT" --argjson tls "$runtime_tls" --argjson users "$users_json" --argjson backendOutbound "$backend_outbound" --arg flow "$(jq -r '.vlessFlow // empty' <<<"$runtime")" '{log:{level:"warn"},inbounds:[{type:"vless",tag:"vless-in",listen:"::",listen_port:$publicPort,users:([ $users[] | if (($tls.enabled==true) and ($flow|length)>0) then . + {flow:$flow} else . end ]),tls:{enabled:($tls.enabled==true),server_name:$tls.serverName,certificate_path:$tls.certFile,key_path:$tls.keyFile}}],outbounds:[$backendOutbound,{type:"direct",tag:"direct"}],route:{final:"tunnel-backend"}}'
       ;;
     mixed_singbox)
       jq -c -n --argjson publicPort "$PUBLIC_PORT" --arg username "$(jq -r '.proxy.username' <<<"$runtime")" --arg password "$(jq -r '.proxy.password' <<<"$runtime")" --argjson backendOutbound "$backend_outbound" '{log:{level:"warn"},inbounds:[{type:"mixed",tag:"mixed-in",listen:"::",listen_port:$publicPort,users:[{username:$username,password:$password}]}],outbounds:[$backendOutbound,{type:"direct",tag:"direct"}],route:{final:"tunnel-backend"}}'
