@@ -506,30 +506,21 @@ async function readClients(): Promise<OpenVpnClientRecord[]> {
     .filter((item) => item.id && item.email && item.username && item.password);
 }
 
-async function writeClients(clients: OpenVpnClientRecord[]): Promise<void> {
-  const protocolId = "openvpn_tcp_singbox";
-  const dbCandidates = getAccountingDbCandidates();
-  const existing = await listProtocolClientsFromDb(protocolId, dbCandidates);
-  for (const row of existing) {
-    await deleteProtocolClientFromDb(row.id, dbCandidates);
-  }
-  const sorted = [...clients].sort((left, right) => left.email.localeCompare(right.email));
-  for (const client of sorted) {
-    await upsertProtocolClientToDb(
-      protocolId,
-      {
-        id: client.id,
-        email: client.email,
-        enable: client.enable,
-        totalGB: client.totalGB,
-        expiryTime: client.expiryTime,
-        speedLimitKbps: client.speedLimitKbps,
-        authUsername: client.username,
-        authSecret: client.password
-      },
-      dbCandidates
-    );
-  }
+async function upsertOpenVpnClient(client: OpenVpnClientRecord): Promise<void> {
+  await upsertProtocolClientToDb(
+    "openvpn_tcp_singbox",
+    {
+      id: client.id,
+      email: client.email,
+      enable: client.enable,
+      totalGB: client.totalGB,
+      expiryTime: client.expiryTime,
+      speedLimitKbps: client.speedLimitKbps,
+      authUsername: client.username,
+      authSecret: client.password
+    },
+    getAccountingDbCandidates()
+  );
 }
 
 async function syncOpenVpn(): Promise<void> {
@@ -585,7 +576,7 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
         speedLimitKbps: 0
       };
       clients = [bootstrap];
-      await writeClients(clients);
+      await upsertOpenVpnClient(bootstrap);
     }
     const isLocal = isLocalRelayMode();
     const usageByClientId = await this.accountingSource.getUsageByClientId(clients.map((item) => item.id));
@@ -642,7 +633,7 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
     };
 
     clients.push(client);
-    await writeClients(clients);
+    await upsertOpenVpnClient(client);
     await syncOpenVpn();
     return {
       id: client.id,
@@ -670,7 +661,7 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       throw new Error("Client not found.");
     }
 
-    clients[index] = {
+    const updated: OpenVpnClientRecord = {
       ...clients[index],
       email: String(client.email ?? clients[index].email).trim() || clients[index].email,
       enable: Boolean(client.enable),
@@ -678,8 +669,7 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       expiryTime: normalizeExpiryTime(client.expiryTime ?? clients[index].expiryTime),
       speedLimitKbps: normalizeSpeedLimitKbps(client.speedLimitKbps ?? clients[index].speedLimitKbps)
     };
-
-    await writeClients(clients);
+    await upsertOpenVpnClient(updated);
     await syncOpenVpn();
   }
 
@@ -690,12 +680,10 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
     }
 
     const clients = await readClients();
-    const filtered = clients.filter((item) => item.id !== trimmed);
-    if (filtered.length === clients.length) {
+    if (!clients.some((item) => item.id === trimmed)) {
       throw new Error("Client not found.");
     }
-
-    await writeClients(filtered);
+    await deleteProtocolClientFromDb(trimmed, getAccountingDbCandidates());
     await syncOpenVpn();
   }
 
@@ -825,7 +813,23 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
       });
     }
 
-    await writeClients(imported);
+    const dbCandidates = getAccountingDbCandidates();
+    for (const client of imported) {
+      await upsertProtocolClientToDb(
+        "openvpn_tcp_singbox",
+        {
+          id: client.id,
+          email: client.email,
+          enable: client.enable,
+          totalGB: client.totalGB,
+          expiryTime: client.expiryTime,
+          speedLimitKbps: client.speedLimitKbps,
+          authUsername: client.username,
+          authSecret: client.password
+        },
+        dbCandidates
+      );
+    }
     await syncOpenVpn();
   }
 }
