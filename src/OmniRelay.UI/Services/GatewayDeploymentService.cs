@@ -510,7 +510,9 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         });
 
         var gatewayCtlPath = GetGatewayCtlPath(request);
-        var args = $"{BuildCommonArgs(request, includeBootstrapMode: true)} {BuildProtocolArgs(request)}".Trim();
+        // Keep pre-install uninstall backward-compatible with older gatewayctl versions
+        // that don't understand newer protocol-specific flags.
+        var args = BuildCommonArgs(request, includeBootstrapMode: true).Trim();
         var uninstallCommand =
             "set -euo pipefail; " +
             $"[ -x {ShellQuote(gatewayCtlPath)} ] || {{ echo 'Gateway control script not found during pre-install switch cleanup.'; exit 31; }}; " +

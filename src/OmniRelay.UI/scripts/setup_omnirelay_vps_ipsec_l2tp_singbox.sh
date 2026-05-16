@@ -17,6 +17,8 @@ XL2TPD_SERVICE="xl2tpd"
 IPSEC_L2TP_NETWORK="10.39.0.0/24"
 IPSEC_DNSMASQ_CONFIG_FILE="/etc/dnsmasq.d/omnirelay-ipsec-l2tp.conf"
 IPSEC_DNS_REDIRECT_CHAIN="OMNIDNSREDIRIPSEC"
+IPSEC_ENFORCE_SERVICE="omnirelay-ipsec-enforce"
+IPSEC_ENFORCE_TIMER="omnirelay-ipsec-enforce.timer"
 OUTPUT_JSON="false"
 COMMAND=""
 PANEL_BASE_PATH=""
@@ -95,6 +97,10 @@ protocol_apply_relay_scope() {
   IPSEC_PSK_FILE="${GATEWAY_ROOT_DIR}/ipsec/shared_psk"
   IPSEC_DNSMASQ_CONFIG_FILE="/etc/dnsmasq.d/omnirelay-ipsec-l2tp${RELAY_ID:+-${RELAY_ID}}.conf"
   IPSEC_DNS_REDIRECT_CHAIN="OMNIDNSREDIRIP$(printf '%.10s' "${RELAY_HASH:-$(connector_short_hash "$RELAY_ID")}")"
+  if [[ -n "${RELAY_ID:-}" ]]; then
+    IPSEC_ENFORCE_SERVICE="omnirelay-ipsec-enforce-${RELAY_ID}"
+    IPSEC_ENFORCE_TIMER="omnirelay-ipsec-enforce-${RELAY_ID}.timer"
+  fi
 }
 
 protocol_apply_port_defaults() {
@@ -339,6 +345,7 @@ protocol_write_ipsec_dns_config() {
   [[ -n "$dns_ip" ]] || return 0
   install -d -m 0755 "$(dirname "$IPSEC_DNSMASQ_CONFIG_FILE")"
   {
+    printf 'interface=ppp+\n'
     printf 'listen-address=%s\n' "$dns_ip"
     printf 'bind-dynamic\n'
     printf 'no-resolv\n'
@@ -356,7 +363,64 @@ protocol_write_ipsec_dns_config() {
 protocol_restart_ipsec_dnsmasq() {
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files dnsmasq.service >/dev/null 2>&1; then
     systemctl enable dnsmasq >/dev/null 2>&1 || true
-    systemctl restart dnsmasq >/dev/null 2>&1 || true
+    systemctl restart dnsmasq >/dev/null 2>&1 || {
+      systemctl --no-pager -l status dnsmasq >&2 || true
+      journalctl -u dnsmasq -n 80 --no-pager >&2 || true
+      die "dnsmasq is not active after IPSec DNS config apply"
+    }
+  fi
+}
+
+protocol_apply_ipsec_network_controls() {
+  local dns_server
+  dns_server="$(protocol_ipsec_dns_address || true)"
+  [[ -n "$dns_server" ]] || return 0
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+  printf 'net.ipv4.ip_forward=1\n' > "/etc/sysctl.d/99-omnirelay-ipsec${RELAY_ID:+-${RELAY_ID}}.conf"
+
+  iptables -C INPUT -i ppp+ -d "$dns_server" -p udp --dport 53 -j ACCEPT 2>/dev/null || \
+    iptables -I INPUT 1 -i ppp+ -d "$dns_server" -p udp --dport 53 -j ACCEPT
+  iptables -C INPUT -i ppp+ -d "$dns_server" -p tcp --dport 53 -j ACCEPT 2>/dev/null || \
+    iptables -I INPUT 1 -i ppp+ -d "$dns_server" -p tcp --dport 53 -j ACCEPT
+}
+
+protocol_write_chap_secrets() {
+  local tmp_file protocol_sql
+  tmp_file="$(mktemp)"
+  protocol_sql="$(connector_sql_escape "$PROTOCOL_ID")"
+  sqlite3 -separator $'\t' "$CONNECTOR_ACCOUNTING_DB" \
+    "SELECT COALESCE(NULLIF(auth_username,''), NULLIF(username,''), 'l2tp_client') AS login, COALESCE(auth_secret,'') AS secret FROM clients WHERE protocol_id='${protocol_sql}' AND enabled=1 ORDER BY updated_at DESC, created_at DESC;" \
+    | while IFS=$'\t' read -r login secret; do
+      [[ -n "$login" && -n "$secret" ]] || continue
+      printf '%s l2tpd %s *\n' "$login" "$secret"
+    done > "$tmp_file"
+
+  install -d -m 0755 /etc/ppp
+  install -m 0600 "$tmp_file" /etc/ppp/chap-secrets
+  rm -f "$tmp_file"
+}
+
+protocol_start_ipsec_services() {
+  local started=false try
+  if systemctl enable --now "$IPSEC_STATE_SERVICE" "$XL2TPD_SERVICE" >/dev/null 2>&1; then
+    started=true
+  elif systemctl enable --now ipsec "$XL2TPD_SERVICE" >/dev/null 2>&1; then
+    started=true
+  fi
+
+  $started || die "failed to start IPSec/L2TP services"
+
+  for try in 1 2 3 4 5 6 7 8; do
+    if ss -lunp 2>/dev/null | grep -Eq ':(500|4500)[[:space:]]'; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  if ! ss -lunp 2>/dev/null | grep -Eq ':(500|4500)[[:space:]]'; then
+    systemctl --no-pager -l status "$IPSEC_STATE_SERVICE" ipsec >&2 || true
+    journalctl -u "$IPSEC_STATE_SERVICE" -u ipsec -n 120 --no-pager >&2 || true
+    die "IPSec is not listening on UDP 500/4500 after start."
   fi
 }
 
@@ -375,19 +439,113 @@ protocol_clear_dns_redirect() {
   iptables -t nat -X "$IPSEC_DNS_REDIRECT_CHAIN" >/dev/null 2>&1 || true
 }
 
+protocol_clear_legacy_ppp_tcp_redirects() {
+  local rule
+  while IFS= read -r rule; do
+    [[ -n "$rule" ]] || continue
+    iptables -t nat ${rule/-A /-D } >/dev/null 2>&1 || true
+  done < <(iptables -t nat -S PREROUTING 2>/dev/null | grep -F -- "-A PREROUTING -i ppp+ -p tcp -j REDIRECT --to-ports " || true)
+}
+
+protocol_disconnect_ineligible_sessions() {
+  local sessions_file protocol_sql tmp_file enabled_count ppp_pid
+  sessions_file="${ACCOUNTING_SYNC_PPP_SESSIONS_FILE:-/run/omnirelay/ppp-sessions.tsv}"
+  [[ -f "$sessions_file" ]] || return 0
+
+  protocol_sql="$(connector_sql_escape "$PROTOCOL_ID")"
+  tmp_file="$(mktemp)"
+  sqlite3 -separator $'\t' "$CONNECTOR_ACCOUNTING_DB" \
+    "SELECT COALESCE(NULLIF(auth_username,''), NULLIF(username,''), '') AS login FROM clients WHERE protocol_id='${protocol_sql}' AND enabled=0;" \
+    | awk 'NF>0{print $1}' | sort -u > "$tmp_file"
+
+  enabled_count="$(sqlite3 "$CONNECTOR_ACCOUNTING_DB" "SELECT COUNT(1) FROM clients WHERE protocol_id='${protocol_sql}' AND enabled=1;" 2>/dev/null || echo 0)"
+  [[ "$enabled_count" =~ ^[0-9]+$ ]] || enabled_count=0
+  [[ -s "$tmp_file" ]] || { rm -f "$tmp_file"; return 0; }
+
+  while IFS=$'\t' read -r iface username; do
+    [[ -n "${iface:-}" && -n "${username:-}" ]] || continue
+    if grep -Fxq "$username" "$tmp_file" || { [[ "$username" == "__unknown__" ]] && (( enabled_count == 0 )); }; then
+      ppp_pid="$(pgrep -f "/usr/sbin/pppd .*${iface}" | head -n1 || true)"
+      if [[ -n "$ppp_pid" ]]; then
+        kill -TERM "$ppp_pid" >/dev/null 2>&1 || true
+        sleep 1
+        kill -KILL "$ppp_pid" >/dev/null 2>&1 || true
+      fi
+      ip link set dev "$iface" down >/dev/null 2>&1 || true
+      if command -v ifconfig >/dev/null 2>&1; then
+        ifconfig "$iface" down >/dev/null 2>&1 || true
+      fi
+    fi
+  done < "$sessions_file"
+  rm -f "$tmp_file"
+}
+
+protocol_gatewayctl_path() {
+  if [[ -n "${RELAY_ID:-}" ]]; then
+    printf '/usr/local/sbin/omnirelay-gatewayctl-%s\n' "$RELAY_ID"
+    return
+  fi
+  printf '/usr/local/sbin/omnirelay-gatewayctl\n'
+}
+
+protocol_write_ipsec_enforcement_units() {
+  local gatewayctl_path
+  gatewayctl_path="$(protocol_gatewayctl_path)"
+  cat > "/etc/systemd/system/${IPSEC_ENFORCE_SERVICE}.service" <<EOF
+[Unit]
+Description=OmniRelay IPSec ineligible session enforcer
+After=network-online.target ${XL2TPD_SERVICE}.service
+Wants=network-online.target ${XL2TPD_SERVICE}.service
+
+[Service]
+Type=oneshot
+ExecStart=${gatewayctl_path} enforce-sessions${RELAY_ID:+ --relay-id ${RELAY_ID}}
+EOF
+
+  cat > "/etc/systemd/system/${IPSEC_ENFORCE_TIMER}" <<EOF
+[Unit]
+Description=Run OmniRelay IPSec ineligible session enforcer periodically
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=20s
+RandomizedDelaySec=3s
+Persistent=true
+Unit=${IPSEC_ENFORCE_SERVICE}.service
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+protocol_enable_ipsec_enforcement_timer() {
+  systemctl daemon-reload
+  systemctl enable --now "${IPSEC_ENFORCE_TIMER}" >/dev/null 2>&1 || true
+}
+
+protocol_disable_ipsec_enforcement_timer() {
+  systemctl disable --now "${IPSEC_ENFORCE_TIMER}" "${IPSEC_ENFORCE_SERVICE}" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/${IPSEC_ENFORCE_SERVICE}.service" "/etc/systemd/system/${IPSEC_ENFORCE_TIMER}"
+  systemctl daemon-reload || true
+}
+
 protocol_sync_clients() {
   local config_json
   rm -f "${PANEL_APP_DIR}/ipsec_l2tp_clients.json" >/dev/null 2>&1 || true
   protocol_seed_clients
+  protocol_write_chap_secrets
   protocol_write_l2tp_runtime_config
   protocol_ensure_runtime
   config_json="$(protocol_build_config_json)"
   connector_render_apply "$CONNECTOR_MODE" "$config_json"
+  protocol_clear_legacy_ppp_tcp_redirects
   connector_apply_internal_redirect "$IPSEC_INTERFACE"
   protocol_ensure_dnsmasq_runtime
   protocol_write_ipsec_dns_config
   protocol_restart_ipsec_dnsmasq
   protocol_apply_dns_redirect
+  protocol_apply_ipsec_network_controls
+  protocol_disconnect_ineligible_sessions
 }
 
 protocol_ipsec_state() {
@@ -454,6 +612,9 @@ command_install() {
   protocol_seed_clients
   protocol_ensure_runtime
   protocol_sync_clients
+  protocol_start_ipsec_services
+  protocol_write_ipsec_enforcement_units
+  protocol_enable_ipsec_enforcement_timer
 
   progress 72 "Applying DNS profile"
   connector_dns_apply "$DOH_ENDPOINTS"
@@ -471,6 +632,7 @@ command_uninstall() {
   connector_require_root
   connector_clear_internal_redirect "$IPSEC_INTERFACE"
   systemctl disable --now "$XL2TPD_SERVICE" "$IPSEC_STATE_SERVICE" ipsec >/dev/null 2>&1 || true
+  protocol_disable_ipsec_enforcement_timer
   rm -f "$IPSEC_DNSMASQ_CONFIG_FILE"
   protocol_clear_dns_redirect
   systemctl restart dnsmasq >/dev/null 2>&1 || true
@@ -480,18 +642,24 @@ command_uninstall() {
 
 command_start() {
   connector_require_root
+  protocol_write_chap_secrets
   protocol_write_l2tp_runtime_config
   protocol_ensure_dnsmasq_runtime
   protocol_write_ipsec_dns_config
   connector_start_services
-  systemctl enable --now "$IPSEC_STATE_SERVICE" "$XL2TPD_SERVICE" >/dev/null 2>&1 || systemctl enable --now ipsec "$XL2TPD_SERVICE" >/dev/null 2>&1 || true
+  protocol_start_ipsec_services
+  protocol_clear_legacy_ppp_tcp_redirects
   connector_apply_internal_redirect "$IPSEC_INTERFACE"
   protocol_restart_ipsec_dnsmasq
   protocol_apply_dns_redirect
+  protocol_apply_ipsec_network_controls
+  protocol_write_ipsec_enforcement_units
+  protocol_enable_ipsec_enforcement_timer
 }
 
 command_stop() {
   connector_require_root
+  systemctl stop "${IPSEC_ENFORCE_TIMER}" >/dev/null 2>&1 || true
   systemctl stop "$XL2TPD_SERVICE" "$IPSEC_STATE_SERVICE" ipsec >/dev/null 2>&1 || true
   connector_stop_services
 }
@@ -514,6 +682,28 @@ command_dns_repair() {
   connector_validate_common_args
   connector_dns_apply "$DOH_ENDPOINTS"
   protocol_sync_clients
+}
+
+command_enforce_sessions() {
+  connector_require_root
+  protocol_disconnect_ineligible_sessions
+  local state_file
+  state_file="${ACCOUNTING_SYNC_STATE_FILE:-${CONNECTOR_DIR}/accounting_sync_state.json}"
+  if [[ -f "$state_file" ]]; then
+    local has_ineligible
+    has_ineligible="$(jq -r '.hasIneligibleActive // false' "$state_file" 2>/dev/null || echo false)"
+    if [[ "$has_ineligible" == "true" ]]; then
+      while read -r pid; do
+        [[ -n "$pid" ]] || continue
+        kill -TERM "$pid" >/dev/null 2>&1 || true
+      done < <(pgrep -f '/usr/sbin/pppd .*options\.xl2tpd' || true)
+      sleep 1
+      while read -r pid; do
+        [[ -n "$pid" ]] || continue
+        kill -KILL "$pid" >/dev/null 2>&1 || true
+      done < <(pgrep -f '/usr/sbin/pppd .*options\.xl2tpd' || true)
+    fi
+  fi
 }
 
 main() {
@@ -541,6 +731,7 @@ main() {
     dns-status) command_dns_status ;;
     dns-repair) command_dns_repair ;;
     get-protocol) echo "$PROTOCOL_ID" ;;
+    enforce-sessions) command_enforce_sessions ;;
     *) usage; die "Unsupported command: $COMMAND" ;;
   esac
 }

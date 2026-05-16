@@ -533,30 +533,33 @@ connector_uninstall_clock_sync_runtime(){
 
 connector_write_ppp_accounting_hooks(){
   install -d -m 0755 /etc/ppp/ip-up.d /etc/ppp/ip-down.d /run/omnirelay
+  local sessions_file
+  sessions_file="${ACCOUNTING_SYNC_PPP_SESSIONS_FILE:-/run/omnirelay/ppp-sessions.tsv}"
   cat > /etc/ppp/ip-up.d/99-omnirelay-accounting <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
-state_file="${OMNIRELAY_ACCOUNTING_PPP_SESSIONS_FILE:-/run/omnirelay/ppp-sessions.tsv}"
+state_file="__OMNIRELAY_PPP_SESSIONS_FILE__"
 ifname="${IFNAME:-}"
 username="${PEERNAME:-${PPPLOGNAME:-}}"
-[[ -n "$ifname" && -n "$username" ]] || exit 0
+[[ -n "$ifname" ]] || exit 0
 install -d -m 0755 "$(dirname "$state_file")"
 tmp="$(mktemp)"
 if [[ -f "$state_file" ]]; then
   awk -F'\t' -v ifn="$ifname" '$1!=ifn' "$state_file" > "$tmp" || true
 fi
-printf '%s\t%s\n' "$ifname" "$username" >> "$tmp"
+printf '%s\t%s\n' "$ifname" "${username:-__unknown__}" >> "$tmp"
 mv -f "$tmp" "$state_file"
 chmod 0644 "$state_file" || true
 EOF
+  sed -i "s|__OMNIRELAY_PPP_SESSIONS_FILE__|${sessions_file}|g" /etc/ppp/ip-up.d/99-omnirelay-accounting
   chmod 0755 /etc/ppp/ip-up.d/99-omnirelay-accounting
 
   cat > /etc/ppp/ip-down.d/99-omnirelay-accounting <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
-state_file="${OMNIRELAY_ACCOUNTING_PPP_SESSIONS_FILE:-/run/omnirelay/ppp-sessions.tsv}"
+state_file="__OMNIRELAY_PPP_SESSIONS_FILE__"
 ifname="${IFNAME:-}"
 [[ -n "$ifname" && -f "$state_file" ]] || exit 0
 tmp="$(mktemp)"
@@ -564,6 +567,7 @@ awk -F'\t' -v ifn="$ifname" '$1!=ifn' "$state_file" > "$tmp" || true
 mv -f "$tmp" "$state_file"
 chmod 0644 "$state_file" || true
 EOF
+  sed -i "s|__OMNIRELAY_PPP_SESSIONS_FILE__|${sessions_file}|g" /etc/ppp/ip-down.d/99-omnirelay-accounting
   chmod 0755 /etc/ppp/ip-down.d/99-omnirelay-accounting
 }
 
@@ -629,23 +633,12 @@ RELAY_ID="${OMNIRELAY_ACCOUNTING_RELAY_ID:-}"
 SYNC_COMMAND="${OMNIRELAY_ACCOUNTING_SYNC_COMMAND:-}"
 
 normalize_sync_command(){
-  local cmd="$1" protocol="" relay_id="${RELAY_ID:-}"
+  local cmd="$1" relay_id="${RELAY_ID:-}"
   [[ -n "$cmd" ]] || { echo ""; return 0; }
-  if [[ -f "$METADATA_FILE" ]]; then
-    protocol="$(jq -r '.active_protocol // empty' "$METADATA_FILE" 2>/dev/null || true)"
-  fi
   if [[ "$cmd" != *"--relay-id"* && -n "$relay_id" ]]; then
     cmd="${cmd} --relay-id ${relay_id}"
   fi
-  if [[ "$cmd" == *"--protocol"* ]]; then
-    echo "$cmd"
-    return 0
-  fi
-  if [[ -n "$protocol" ]]; then
-    printf '%s --protocol %q' "$cmd" "$protocol"
-  else
-    echo "$cmd"
-  fi
+  echo "$cmd"
 }
 SYNC_COMMAND="$(normalize_sync_command "$SYNC_COMMAND")"
 
@@ -1076,6 +1069,14 @@ elif source == "openvpn_status":
     result["attributedSessions"] = result["sampledClients"]
 elif source == "ipsec_ppp":
     sessions = {}
+    enabled_clients = []
+    for row in client_rows:
+        try:
+            if int(row["enabled"] or 0) != 0:
+                enabled_clients.append(str(row["client_id"]))
+        except Exception:
+            continue
+
     if ppp_sessions_file.exists():
         for line in ppp_sessions_file.read_text(encoding="utf-8", errors="ignore").splitlines():
             parts = line.split("\t", 1)
@@ -1096,6 +1097,9 @@ elif source == "ipsec_ppp":
             continue
         total = max(0, rx) + max(0, tx)
         client_id = username_to_client.get(username) or client_ids.get(username)
+        if (not client_id) and username in ("", "__unknown__") and len(enabled_clients) == 1:
+            # Fallback attribution when PPP hook does not provide PEERNAME and there is exactly one enabled IPSec client.
+            client_id = enabled_clients[0]
         if not client_id:
             continue
         delta = load_or_init_counter("ipsec_iface_total", iface, int(total))
