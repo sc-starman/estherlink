@@ -63,10 +63,16 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 set -euo pipefail;
                 ss -lnt '( sport = :__PORT__ )' 2>/dev/null | awk 'NR>1 {print $0}' | grep -q . || { echo 'SOCKS listener is not present on 127.0.0.1:__PORT__'; exit 41; };
                 sync_clock_done=0;
+                sync_clock_attempted=0;
+                first_success_target='';
+                first_date_target='';
+                first_date_header='';
                 sync_clock_via_socks() {
-                  local hdr epoch was_ntp;
+                  local hdr epoch was_ntp target;
+                  target="${1:-}";
+                  [ -n "$target" ] || return 1;
                   was_ntp='';
-                  hdr="$(curl --silent --show-error --insecure --max-time 25 --connect-timeout 10 --retry 0 --socks5-hostname 127.0.0.1:__PORT__ -I https://deb.debian.org/ 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')";
+                  hdr="$(curl --silent --show-error --insecure --max-time 25 --connect-timeout 10 --retry 0 --socks5-hostname 127.0.0.1:__PORT__ -I "$target" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')";
                   [ -n "$hdr" ] || return 1;
                   epoch="$(date -u -d "$hdr" +%s 2>/dev/null || true)";
                   [ -n "$epoch" ] || return 1;
@@ -77,24 +83,70 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                   date -u -s "@$epoch" >/dev/null 2>&1 || return 1;
                   if command -v hwclock >/dev/null 2>&1; then hwclock --systohc >/dev/null 2>&1 || true; fi;
                   if command -v timedatectl >/dev/null 2>&1 && [ "${was_ntp:-}" = "yes" ]; then timedatectl set-ntp true >/dev/null 2>&1 || true; fi;
-                  echo 'Adjusted VPS clock from HTTPS Date header via SOCKS tunnel.';
+                  echo "Adjusted VPS clock from HTTPS Date header via SOCKS tunnel (target: ${target}).";
                   return 0;
                 };
+                probe_targets='https://8.8.8.8/ https://dns.google/ https://9.9.9.9/';
+                probe_success_count=0;
+                probe_fail_count=0;
+                probe_fail_details='';
                 ok=0;
                 for i in 1 2 3; do
-                  if curl --fail --silent --show-error --max-time 45 --connect-timeout 20 --retry 0 --socks5-hostname 127.0.0.1:__PORT__ https://deb.debian.org/ >/dev/null 2>/tmp/omnirelay-bootstrap-curl.err; then ok=1; break; fi;
-                  err="$(tr -d '\r' </tmp/omnirelay-bootstrap-curl.err 2>/dev/null || true)";
-                  [ -n "$err" ] && printf '%s\n' "$err";
-                  if [ "$sync_clock_done" != "1" ] && printf '%s' "$err" | grep -qi 'certificate is not yet valid'; then
-                    echo 'Detected TLS clock skew; attempting clock sync over SOCKS tunnel.';
-                    if sync_clock_via_socks; then sync_clock_done=1; continue; fi;
-                    sync_clock_done=1;
+                  attempt_ok=0;
+                  for target in $probe_targets; do
+                    if curl --fail --silent --show-error --max-time 45 --connect-timeout 20 --retry 0 --socks5-hostname 127.0.0.1:__PORT__ "$target" >/dev/null 2>/tmp/omnirelay-bootstrap-curl.err; then
+                      echo "SOCKS egress probe target succeeded: ${target}";
+                      probe_success_count=$((probe_success_count+1));
+                      [ -n "$first_success_target" ] || first_success_target="$target";
+                      if [ -z "$first_date_target" ]; then
+                        hdr="$(curl --silent --show-error --insecure --max-time 25 --connect-timeout 10 --retry 0 --socks5-hostname 127.0.0.1:__PORT__ -I "$target" 2>/tmp/omnirelay-bootstrap-date.err | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}' || true)";
+                        if [ -n "$hdr" ]; then
+                          first_date_target="$target";
+                          first_date_header="$hdr";
+                        fi;
+                      fi;
+                      attempt_ok=1;
+                      ok=1;
+                      break;
+                    fi;
+                    err="$(tr -d '\r' </tmp/omnirelay-bootstrap-curl.err 2>/dev/null || true)";
+                    [ -n "$err" ] && printf '[target=%s] %s\n' "$target" "$err";
+                    probe_fail_count=$((probe_fail_count+1));
+                    probe_fail_details="${probe_fail_details}[target=${target}] ${err}; ";
+                    if [ "$sync_clock_done" != "1" ] && [ "$sync_clock_attempted" != "1" ] && printf '%s' "$err" | grep -qi 'certificate is not yet valid'; then
+                      sync_clock_attempted=1;
+                      echo "Detected TLS clock skew from target ${target}; attempting clock sync over SOCKS tunnel.";
+                      if sync_clock_via_socks "$target"; then
+                        sync_clock_done=1;
+                      else
+                        echo "WARNING: Clock sync attempt failed for target ${target}; continuing bootstrap probe.";
+                      fi;
+                    fi;
+                  done;
+                  if [ "$attempt_ok" = "1" ]; then
+                    break;
                   fi;
-                  echo "SOCKS egress probe attempt ${i}/3 failed, retrying...";
+                  echo "SOCKS egress probe attempt ${i}/3 failed for all targets, retrying...";
                   sleep 3;
                 done;
                 rm -f /tmp/omnirelay-bootstrap-curl.err;
-                if [ "$ok" != "1" ]; then echo 'SOCKS egress probe failed after retries.'; exit 42; fi;
+                rm -f /tmp/omnirelay-bootstrap-date.err;
+                if [ "$ok" != "1" ]; then
+                  echo "SOCKS egress probe failed after retries. Targets=${probe_targets}. Failures=${probe_fail_count}. Details=${probe_fail_details}";
+                  exit 42;
+                fi;
+                if [ "$sync_clock_done" != "1" ]; then
+                  if [ -n "$first_date_target" ] && [ -n "$first_date_header" ]; then
+                    if sync_clock_via_socks "$first_date_target"; then
+                      sync_clock_done=1;
+                    else
+                      echo "WARNING: Best-effort clock sync failed using successful target ${first_date_target}; continuing.";
+                    fi;
+                  else
+                    echo "WARNING: No HTTPS Date header was available from successful probe targets; skipping clock sync.";
+                  fi;
+                fi;
+                echo "SOCKS egress probe summary: success_target=${first_success_target:-none}, successes=${probe_success_count}, failures=${probe_fail_count}";
                 echo 'Gateway bootstrap SOCKS check passed.';
                 """.Replace("__PORT__", socksPort);
 
