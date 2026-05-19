@@ -1122,19 +1122,18 @@ protocol_write_openvpn_dnsmasq_config() {
   local listen_ip
   listen_ip="$(protocol_default_client_dns)"
 
+  connector_write_dnsmasq_global_config
   install -d -m 0755 "$(dirname "$OPENVPN_DNSMASQ_CONFIG_FILE")"
   {
     printf 'interface=%s\n' "$OPENVPN_INTERFACE"
     printf 'listen-address=%s\n' "$listen_ip"
-    printf 'bind-dynamic\n'
-    printf 'no-resolv\n'
-    printf 'cache-size=10000\n'
     printf 'server=%s#%s\n' "$CONNECTOR_DNS_LISTEN_ADDRESS" "$CONNECTOR_DNS_LISTEN_PORT"
   } > "$OPENVPN_DNSMASQ_CONFIG_FILE"
   chmod 0644 "$OPENVPN_DNSMASQ_CONFIG_FILE" || true
 }
 
 protocol_restart_openvpn_dnsmasq() {
+  connector_sanitize_dnsmasq_omnirelay_configs
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files dnsmasq.service >/dev/null 2>&1; then
     systemctl enable dnsmasq >/dev/null 2>&1 || true
     systemctl restart dnsmasq >/dev/null 2>&1 || {

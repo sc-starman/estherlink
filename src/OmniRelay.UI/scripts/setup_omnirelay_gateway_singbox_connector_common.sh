@@ -11,7 +11,7 @@ BACKEND_PORT=15000
 SSH_PORT=22
 BOOTSTRAP_SOCKS_PORT=16080
 BOOTSTRAP_MODE="tunnel"
-PROXY_CHECK_URL="https://deb.debian.org/"
+PROXY_CHECK_URL="https://8.8.8.8/,https://dns.google/,https://9.9.9.9/"
 DOH_ENDPOINTS="https://1.1.1.1/dns-query,https://8.8.8.8/dns-query"
 CONNECTOR_DNS_LISTEN_ADDRESS="127.0.0.1"
 CONNECTOR_DNS_LISTEN_PORT=1053
@@ -60,6 +60,7 @@ BOOTSTRAP_COMMON_SCRIPT="/tmp/omnirelay-bootstrap-common.sh"
 PANEL_COMMON_SCRIPT="/tmp/omnirelay-omnipanel-common.sh"
 CONNECTOR_COMMON_INSTALLED="/usr/local/lib/omnirelay/singbox-connector-common.sh"
 APT_PROXY_FILE="/etc/apt/apt.conf.d/99-omnirelay-socks"
+DNSMASQ_GLOBAL_CONFIG_FILE="/etc/dnsmasq.d/00-omnirelay-global.conf"
 CONNECTOR_REDIRECT_CHAIN="OMNIRELAY_CONNECTOR_REDIRECT"
 CONNECTOR_REJECT_CHAIN="OMNIRELAY_CONNECTOR_REJECT"
 CLOCK_SYNC_SCRIPT="/usr/local/sbin/omnirelay-clock-sync"
@@ -67,7 +68,7 @@ CLOCK_SYNC_ENV_FILE="${GATEWAY_ROOT_DIR}/clock_sync.env"
 CLOCK_SYNC_STATE_FILE="${CONNECTOR_DIR}/clock_sync_state.json"
 CLOCK_SYNC_SERVICE="omnirelay-clock-sync.service"
 CLOCK_SYNC_TIMER="omnirelay-clock-sync.timer"
-CLOCK_SYNC_PROBE_URL="http://deb.debian.org/"
+CLOCK_SYNC_PROBE_URL="https://8.8.8.8/,https://dns.google/,https://9.9.9.9/"
 CLOCK_SYNC_APPLY_THRESHOLD_SEC=5
 CLOCK_SYNC_MAX_SKEW_SEC=120
 CLOCK_SYNC_STALE_SEC=900
@@ -351,10 +352,39 @@ connector_clear_proxy(){
   omnirelay_bootstrap_disable_proxy_env
 }
 
+connector_write_dnsmasq_global_config(){
+  install -d -m 0755 "$(dirname "$DNSMASQ_GLOBAL_CONFIG_FILE")"
+  cat > "$DNSMASQ_GLOBAL_CONFIG_FILE" <<'EOF'
+bind-dynamic
+no-resolv
+cache-size=10000
+EOF
+  chmod 0644 "$DNSMASQ_GLOBAL_CONFIG_FILE" || true
+}
+
+connector_remove_dnsmasq_global_config(){
+  rm -f "$DNSMASQ_GLOBAL_CONFIG_FILE"
+}
+
+connector_sanitize_dnsmasq_omnirelay_configs(){
+  local cfg
+  shopt -s nullglob
+  for cfg in /etc/dnsmasq.d/omnirelay-*.conf; do
+    [[ "$cfg" == "$DNSMASQ_GLOBAL_CONFIG_FILE" ]] && continue
+    [[ -f "$cfg" ]] || continue
+    sed -i \
+      -e '/^[[:space:]]*bind-dynamic[[:space:]]*$/d' \
+      -e '/^[[:space:]]*no-resolv[[:space:]]*$/d' \
+      -e '/^[[:space:]]*cache-size[[:space:]]*=[[:space:]]*[0-9][0-9]*[[:space:]]*$/d' \
+      "$cfg" || true
+  done
+  shopt -u nullglob
+}
+
 connector_verify_bootstrap(){
   connector_ensure_bootstrap_common
   omnirelay_bootstrap_verify_egress "$BOOTSTRAP_MODE" "$BOOTSTRAP_SOCKS_PORT" "$PROXY_CHECK_URL" 24 5 || die "Bootstrap path is not healthy."
-  omnirelay_bootstrap_sync_clock "$BOOTSTRAP_MODE" "$BOOTSTRAP_SOCKS_PORT" "$PROXY_CHECK_URL" || die "Unable to synchronize VPS clock during gateway bootstrap."
+  omnirelay_bootstrap_sync_clock "$BOOTSTRAP_MODE" "$BOOTSTRAP_SOCKS_PORT" "$PROXY_CHECK_URL" || log "WARNING: Unable to synchronize VPS clock during gateway bootstrap; continuing."
 }
 
 connector_write_clock_sync_env(){
@@ -379,7 +409,7 @@ IFS=$'\n\t'
 ENV_FILE="/etc/omnirelay/gateway/clock_sync.env"
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 
-CLOCK_SYNC_URL="${OMNIRELAY_CLOCK_SYNC_URL:-http://deb.debian.org/}"
+CLOCK_SYNC_URL="${OMNIRELAY_CLOCK_SYNC_URL:-https://8.8.8.8/,https://dns.google/,https://9.9.9.9/}"
 BACKEND_PORT="${OMNIRELAY_CLOCK_SYNC_BACKEND_PORT:-15000}"
 BOOTSTRAP_PORT="${OMNIRELAY_CLOCK_SYNC_BOOTSTRAP_PORT:-16080}"
 BOOTSTRAP_MODE="${OMNIRELAY_CLOCK_SYNC_BOOTSTRAP_MODE:-tunnel}"
@@ -416,18 +446,32 @@ sync_record(){
 
 sync_fetch_date_via_socks(){
   local port="$1"
-  local header
+  local header target
+  local normalized_targets
   [[ "$port" =~ ^[0-9]+$ ]] || return 1
-  header="$(curl --silent --show-error --max-time 20 --connect-timeout 10 --retry 0 --socks5-hostname "127.0.0.1:${port}" -I "$CLOCK_SYNC_URL" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')"
-  [[ -n "$header" ]] || return 1
-  printf '%s|%s\n' "socks5:127.0.0.1:${port}" "$header"
+  normalized_targets="$(printf '%s' "$CLOCK_SYNC_URL" | tr ', ' '\n\n' | awk 'NF')"
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    header="$(curl --silent --show-error --insecure --max-time 20 --connect-timeout 10 --retry 0 --socks5-hostname "127.0.0.1:${port}" -I "$target" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')"
+    [[ -n "$header" ]] || continue
+    printf '%s|%s\n' "socks5:127.0.0.1:${port}:${target}" "$header"
+    return 0
+  done <<<"$normalized_targets"
+  return 1
 }
 
 sync_fetch_date_direct(){
-  local header
-  header="$(curl --silent --show-error --max-time 20 --connect-timeout 10 --retry 0 -I "$CLOCK_SYNC_URL" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')"
-  [[ -n "$header" ]] || return 1
-  printf '%s|%s\n' "direct" "$header"
+  local header target
+  local normalized_targets
+  normalized_targets="$(printf '%s' "$CLOCK_SYNC_URL" | tr ', ' '\n\n' | awk 'NF')"
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    header="$(curl --silent --show-error --insecure --max-time 20 --connect-timeout 10 --retry 0 -I "$target" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')"
+    [[ -n "$header" ]] || continue
+    printf '%s|%s\n' "direct:${target}" "$header"
+    return 0
+  done <<<"$normalized_targets"
+  return 1
 }
 
 main(){
@@ -1953,6 +1997,7 @@ connector_uninstall_runtime(){
   rm -f "/etc/systemd/system/${CONNECTOR_SERVICE}.service" "/etc/systemd/system/${PANEL_SERVICE}.service" "$PANEL_SUDOERS_FILE" "$GATEWAYCTL_PATH"
   if [[ -z "${RELAY_ID:-}" && ! -d /etc/omnirelay/relays ]]; then
     rm -f "$CONNECTOR_COMMON_INSTALLED" /usr/local/lib/omnirelay/bootstrap-common.sh /usr/local/lib/omnirelay/omnipanel-common.sh
+    connector_remove_dnsmasq_global_config
   fi
   rm -f "/etc/nginx/sites-enabled/${PANEL_NGINX_SITE_NAME}.conf" "/etc/nginx/sites-available/${PANEL_NGINX_SITE_NAME}.conf"
   rm -rf "$GATEWAY_ROOT_DIR" "$PANEL_APP_DIR"

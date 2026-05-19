@@ -118,7 +118,15 @@ public sealed class GatewayRuntime
                 normalized.Id = Guid.NewGuid().ToString("N");
             }
 
-            ConfigStore.EnsureRelayPorts([normalized, .. _config.Relays.Where(x => !string.Equals(x.Id, normalized.Id, StringComparison.Ordinal))]);
+            // Preserve existing relay port assignments. Resolve any collisions by adjusting
+            // the upserted relay (placed last), not by mutating already-deployed relays.
+            var candidateRelays = _config.Relays
+                .Where(x => !string.Equals(x.Id, normalized.Id, StringComparison.Ordinal))
+                .Select(CloneRelayConfig)
+                .ToList();
+            candidateRelays.Add(normalized);
+            ConfigStore.EnsureRelayPorts(candidateRelays);
+            normalized = candidateRelays.First(x => string.Equals(x.Id, normalized.Id, StringComparison.Ordinal));
             var index = _config.Relays.FindIndex(x => string.Equals(x.Id, normalized.Id, StringComparison.Ordinal));
             if (index >= 0)
             {

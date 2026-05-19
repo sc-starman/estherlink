@@ -49,18 +49,23 @@ EOF
 omnirelay_bootstrap_sync_clock() {
   local mode="${1:-tunnel}"
   local socks_port="${2:-16080}"
-  local probe_url="${3:-https://deb.debian.org/}"
-  local date_header remote_epoch now_epoch delta abs_delta was_ntp curl_cmd
+  local probe_targets="${3:-https://8.8.8.8/,https://dns.google/,https://9.9.9.9/}"
+  local normalized_targets date_header remote_epoch now_epoch delta abs_delta was_ntp curl_cmd target
 
   was_ntp=""
-  omnirelay_bootstrap_configure_proxy_env "$mode" "$socks_port"
-  if [[ "$mode" == "tunnel" ]]; then
-    curl_cmd=(curl --silent --show-error --insecure --max-time 20 --connect-timeout 10 --retry 0 --socks5-hostname "127.0.0.1:${socks_port}" -I "$probe_url")
-  else
-    curl_cmd=(curl --silent --show-error --insecure --max-time 20 --connect-timeout 10 --retry 0 -I "$probe_url")
-  fi
-
-  date_header="$("${curl_cmd[@]}" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')"
+  normalized_targets="$(printf '%s' "$probe_targets" | tr ', ' '\n\n' | awk 'NF')"
+  date_header=""
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    omnirelay_bootstrap_configure_proxy_env "$mode" "$socks_port"
+    if [[ "$mode" == "tunnel" ]]; then
+      curl_cmd=(curl --silent --show-error --insecure --max-time 20 --connect-timeout 10 --retry 0 --socks5-hostname "127.0.0.1:${socks_port}" -I "$target")
+    else
+      curl_cmd=(curl --silent --show-error --insecure --max-time 20 --connect-timeout 10 --retry 0 -I "$target")
+    fi
+    date_header="$("${curl_cmd[@]}" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="date:"{$1="";sub(/^ /,"");print;exit}')"
+    [[ -n "$date_header" ]] && break
+  done <<<"$normalized_targets"
   [[ -n "$date_header" ]] || return 1
 
   remote_epoch="$(date -u -d "$date_header" +%s 2>/dev/null || true)"
@@ -95,15 +100,21 @@ omnirelay_bootstrap_sync_clock() {
 omnirelay_bootstrap_verify_egress() {
   local mode="${1:-tunnel}"
   local socks_port="${2:-16080}"
-  local probe_url="${3:-https://deb.debian.org/}"
+  local probe_targets="${3:-https://8.8.8.8/,https://dns.google/,https://9.9.9.9/}"
   local retries="${4:-24}"
   local wait_sec="${5:-5}"
+  local normalized_targets
   local listener_ok=0
   local egress_ok=0
   local sync_attempted=0
   local curl_err=""
+  local target=""
+  local attempt_ok=0
+
+  normalized_targets="$(printf '%s' "$probe_targets" | tr ', ' '\n\n' | awk 'NF')"
 
   for ((i=1; i<=retries; i++)); do
+    attempt_ok=0
     if [[ "$mode" == "tunnel" ]]; then
       if ss -lnt "( sport = :${socks_port} )" 2>/dev/null | awk 'NR>1 {print $0}' | grep -q .; then
         listener_ok=1
@@ -114,28 +125,41 @@ omnirelay_bootstrap_verify_egress() {
         sleep "$wait_sec"
         continue
       fi
-      omnirelay_bootstrap_configure_proxy_env "$mode" "$socks_port"
-      if curl --fail --silent --show-error --max-time 20 --connect-timeout 10 --retry 0 --socks5-hostname "127.0.0.1:${socks_port}" "$probe_url" >/dev/null 2>/tmp/omnirelay-bootstrap-curl.err; then
-        rm -f /tmp/omnirelay-bootstrap-curl.err
-        egress_ok=1
-        break
-      fi
     else
-      omnirelay_bootstrap_configure_proxy_env "$mode" "$socks_port"
-      if curl --fail --silent --show-error --max-time 20 --connect-timeout 10 --retry 0 "$probe_url" >/dev/null 2>/tmp/omnirelay-bootstrap-curl.err; then
-        rm -f /tmp/omnirelay-bootstrap-curl.err
-        egress_ok=1
-        break
-      fi
+      listener_ok=1
     fi
 
-    curl_err="$(tr -d '\r' </tmp/omnirelay-bootstrap-curl.err 2>/dev/null || true)"
-    rm -f /tmp/omnirelay-bootstrap-curl.err
-    if (( sync_attempted == 0 )) && printf '%s' "$curl_err" | grep -qi "certificate is not yet valid"; then
-      omnirelay_bootstrap_sync_clock "$mode" "$socks_port" "$probe_url" || true
-      sync_attempted=1
-      continue
+    while IFS= read -r target; do
+      [[ -n "$target" ]] || continue
+      omnirelay_bootstrap_configure_proxy_env "$mode" "$socks_port"
+      if [[ "$mode" == "tunnel" ]]; then
+        if curl --fail --silent --show-error --max-time 20 --connect-timeout 10 --retry 0 --socks5-hostname "127.0.0.1:${socks_port}" "$target" >/dev/null 2>/tmp/omnirelay-bootstrap-curl.err; then
+          rm -f /tmp/omnirelay-bootstrap-curl.err
+          egress_ok=1
+          attempt_ok=1
+          break
+        fi
+      else
+        if curl --fail --silent --show-error --max-time 20 --connect-timeout 10 --retry 0 "$target" >/dev/null 2>/tmp/omnirelay-bootstrap-curl.err; then
+          rm -f /tmp/omnirelay-bootstrap-curl.err
+          egress_ok=1
+          attempt_ok=1
+          break
+        fi
+      fi
+
+      curl_err="$(tr -d '\r' </tmp/omnirelay-bootstrap-curl.err 2>/dev/null || true)"
+      rm -f /tmp/omnirelay-bootstrap-curl.err
+      if (( sync_attempted == 0 )) && printf '%s' "$curl_err" | grep -qi "certificate is not yet valid"; then
+        omnirelay_bootstrap_sync_clock "$mode" "$socks_port" "$target" || true
+        sync_attempted=1
+      fi
+    done <<<"$normalized_targets"
+
+    if (( attempt_ok == 1 )); then
+      break
     fi
+
     sleep "$wait_sec"
   done
 

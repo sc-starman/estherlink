@@ -343,13 +343,11 @@ protocol_write_ipsec_dns_config() {
   local dns_ip
   dns_ip="$(protocol_ipsec_dns_address || true)"
   [[ -n "$dns_ip" ]] || return 0
+  connector_write_dnsmasq_global_config
   install -d -m 0755 "$(dirname "$IPSEC_DNSMASQ_CONFIG_FILE")"
   {
     printf 'interface=ppp+\n'
     printf 'listen-address=%s\n' "$dns_ip"
-    printf 'bind-dynamic\n'
-    printf 'no-resolv\n'
-    printf 'cache-size=10000\n'
     printf 'server=%s#%s\n' "$CONNECTOR_DNS_LISTEN_ADDRESS" "$CONNECTOR_DNS_LISTEN_PORT"
   } > "$IPSEC_DNSMASQ_CONFIG_FILE"
   chmod 0644 "$IPSEC_DNSMASQ_CONFIG_FILE" || true
@@ -361,6 +359,7 @@ protocol_write_ipsec_dns_config() {
 }
 
 protocol_restart_ipsec_dnsmasq() {
+  connector_sanitize_dnsmasq_omnirelay_configs
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files dnsmasq.service >/dev/null 2>&1; then
     systemctl enable dnsmasq >/dev/null 2>&1 || true
     systemctl restart dnsmasq >/dev/null 2>&1 || {
