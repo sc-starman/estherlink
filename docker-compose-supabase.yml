@@ -1,0 +1,114 @@
+services:
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:alpine
+    container_name: omnirelay-nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - omnirelay_proxy_certs:/etc/nginx/certs:rw
+      - omnirelay_proxy_vhost:/etc/nginx/vhost.d
+      - omnirelay_proxy_html:/usr/share/nginx/html
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - /opt/nginx-omnirelay/my_proxy.conf:/etc/nginx/conf.d/my_proxy.conf:ro
+
+
+  acme-companion:
+    image: nginxproxy/acme-companion
+    container_name: omnirelay-acme-companion
+    restart: unless-stopped
+    depends_on:
+      - nginx-proxy
+    environment:
+      NGINX_PROXY_CONTAINER: omnirelay-nginx-proxy
+      DEFAULT_EMAIL: ${LETSENCRYPT_EMAIL}
+    volumes:
+      - omnirelay_proxy_certs:/etc/nginx/certs:rw
+      - omnirelay_proxy_vhost:/etc/nginx/vhost.d
+      - omnirelay_proxy_html:/usr/share/nginx/html
+      - omnirelay_proxy_acme:/etc/acme.sh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  backend:
+    build:
+      context: .
+      dockerfile: src/OmniRelay.Backend/Dockerfile
+    container_name: omnirelay-backend
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Postgres: Host=aws-0-eu-west-1.pooler.supabase.com;Port=5432;Database=postgres;Username=postgres.dddethfojoxdbezocmxv;Password=JVS59NxX1L3ZWRFN;SSL Mode=Require;Trust Server Certificate=true
+      Admin__ApiKeys__0: dev-admin-key
+      Admin__ApiKeyPepper: dev-admin-pepper
+      Licensing__SigningKeyRotationDays: 90
+      Licensing__OfflineCacheTtlHours: 24
+      PAYKRYPT_BASE_URL: ${PAYKRYPT_BASE_URL:-https://api-sandbox.paykrypt.io}
+      PAYKRYPT_SECRET_API_KEY: ${PAYKRYPT_SECRET_API_KEY:-sk_test_change_me}
+      PAYKRYPT_WEBHOOK_SECRET: ${PAYKRYPT_WEBHOOK_SECRET:-}
+      PAYKRYPT_PRICE_USD: ${PAYKRYPT_PRICE_USD:-149}
+      ORIGINAL_PRICE: ${ORIGINAL_PRICE:-149}
+      PAYKRYPT_ALLOWED_CHAINS: ${PAYKRYPT_ALLOWED_CHAINS:-}
+      PAYKRYPT_ALLOWED_ASSETS: ${PAYKRYPT_ALLOWED_ASSETS:-}
+      PAYKRYPT_EXPIRES_IN_MINUTES: ${PAYKRYPT_EXPIRES_IN_MINUTES:-45}
+      Commerce__PaidLicensePlan: professional
+      Commerce__PaidMaxDevices: 3
+      Commerce__TrialDays: 2
+      Commerce__UpdateEntitlementMonths: 12
+      Web__SupportEmail: ${SUPPORT_EMAIL}
+      EmailDelivery__Provider: ${EMAIL_DELIVERY_PROVIDER:-smtp}
+      Smtp__Host: ${SMTP_HOST}
+      Smtp__Port: ${SMTP_PORT}
+      Smtp__UseSsl: ${SMTP_USE_SSL}
+      Smtp__RequireAuthentication: ${SMTP_REQUIRE_AUTH}
+      Smtp__ConnectTimeoutSeconds: ${SMTP_CONNECT_TIMEOUT_SECONDS:-10}
+      Smtp__SendTimeoutSeconds: ${SMTP_SEND_TIMEOUT_SECONDS:-45}
+      Smtp__RetryCount: ${SMTP_RETRY_COUNT:-1}
+      Smtp__Username: ${SMTP_USERNAME}
+      Smtp__Password: ${SMTP_PASSWORD}
+      Smtp__FromEmail: ${SMTP_FROM_EMAIL}
+      Smtp__FromName: ${SMTP_FROM_NAME}
+      MailService__BaseUrl: ${MAIL_SERVICE_BASE_URL}
+      MailService__SendPath: ${MAIL_SERVICE_SEND_PATH:-/send}
+      MailService__ApiKey: ${MAIL_SERVICE_API_KEY}
+      MailService__ApiKeyHeader: ${MAIL_SERVICE_API_KEY_HEADER:-x-api-key}
+      MailService__TimeoutSeconds: ${MAIL_SERVICE_TIMEOUT_SECONDS:-45}
+      MailService__RetryCount: ${MAIL_SERVICE_RETRY_COUNT:-1}
+      SpamProtection__EnableRecaptcha: ${SPAM_RECAPTCHA_ENABLED:-false}
+      SpamProtection__RecaptchaSiteKey: ${SPAM_RECAPTCHA_SITE_KEY}
+      SpamProtection__RecaptchaSecretKey: ${SPAM_RECAPTCHA_SECRET_KEY}
+      SpamProtection__RecaptchaVerifyUrl: ${SPAM_RECAPTCHA_VERIFY_URL:-https://www.google.com/recaptcha/api/siteverify}
+      SpamProtection__RecaptchaExpectedAction: ${SPAM_RECAPTCHA_EXPECTED_ACTION:-contact_form}
+      SpamProtection__RecaptchaMinimumScore: ${SPAM_RECAPTCHA_MINIMUM_SCORE:-0.5}
+      InstallerStorage__RootPath: /app/data/installers
+      InstallerStorage__MaxUploadMb: ${INSTALLER_STORAGE_MAX_UPLOAD_MB:-1024}
+      Database__ApplyMigrationsOnStartup: "true"
+      VIRTUAL_HOST: ${OMNIRELAY_DOMAIN}
+      LETSENCRYPT_HOST: ${OMNIRELAY_DOMAIN}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+      VIRTUAL_PORT: 8080
+      CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-1024m}
+    volumes:
+      - omnirelay_installers:/app/data/installers
+      - omnirelay_dpkeys:/app/data/dpkeys
+    ports:
+      - "8080:8080"
+    expose:
+      - "8080"
+    depends_on:
+      nginx-proxy:
+        condition: service_started
+      acme-companion:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+volumes:
+  omnirelay_pgdata:
+  omnirelay_pgadmin_data:
+  omnirelay_installers:
+  omnirelay_dpkeys:
+  omnirelay_proxy_certs:
+  omnirelay_proxy_vhost:
+  omnirelay_proxy_html:
+  omnirelay_proxy_acme:
