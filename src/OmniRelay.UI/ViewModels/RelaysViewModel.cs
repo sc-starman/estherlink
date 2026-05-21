@@ -449,18 +449,145 @@ public partial class RelaysViewModel : ObservableObject
     {
         await RunBusyAsync(async () =>
         {
-            var result = await _orchestrator.UpsertRelayAsync(relay);
-            Feedback = result.Message;
-            RefreshRows();
+            await PersistRelayFromDialogAsync(relay);
         });
     }
 
     private async Task<bool> ApplyRelayFromDialogAsync(RelayConfig relay)
     {
+        try
+        {
+            await PersistRelayFromDialogAsync(relay);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"Relay save failed: {ex.Message}";
+            return false;
+        }
+    }
+
+    private async Task PersistRelayFromDialogAsync(RelayConfig relay)
+    {
         var result = await _orchestrator.UpsertRelayAsync(relay);
+        if (!result.Success)
+        {
+            Feedback = result.Message;
+            RefreshRows();
+            throw new InvalidOperationException(result.Message);
+        }
+
+        await RefreshRelayFromServiceAsync(relay);
         Feedback = result.Message;
         RefreshRows();
-        return result.Success;
+    }
+
+    private async Task RefreshRelayFromServiceAsync(RelayConfig relay)
+    {
+        if (relay is null || string.IsNullOrWhiteSpace(relay.Id))
+        {
+            return;
+        }
+
+        var refreshed = await _orchestrator.GetRelayAsync(relay.Id);
+        if (!refreshed.Success || refreshed.Relay is null)
+        {
+            return;
+        }
+
+        OverwriteRelay(relay, refreshed.Relay);
+    }
+
+    private static void OverwriteRelay(RelayConfig target, RelayConfig source)
+    {
+        target.Id = source.Id;
+        target.Name = source.Name;
+        target.GatewayType = source.GatewayType;
+        target.Enabled = source.Enabled;
+        target.IncomingAdapterId = source.IncomingAdapterId;
+        target.IncomingAdapterIfIndex = source.IncomingAdapterIfIndex;
+        target.OutgoingAdapterId = source.OutgoingAdapterId;
+        target.OutgoingAdapterIfIndex = source.OutgoingAdapterIfIndex;
+        target.DataPlaneLocalPort = source.DataPlaneLocalPort;
+        target.BootstrapSocksLocalPort = source.BootstrapSocksLocalPort;
+        target.BootstrapSocksRemotePort = source.BootstrapSocksRemotePort;
+        var sourcePanel = source.OmniPanel ?? new RelayOmniPanelConfig();
+        target.OmniPanel = new RelayOmniPanelConfig
+        {
+            Port = sourcePanel.Port,
+            Username = sourcePanel.Username,
+            Password = sourcePanel.Password,
+            Domain = sourcePanel.Domain,
+            DomainOnly = sourcePanel.DomainOnly,
+            UseSsl = sourcePanel.UseSsl,
+            SslMode = sourcePanel.SslMode,
+            UploadedCertPath = sourcePanel.UploadedCertPath,
+            UploadedKeyPath = sourcePanel.UploadedKeyPath,
+            PublicUrl = sourcePanel.PublicUrl,
+            LastError = sourcePanel.LastError
+        };
+
+        var sourceRemote = source.RemoteGateway ?? new RemoteGatewayConfig();
+        target.RemoteGateway = new RemoteGatewayConfig
+        {
+            TunnelHost = sourceRemote.TunnelHost,
+            TunnelSshPort = sourceRemote.TunnelSshPort,
+            TunnelRemotePort = sourceRemote.TunnelRemotePort,
+            TunnelUser = sourceRemote.TunnelUser,
+            TunnelAuthMethod = sourceRemote.TunnelAuthMethod,
+            TunnelPrivateKeyPath = sourceRemote.TunnelPrivateKeyPath,
+            TunnelPrivateKeyPassphrase = sourceRemote.TunnelPrivateKeyPassphrase,
+            TunnelPassword = sourceRemote.TunnelPassword,
+            BootstrapMode = sourceRemote.BootstrapMode,
+            Protocol = sourceRemote.Protocol,
+            PublicPort = sourceRemote.PublicPort,
+            PanelPort = sourceRemote.PanelPort,
+            PanelUser = sourceRemote.PanelUser,
+            PanelPassword = sourceRemote.PanelPassword,
+            PanelDomain = sourceRemote.PanelDomain,
+            PanelDomainOnly = sourceRemote.PanelDomainOnly,
+            PanelUseSsl = sourceRemote.PanelUseSsl,
+            PanelSslMode = sourceRemote.PanelSslMode,
+            PanelUploadedCertPath = sourceRemote.PanelUploadedCertPath,
+            PanelUploadedKeyPath = sourceRemote.PanelUploadedKeyPath,
+            ProtocolTlsEnabled = sourceRemote.ProtocolTlsEnabled,
+            ProtocolTlsServerName = sourceRemote.ProtocolTlsServerName,
+            ProtocolCertPath = sourceRemote.ProtocolCertPath,
+            ProtocolKeyPath = sourceRemote.ProtocolKeyPath,
+            ProtocolTlsMode = sourceRemote.ProtocolTlsMode,
+            ProtocolAlpnCsv = sourceRemote.ProtocolAlpnCsv,
+            ProxyUsername = sourceRemote.ProxyUsername,
+            ProxyPassword = sourceRemote.ProxyPassword,
+            VlessTlsFlow = sourceRemote.VlessTlsFlow,
+            Hysteria2UpMbps = sourceRemote.Hysteria2UpMbps,
+            Hysteria2DownMbps = sourceRemote.Hysteria2DownMbps,
+            Hysteria2ObfsPassword = sourceRemote.Hysteria2ObfsPassword,
+            Hysteria2IgnoreClientBandwidth = sourceRemote.Hysteria2IgnoreClientBandwidth,
+            Hysteria2MasqueradeUrl = sourceRemote.Hysteria2MasqueradeUrl,
+            NaiveNetwork = sourceRemote.NaiveNetwork,
+            NaiveQuicCongestionControl = sourceRemote.NaiveQuicCongestionControl,
+            ShadowTlsCamouflageServer = sourceRemote.ShadowTlsCamouflageServer,
+            ShadowTlsStrictMode = sourceRemote.ShadowTlsStrictMode,
+            ShadowTlsWildcardSni = sourceRemote.ShadowTlsWildcardSni,
+            OpenVpnNetwork = sourceRemote.OpenVpnNetwork,
+            IpsecL2tpNetwork = sourceRemote.IpsecL2tpNetwork,
+            OpenVpnSharedCaCertPath = sourceRemote.OpenVpnSharedCaCertPath,
+            OpenVpnSharedClientCertPath = sourceRemote.OpenVpnSharedClientCertPath,
+            OpenVpnSharedClientKeyPath = sourceRemote.OpenVpnSharedClientKeyPath,
+            OpenVpnSharedTlsCryptKeyPath = sourceRemote.OpenVpnSharedTlsCryptKeyPath,
+            DohEndpoints = sourceRemote.DohEndpoints
+        };
+
+        var sourceLocal = source.LocalGateway ?? new LocalGatewayConfig();
+        target.LocalGateway = new LocalGatewayConfig
+        {
+            Protocol = sourceLocal.Protocol,
+            Port = sourceLocal.Port,
+            BindAddress = sourceLocal.BindAddress,
+            RemoteAddress = sourceLocal.RemoteAddress,
+            Remark = sourceLocal.Remark,
+            RuntimeEnabled = sourceLocal.RuntimeEnabled
+        };
     }
 
     private void WireRelayDialog(RelayEditDialog editDialog)
@@ -534,11 +661,11 @@ public partial class RelaysViewModel : ObservableObject
         return await _orchestrator.DeleteRelayPolicyListAsync(relayId, listId);
     }
 
-    private Task<OperationResult> RunRelayGatewayOperationFromDialogAsync(RelayConfig relay, string operation)
+    private async Task<OperationResult> RunRelayGatewayOperationFromDialogAsync(RelayConfig relay, string operation)
     {
         if (!string.Equals(GatewayTypes.Normalize(relay.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
         {
-            return Task.FromResult(new OperationResult(false, "Gateway operations are only available for Remote Relays."));
+            return new OperationResult(false, "Gateway operations are only available for Remote Relays.");
         }
 
         var normalizedOperation = (operation ?? string.Empty).Trim().ToLowerInvariant();
@@ -546,15 +673,24 @@ public partial class RelaysViewModel : ObservableObject
         var sudo = requiresSudo ? EnsureSudoPassword() : (_sudoCache.Get() ?? string.Empty);
         if (requiresSudo && string.IsNullOrWhiteSpace(sudo))
         {
-            return Task.FromResult(new OperationResult(false, "Operation canceled. Sudo password is required."));
+            return new OperationResult(false, "Operation canceled. Sudo password is required.");
         }
         var sudoPassword = sudo ?? string.Empty;
 
         try
         {
+            var relayFetch = await _orchestrator.GetRelayAsync(relay.Id);
+            if (!relayFetch.Success || relayFetch.Relay is null)
+            {
+                return new OperationResult(false, $"Failed to refresh relay from service before operation: {relayFetch.Message}");
+            }
+
+            var effectiveRelay = relayFetch.Relay;
+            OverwriteRelay(relay, effectiveRelay);
+
             GatewayDeploymentRequest EnsureRequest()
             {
-                return BuildGatewayDeploymentRequest(relay);
+                return BuildGatewayDeploymentRequest(effectiveRelay);
             }
 
             var title = operation switch
@@ -626,11 +762,11 @@ public partial class RelaysViewModel : ObservableObject
             opDialog.ContentRendered += async (_, _) => await opVm.RunAsync();
             opDialog.ShowDialog();
 
-            return Task.FromResult(new OperationResult(opVm.LastOperationSuccess, opVm.LastOperationMessage));
+            return new OperationResult(opVm.LastOperationSuccess, opVm.LastOperationMessage);
         }
         catch (Exception ex)
         {
-            return Task.FromResult(new OperationResult(false, $"Gateway operation failed: {ex.Message}"));
+            return new OperationResult(false, $"Gateway operation failed: {ex.Message}");
         }
     }
 

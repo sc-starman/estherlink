@@ -401,12 +401,14 @@ EOF
 }
 
 connector_write_clock_sync_script(){
+  local env_file_escaped
+  env_file_escaped="$(printf '%s' "$CLOCK_SYNC_ENV_FILE" | sed 's/[\/&]/\\&/g')"
   cat > "$CLOCK_SYNC_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-ENV_FILE="/etc/omnirelay/gateway/clock_sync.env"
+ENV_FILE="__OMNIRELAY_CLOCK_SYNC_ENV_FILE__"
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 
 CLOCK_SYNC_URL="${OMNIRELAY_CLOCK_SYNC_URL:-https://8.8.8.8/,https://dns.google/,https://9.9.9.9/}"
@@ -525,6 +527,7 @@ main(){
 
 main "$@"
 EOF
+  sed -i "s/__OMNIRELAY_CLOCK_SYNC_ENV_FILE__/${env_file_escaped}/g" "$CLOCK_SYNC_SCRIPT"
   chmod 0755 "$CLOCK_SYNC_SCRIPT"
 }
 

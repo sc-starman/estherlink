@@ -90,6 +90,7 @@ public partial class RelayEditDialog : Window
             LoadDns();
             LoadProtocol();
             LoadStatus();
+            UpdateHeaderSummary();
             LoadOperationCenterSummary();
             RefreshRelayScopedTabs();
         }
@@ -286,6 +287,22 @@ public partial class RelayEditDialog : Window
         LastLocalProbeText.Text = FormatDate(_status?.LastLocalProbeUtc);
         LastEndToEndProbeText.Text = FormatDate(_status?.LastEndToEndProbeUtc);
         TunnelLastErrorText.Text = _status?.TunnelLastError ?? string.Empty;
+        UpdateHeaderSummary();
+    }
+
+    private void UpdateHeaderSummary()
+    {
+        RelayIdSummaryText.Text = string.IsNullOrWhiteSpace(Relay.Id) ? "(new relay)" : Relay.Id;
+
+        if (IsRemote)
+        {
+            TunnelStateSummaryText.Text = _status?.TunnelState ?? "Unavailable";
+            HealthStateSummaryText.Text = _status?.HealthState ?? "Unavailable";
+            return;
+        }
+
+        TunnelStateSummaryText.Text = _status?.LocalGatewayState ?? "LocalMode";
+        HealthStateSummaryText.Text = _status?.HealthState ?? "Unavailable";
     }
 
     private async void Apply_Click(object sender, RoutedEventArgs e)
@@ -804,16 +821,10 @@ public partial class RelayEditDialog : Window
             await LoadPolicyListsAsync();
         }
 
-        if (_isRelaySaved &&
-            Tabs.SelectedItem is TabItem statusTab &&
-            string.Equals(statusTab.Header?.ToString(), "Status", StringComparison.OrdinalIgnoreCase))
+        if (_isRelaySaved)
         {
             await RefreshStatusFromSourceAsync();
             _statusRefreshTimer.Start();
-        }
-        else
-        {
-            _statusRefreshTimer.Stop();
         }
     }
 
@@ -1251,6 +1262,16 @@ public partial class RelayEditDialog : Window
         {
             _ = LoadPolicyListsAsync();
         }
+
+        if (_isRelaySaved)
+        {
+            _statusRefreshTimer.Start();
+            _ = RefreshStatusFromSourceAsync();
+        }
+        else
+        {
+            _statusRefreshTimer.Stop();
+        }
     }
 
     private void RefreshAuthMethodVisibility()
@@ -1403,6 +1424,26 @@ public partial class RelayEditDialog : Window
     private static int ParsePositiveInt(string value, int fallback)
     {
         return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private void CopyRelayIdSummary_Click(object sender, RoutedEventArgs e)
+    {
+        var relayId = RelayIdSummaryText.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(relayId) || string.Equals(relayId, "(new relay)", StringComparison.OrdinalIgnoreCase))
+        {
+            FeedbackTextBlock.Text = "Relay ID is not available yet.";
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(relayId);
+            FeedbackTextBlock.Text = "Relay ID copied to clipboard.";
+        }
+        catch (Exception ex)
+        {
+            FeedbackTextBlock.Text = $"Failed to copy Relay ID: {ex.Message}";
+        }
     }
 
     private static bool IsValidIpv4Cidr(string? cidr)
