@@ -226,12 +226,12 @@ public partial class RelaysViewModel : ObservableObject
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
-    private async Task AddRelayAsync()
+    private Task AddRelayAsync()
     {
         var typeDialog = new RelayTypeDialog();
         if (typeDialog.ShowDialog() != true)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         RefreshAdapterCatalog();
@@ -240,10 +240,10 @@ public partial class RelaysViewModel : ObservableObject
         WireRelayDialog(editDialog);
         if (editDialog.ShowDialog() != true)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        await SaveRelayAsync(editDialog.Relay);
+        return Task.CompletedTask;
     }
 
     [RelayCommand(CanExecute = nameof(HasSelected))]
@@ -270,8 +270,6 @@ public partial class RelaysViewModel : ObservableObject
         {
             return;
         }
-
-        await SaveRelayAsync(editDialog.Relay);
     }
 
     [RelayCommand(CanExecute = nameof(HasSelected))]
@@ -442,14 +440,6 @@ public partial class RelaysViewModel : ObservableObject
             await _orchestrator.RefreshStatusAsync();
             RefreshRows();
             Feedback = $"Restored {restored}/{relays.Count} relays from: {openDialog.FileName}";
-        });
-    }
-
-    private async Task SaveRelayAsync(RelayConfig relay)
-    {
-        await RunBusyAsync(async () =>
-        {
-            await PersistRelayFromDialogAsync(relay);
         });
     }
 

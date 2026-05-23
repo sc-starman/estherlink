@@ -72,6 +72,8 @@ CLOCK_SYNC_PROBE_URL="https://8.8.8.8/,https://dns.google/,https://9.9.9.9/"
 CLOCK_SYNC_APPLY_THRESHOLD_SEC=5
 CLOCK_SYNC_MAX_SKEW_SEC=120
 CLOCK_SYNC_STALE_SEC=900
+TUNNELCTL_PATH="/usr/local/sbin/omnirelay-tunnelctl"
+TUNNELCTL_CONFIG_DIR="/etc/omnirelay/tunnelctl"
 
 ACCOUNTING_SYNC_SCRIPT="/usr/local/sbin/omnirelay-accounting-sync"
 ACCOUNTING_SYNC_ENV_FILE="${GATEWAY_ROOT_DIR}/accounting_sync.env"
@@ -171,6 +173,8 @@ connector_apply_relay_scope(){
   GATEWAYCTL_PATH="/usr/local/sbin/omnirelay-gatewayctl-${RELAY_ID}"
   PANEL_SUDOERS_FILE="/etc/sudoers.d/omnigateway-singbox-${RELAY_ID}"
   PANEL_NGINX_SITE_NAME="omnirelay-omnipanel-${RELAY_ID}"
+  TUNNELCTL_PATH="/usr/local/sbin/omnirelay-tunnelctl-${RELAY_ID}"
+  TUNNELCTL_CONFIG_DIR="/etc/omnirelay/relays/${RELAY_ID}/tunnelctl"
 }
 connector_with_accounting_lock(){
   local timeout_sec="${1:-30}"
@@ -1639,8 +1643,8 @@ connector_dns_status_json(){
 
 connector_tunnel_probe_json(){
   local out
-  if [[ -x /usr/local/sbin/omnirelay-tunnelctl ]]; then
-    out="$(/usr/local/sbin/omnirelay-tunnelctl probe --backend-host 127.0.0.1 --backend-port "$BACKEND_PORT" --json 2>/dev/null || true)"
+  if [[ -x "$TUNNELCTL_PATH" ]]; then
+    out="$(TUNNELCTL_CONFIG_DIR="$TUNNELCTL_CONFIG_DIR" "$TUNNELCTL_PATH" probe --backend-host 127.0.0.1 --backend-port "$BACKEND_PORT" --json 2>/dev/null || true)"
     jq -e 'type=="object"' >/dev/null 2>&1 <<<"$out" && { echo "$out"; return; }
   fi
   echo '{"healthy":false,"reasonCode":"tunnelctl_unavailable","backendProtocol":"unknown","egressReachable":false}'

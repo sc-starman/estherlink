@@ -26,7 +26,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
     private static readonly TimeSpan RemoteProbeTimeout = TimeSpan.FromSeconds(35);
     private static readonly TimeSpan TunnelFlapWindow = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan TunnelRecentExitPenalty = TimeSpan.FromSeconds(25);
-    private static readonly TimeSpan AdapterMissingRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan SchedulerSkewClamp = TimeSpan.FromMinutes(2);
 
     private const int Tier1FailureThreshold = 1;
@@ -185,7 +184,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
         private bool _endToEndProbeOk;
         private bool _remoteProbeModuleAvailable = true;
         private bool _remoteProbeMissingLogged;
-        private bool _sshSourceBindEnabled = false;
         private bool _bootstrapSocksListening;
         private bool _tunnelConnected;
         private bool _stopping;
@@ -537,15 +535,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 return;
             }
 
-            if (string.Equals(_healthReasonCode, "in_adapter_missing_ipv4", StringComparison.OrdinalIgnoreCase))
-            {
-                _currentRecoveryTier = 0;
-                _tunnelState = "Degraded";
-                _recoveryAction = "awaiting_in_ipv4";
-                _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(AdapterMissingRetryDelay);
-                return;
-            }
-
             var tier = ResolveRecoveryTier(_consecutiveFailures);
             _currentRecoveryTier = tier;
             _tunnelState = $"RecoveringTier{tier}";
@@ -612,21 +601,15 @@ public sealed class RelayRuntimeWorker : BackgroundService
 
                 if (tier == 1)
                 {
-                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier1: restarting bootstrap SOCKS and tunnel");
-                    await _bootstrap.StopAsync();
-                    await _bootstrap.StartAsync(cancellationToken);
+                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier1: restarting tunnel only");
                     await StopTunnelProcessAsync();
                     attemptedRecovery = true;
                 }
                 else if (tier == 2)
                 {
-                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier2: hard local cleanup");
-                    await _dataPlane.StopAsync();
-                    await _bootstrap.StopAsync();
+                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier2: tunnel recycle with stale-ssh cleanup");
                     await StopTunnelProcessAsync();
                     await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
-                    await _dataPlane.StartAsync(cancellationToken);
-                    await _bootstrap.StartAsync(cancellationToken);
                     attemptedRecovery = true;
                 }
                 else
@@ -680,48 +663,28 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     return;
                 }
 
-                if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(config.WhitelistAdapterIfIndex, out var bindIp) || bindIp is null)
+                var (routeProbeOk, routeProbeError) = await ProbeSshReachabilityRouteOnlyAsync(
+                    config.TunnelHost,
+                    config.TunnelSshPort,
+                    cancellationToken);
+
+                if (!routeProbeOk)
                 {
-                    _lastTunnelError = $"IN adapter IfIndex={config.WhitelistAdapterIfIndex} has no usable IPv4 address.";
-                    _healthReasonCode = "in_adapter_missing_ipv4";
-                    _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(AdapterMissingRetryDelay);
+                    _lastTunnelError = $"Route-only probe cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {routeProbeError}";
+                    _healthReasonCode = "ssh_reachability_failed";
                     RecordEvent("warn", _lastTunnelError);
+                    _log.Warn(_lastTunnelError);
                     return;
                 }
 
-            var routeResult = await NetworkRouteManager.TryEnsureTunnelHostRouteAsync(config, cancellationToken);
-            if (routeResult.Success)
-            {
-                _log.Info(routeResult.Message);
-            }
-            else
-            {
-                _log.Warn(routeResult.Message);
-            }
-
-            var (routeProbeOk, routeProbeError) = await ProbeSshReachabilityRouteOnlyAsync(
-                config.TunnelHost,
-                config.TunnelSshPort,
-                cancellationToken);
-
-            if (!routeProbeOk)
-            {
-                _lastTunnelError = $"Route-only probe cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {routeProbeError}";
-                _healthReasonCode = "ssh_reachability_failed";
-                RecordEvent("warn", _lastTunnelError);
-                _log.Warn(_lastTunnelError);
-                return;
-            }
-
-            var connectionId = Guid.NewGuid().ToString("N")[..12];
-            _activeTunnelConnectionId = connectionId;
-            _log.Info($"Starting relay '{_relay.Name}' tunnel with IN IfIndex={config.WhitelistAdapterIfIndex}, sourceIp={bindIp}, target={config.TunnelHost}:{config.TunnelSshPort}. connectionId={connectionId} remotePorts={config.TunnelRemotePort}/{config.BootstrapSocksRemotePort}");
+                var connectionId = Guid.NewGuid().ToString("N")[..12];
+                _activeTunnelConnectionId = connectionId;
+                _log.Info($"Starting relay '{_relay.Name}' tunnel target={config.TunnelHost}:{config.TunnelSshPort}. connectionId={connectionId} remotePorts={config.TunnelRemotePort}/{config.BootstrapSocksRemotePort}");
 
             if (!SshTunnelProcessFactory.TryCreateReverseTunnelStartInfo(
                     config,
                     out var processInfo,
-                    out var error,
-                    includeSourceBind: _sshSourceBindEnabled) || processInfo is null)
+                    out var error) || processInfo is null)
             {
                 _lastTunnelError = error ?? "Tunnel configuration is invalid.";
                 _healthReasonCode = "ssh_start_info_invalid";
@@ -1074,9 +1037,12 @@ public sealed class RelayRuntimeWorker : BackgroundService
         private string BuildTunnelctlRemoteCommand(ServiceConfig config, string verbArgs)
         {
             var backendPort = config.TunnelRemotePort.ToString();
+            var tunnelCtlPath = GetRelayScopedTunnelctlPath();
+            var tunnelCtlConfigDir = GetRelayScopedTunnelctlConfigDirectory();
             var wrapped =
+                $"TUNNELCTL_CONFIG_DIR={ShellSingleQuote(tunnelCtlConfigDir)} " +
                 $"TUNNEL_BACKEND_HOST=127.0.0.1 TUNNEL_BACKEND_PORT={backendPort} " +
-                $"/usr/local/sbin/omnirelay-tunnelctl {verbArgs} --backend-host 127.0.0.1 --backend-port {backendPort}";
+                $"{ShellSingleQuote(tunnelCtlPath)} {verbArgs} --backend-host 127.0.0.1 --backend-port {backendPort}";
             return $"bash -lc {ShellSingleQuote(wrapped)}";
         }
 
@@ -1112,9 +1078,10 @@ public sealed class RelayRuntimeWorker : BackgroundService
 
         private async Task<bool> TryAutoHealTunnelctlAsync(ServiceConfig config, int expectedPort, CancellationToken cancellationToken)
         {
+            var tunnelCtlPath = GetRelayScopedTunnelctlPath();
             var script = string.Join(" && ", new[]
             {
-                "f=/usr/local/sbin/omnirelay-tunnelctl",
+                $"f={ShellSingleQuote(tunnelCtlPath)}",
                 "[ -f \"$f\" ]",
                 "chmod 0755 \"$f\"",
                 "sed -i 's/\\r$//' \"$f\"",
@@ -1196,8 +1163,7 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     config,
                     remoteCommand,
                     out var startInfo,
-                    out var createError,
-                    includeSourceBind: _sshSourceBindEnabled) || startInfo is null)
+                    out var createError) || startInfo is null)
             {
                 return (false, string.Empty, string.Empty, createError ?? "failed to create ssh command");
             }
@@ -1259,6 +1225,8 @@ public sealed class RelayRuntimeWorker : BackgroundService
         {
             var tunnelForwardSignature = $"127.0.0.1:{config.TunnelRemotePort}:127.0.0.1:{config.LocalProxyListenPort}";
             var bootstrapForwardSignature = $"127.0.0.1:{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}";
+            var tunnelHost = (config.TunnelHost ?? string.Empty).Trim();
+            var tunnelUser = (config.TunnelUser ?? string.Empty).Trim();
             var command =
                 "$killed = @(); " +
                 "$matched = @(); " +
@@ -1266,8 +1234,19 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 "$forwardB = '" + EscapePowerShellSingleQuoted(bootstrapForwardSignature) + "'; " +
                 "$forwardALegacy = ':" + config.TunnelRemotePort + ":127.0.0.1:" + config.LocalProxyListenPort + "'; " +
                 "$forwardBLegacy = ':" + config.BootstrapSocksRemotePort + ":127.0.0.1:" + config.BootstrapSocksLocalPort + "'; " +
+                "$targetHost = '" + EscapePowerShellSingleQuoted(tunnelHost) + "'; " +
+                "$targetUser = '" + EscapePowerShellSingleQuoted(tunnelUser) + "'; " +
                 "Get-CimInstance Win32_Process -Filter \"Name = 'ssh.exe'\" | " +
-                "Where-Object { $_.CommandLine -and ($_.CommandLine -like ('*' + $forwardA + '*') -or $_.CommandLine -like ('*' + $forwardB + '*') -or $_.CommandLine -like ('*' + $forwardALegacy + '*') -or $_.CommandLine -like ('*' + $forwardBLegacy + '*')) } | " +
+                "Where-Object { " +
+                "  $_.CommandLine -and " +
+                "  $_.CommandLine -like ('*' + $targetUser + '@' + $targetHost + '*') -and " +
+                "  (" +
+                "    $_.CommandLine -like ('*' + $forwardA + '*') -or " +
+                "    $_.CommandLine -like ('*' + $forwardB + '*') -or " +
+                "    $_.CommandLine -like ('*' + $forwardALegacy + '*') -or " +
+                "    $_.CommandLine -like ('*' + $forwardBLegacy + '*')" +
+                "  )" +
+                "} | " +
                 "ForEach-Object { $matched += $_.ProcessId; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; if ($?) { $killed += $_.ProcessId } }; " +
                 "Write-Output ('Relay stale ssh cleanup: matched=' + $matched.Count + ', killed=' + $killed.Count)";
 
@@ -3154,6 +3133,28 @@ exit /b %ERRORLEVEL%
         private static string EscapePowerShellSingleQuoted(string value)
         {
             return (value ?? string.Empty).Replace("'", "''", StringComparison.Ordinal);
+        }
+
+        private string GetRelayScopedTunnelctlPath()
+        {
+            return $"/usr/local/sbin/omnirelay-tunnelctl-{GetSafeRelayPathToken()}";
+        }
+
+        private string GetRelayScopedTunnelctlConfigDirectory()
+        {
+            return $"/etc/omnirelay/relays/{GetSafeRelayPathToken()}/tunnelctl";
+        }
+
+        private string GetSafeRelayPathToken()
+        {
+            var raw = (_relay.Id ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return "default";
+            }
+
+            var filtered = new string(raw.Where(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_').ToArray());
+            return string.IsNullOrWhiteSpace(filtered) ? "default" : filtered;
         }
 
         private static string ShellSingleQuote(string value)

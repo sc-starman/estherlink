@@ -76,9 +76,37 @@ public sealed class RelaySocks5ProxyEngine
             }
             catch (Exception ex)
             {
+                if (IsExpectedListenerShutdown(ex, cancellationToken))
+                {
+                    _log.Info($"Relay '{_relay.Name}' SOCKS accept loop stopped during controlled shutdown.");
+                    break;
+                }
+
                 _log.Error($"Relay '{_relay.Name}' SOCKS accept loop failed.", ex);
             }
         }
+    }
+
+    private static bool IsExpectedListenerShutdown(Exception ex, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return true;
+        }
+
+        if (ex is SocketException socketEx)
+        {
+            return socketEx.SocketErrorCode is SocketError.OperationAborted
+                or SocketError.Interrupted
+                or SocketError.NotSocket
+                or SocketError.InvalidArgument;
+        }
+
+        return ex.InnerException is SocketException innerSocketEx &&
+               innerSocketEx.SocketErrorCode is SocketError.OperationAborted
+                   or SocketError.Interrupted
+                   or SocketError.NotSocket
+                   or SocketError.InvalidArgument;
     }
 
     private async Task HandleConnectionAsync(TcpClient client, CancellationToken cancellationToken)

@@ -1,7 +1,5 @@
 using System.Diagnostics;
-using System.Net;
 using OmniRelay.Core.Configuration;
-using OmniRelay.Core.Networking;
 
 namespace OmniRelay.Service.Runtime;
 
@@ -12,8 +10,7 @@ internal static class SshTunnelProcessFactory
     public static bool TryCreateReverseTunnelStartInfo(
         ServiceConfig config,
         out ProcessStartInfo? startInfo,
-        out string? error,
-        bool includeSourceBind = true)
+        out string? error)
     {
         var args = new List<string>
         {
@@ -29,14 +26,13 @@ internal static class SshTunnelProcessFactory
         args.Add("-R");
         args.Add($"127.0.0.1:{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}");
 
-        return TryCreateStartInfo(config, args, out startInfo, out error, null, includeSourceBind);
+        return TryCreateStartInfo(config, args, out startInfo, out error, null);
     }
 
     public static bool TryCreateConnectionTestStartInfo(
         ServiceConfig config,
         out ProcessStartInfo? startInfo,
-        out string? error,
-        bool includeSourceBind = true)
+        out string? error)
     {
         var args = new List<string>
         {
@@ -46,15 +42,14 @@ internal static class SshTunnelProcessFactory
             "-o", "TCPKeepAlive=yes"
         };
 
-        return TryCreateStartInfo(config, args, out startInfo, out error, null, includeSourceBind);
+        return TryCreateStartInfo(config, args, out startInfo, out error, null);
     }
 
     public static bool TryCreateRemoteCommandStartInfo(
         ServiceConfig config,
         string remoteCommand,
         out ProcessStartInfo? startInfo,
-        out string? error,
-        bool includeSourceBind = true)
+        out string? error)
     {
         var args = new List<string>
         {
@@ -69,7 +64,7 @@ internal static class SshTunnelProcessFactory
             return false;
         }
 
-        return TryCreateStartInfo(config, args, out startInfo, out error, remoteCommand, includeSourceBind);
+        return TryCreateStartInfo(config, args, out startInfo, out error, remoteCommand);
     }
 
     private static bool TryCreateStartInfo(
@@ -77,17 +72,11 @@ internal static class SshTunnelProcessFactory
         List<string> args,
         out ProcessStartInfo? startInfo,
         out string? error,
-        string? remoteCommand = null,
-        bool includeSourceBind = true)
+        string? remoteCommand = null)
     {
         startInfo = null;
         error = ValidateRequiredFields(config);
         if (error is not null)
-        {
-            return false;
-        }
-
-        if (!TryGetTunnelBindIp(config, out _, out error))
         {
             return false;
         }
@@ -174,33 +163,6 @@ internal static class SshTunnelProcessFactory
         }
 
         return null;
-    }
-
-    private static bool TryGetTunnelBindIp(ServiceConfig config, out string bindIp, out string? error)
-    {
-        bindIp = string.Empty;
-        error = null;
-
-        if (config.WhitelistAdapterIfIndex <= 0)
-        {
-            error = "Incoming network adapter is not selected.";
-            return false;
-        }
-
-        if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(config.WhitelistAdapterIfIndex, out var ip) || ip is null)
-        {
-            error = $"Incoming network adapter IfIndex {config.WhitelistAdapterIfIndex} has no usable IPv4 address.";
-            return false;
-        }
-
-        if (IPAddress.IsLoopback(ip))
-        {
-            error = "Incoming network adapter cannot be a loopback interface.";
-            return false;
-        }
-
-        bindIp = ip.ToString();
-        return true;
     }
 
     private static bool TryConfigureAuthentication(

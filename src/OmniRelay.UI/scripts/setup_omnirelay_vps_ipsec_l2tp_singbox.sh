@@ -284,7 +284,7 @@ ip range = ${pool_start}-${pool_end}
 local ip = ${local_ip}
 require chap = yes
 refuse pap = yes
-require authentication = yes
+require authentication = no
 name = l2tpd
 ppp debug = no
 pppoptfile = /etc/ppp/options.xl2tpd
@@ -321,6 +321,14 @@ protocol_write_l2tp_runtime_config() {
   protocol_write_xl2tpd_config
   protocol_write_ppp_options
   protocol_write_ipsec_config
+}
+
+protocol_apply_ipsec_config() {
+  command -v ipsec >/dev/null 2>&1 || return 0
+  ipsec update >/dev/null 2>&1 && return 0
+  systemctl --no-pager -l status "$IPSEC_STATE_SERVICE" ipsec >&2 || true
+  journalctl -u "$IPSEC_STATE_SERVICE" -u ipsec -n 120 --no-pager >&2 || true
+  die "failed to apply IPSec configuration updates"
 }
 
 protocol_ipsec_dns_address() {
@@ -533,7 +541,6 @@ protocol_sync_clients() {
   rm -f "${PANEL_APP_DIR}/ipsec_l2tp_clients.json" >/dev/null 2>&1 || true
   protocol_seed_clients
   protocol_write_chap_secrets
-  protocol_write_l2tp_runtime_config
   protocol_ensure_runtime
   config_json="$(protocol_build_config_json)"
   connector_render_apply "$CONNECTOR_MODE" "$config_json"
@@ -609,9 +616,11 @@ command_install() {
 
   progress 40 "Preparing IPSec/L2TP connector runtime"
   protocol_seed_clients
+  protocol_write_l2tp_runtime_config
   protocol_ensure_runtime
   protocol_sync_clients
   protocol_start_ipsec_services
+  protocol_apply_ipsec_config
   protocol_write_ipsec_enforcement_units
   protocol_enable_ipsec_enforcement_timer
 
@@ -647,6 +656,7 @@ command_start() {
   protocol_write_ipsec_dns_config
   connector_start_services
   protocol_start_ipsec_services
+  protocol_apply_ipsec_config
   protocol_clear_legacy_ppp_tcp_redirects
   connector_apply_internal_redirect "$IPSEC_INTERFACE"
   protocol_restart_ipsec_dnsmasq

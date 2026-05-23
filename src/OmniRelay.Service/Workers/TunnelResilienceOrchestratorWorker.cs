@@ -20,7 +20,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     private static readonly TimeSpan RemoteProbeTimeout = TimeSpan.FromSeconds(35);
     private static readonly TimeSpan TunnelFlapWindow = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan TunnelRecentExitPenalty = TimeSpan.FromSeconds(25);
-    private static readonly TimeSpan AdapterMissingRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan SchedulerSkewClamp = TimeSpan.FromMinutes(2);
 
     private const int Tier1FailureThreshold = 1;
@@ -58,7 +57,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     private bool _endToEndProbeOk;
     private bool _remoteProbeModuleAvailable = true;
     private bool _remoteProbeMissingLogged;
-    private bool _sshSourceBindEnabled = false;
     private DateTimeOffset _nextTunnelctlCompatCheckUtc = DateTimeOffset.MinValue;
     private bool _tunnelctlCompatVerified;
     private bool _bootstrapSocksListening;
@@ -453,15 +451,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             return;
         }
 
-        if (string.Equals(_healthReasonCode, "ic1_adapter_missing_ipv4", StringComparison.OrdinalIgnoreCase))
-        {
-            _currentRecoveryTier = 0;
-            _tunnelState = "Degraded";
-            _recoveryAction = "awaiting_ic1_ipv4";
-            _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(AdapterMissingRetryDelay);
-            return;
-        }
-
         var tier = ResolveRecoveryTier(_consecutiveFailures);
         _currentRecoveryTier = tier;
         _tunnelState = $"RecoveringTier{tier}";
@@ -849,8 +838,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                 config,
                 remoteCommand,
                 out var startInfo,
-                out var createError,
-                includeSourceBind: _sshSourceBindEnabled) || startInfo is null)
+                out var createError) || startInfo is null)
         {
             return (false, string.Empty, string.Empty, createError ?? "failed to create ssh command");
         }
@@ -878,96 +866,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                 var message = string.IsNullOrWhiteSpace(detail)
                     ? $"ssh exited with code {process.ExitCode}"
                     : $"ssh exited with code {process.ExitCode}: {detail}";
-
-                if (_sshSourceBindEnabled && IsSshSourceBindFailure(message))
-                {
-                    _sshSourceBindEnabled = false;
-                    _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow;
-                    _fileLog.Warn("Detected SSH source-bind failure during remote command; retrying without -b source binding.");
-                    RecordEvent("warn", "ssh source-bind failed for remote command; switching to route-only mode");
-
-                    return await ExecuteRemoteGatewayctlCommandWithoutBindAsync(
-                        config,
-                        remoteCommand,
-                        timeout,
-                        cancellationToken);
-                }
-
                 return (false, stdout, stderr, message);
-            }
-
-            return (true, stdout, stderr, null);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return (false, string.Empty, string.Empty, $"remote command timed out after {timeout.TotalSeconds:F0}s");
-        }
-        catch (Exception ex)
-        {
-            return (false, string.Empty, string.Empty, ex.Message);
-        }
-        finally
-        {
-            if (process is not null)
-            {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                        await process.WaitForExitAsync(CancellationToken.None);
-                    }
-                }
-                catch
-                {
-                }
-                finally
-                {
-                    process.Dispose();
-                }
-            }
-        }
-    }
-
-    private static async Task<(bool Success, string Stdout, string Stderr, string? Error)> ExecuteRemoteGatewayctlCommandWithoutBindAsync(
-        OmniRelay.Core.Configuration.ServiceConfig config,
-        string remoteCommand,
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
-    {
-        if (!SshTunnelProcessFactory.TryCreateRemoteCommandStartInfo(
-                config,
-                remoteCommand,
-                out var startInfo,
-                out var createError,
-                includeSourceBind: false) || startInfo is null)
-        {
-            return (false, string.Empty, string.Empty, createError ?? "failed to create ssh command");
-        }
-
-        Process? process = null;
-        try
-        {
-            process = new Process { StartInfo = startInfo };
-            if (!process.Start())
-            {
-                return (false, string.Empty, string.Empty, "failed to start ssh process");
-            }
-
-            process.StandardInput.Close();
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(timeout);
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
-            await process.WaitForExitAsync(timeoutCts.Token);
-            var stdout = (await stdoutTask).Trim();
-            var stderr = (await stderrTask).Trim();
-            if (process.ExitCode != 0)
-            {
-                var detail = FirstNonEmpty(stderr, stdout);
-                return (false, stdout, stderr, string.IsNullOrWhiteSpace(detail)
-                    ? $"ssh exited with code {process.ExitCode}"
-                    : $"ssh exited with code {process.ExitCode}: {detail}");
             }
 
             return (true, stdout, stderr, null);
@@ -1008,15 +907,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         await StopTunnelProcessAsync();
         await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
 
-        if (!NetworkAdapterCatalog.TryGetPrimaryIpv4(config.WhitelistAdapterIfIndex, out var bindIp) || bindIp is null)
-        {
-            _lastTunnelError = $"IC1 adapter IfIndex={config.WhitelistAdapterIfIndex} has no usable IPv4 address.";
-            _healthReasonCode = "ic1_adapter_missing_ipv4";
-            _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(AdapterMissingRetryDelay);
-            RecordEvent("warn", _lastTunnelError);
-            return;
-        }
-
         var routeResult = await NetworkRouteManager.TryEnsureTunnelHostRouteAsync(config, cancellationToken);
         if (routeResult.Success)
         {
@@ -1027,61 +917,26 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             _fileLog.Warn(routeResult.Message);
         }
 
-        if (_sshSourceBindEnabled)
-        {
-            var (boundProbeOk, boundProbeError) = await ProbeSshReachabilityFromIc1Async(
-                bindIp,
-                config.TunnelHost,
-                config.TunnelSshPort,
-                cancellationToken);
+        var (routeProbeOk, routeProbeError) = await ProbeSshReachabilityRouteOnlyAsync(
+            config.TunnelHost,
+            config.TunnelSshPort,
+            cancellationToken);
 
-            if (!boundProbeOk)
-            {
-                if (IsSshSourceBindFailure(boundProbeError))
-                {
-                    _sshSourceBindEnabled = false;
-                    _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow;
-                    var bindFailureMessage =
-                        $"IC1 bound reachability probe failed from {bindIp} to {config.TunnelHost}:{config.TunnelSshPort} ({boundProbeError}); switching to route-only mode.";
-                    _fileLog.Warn(bindFailureMessage);
-                    RecordEvent("warn", "ssh reachability source-bind failed; falling back to route-only connect");
-                }
-                else
-                {
-                    _lastTunnelError = $"IC1 source {bindIp} cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {boundProbeError}";
-                    _healthReasonCode = "ssh_reachability_failed";
-                    RecordEvent("warn", _lastTunnelError);
-                    _fileLog.Warn(_lastTunnelError);
-                    return;
-                }
-            }
+        if (!routeProbeOk)
+        {
+            _lastTunnelError = $"Route-only probe cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {routeProbeError}";
+            _healthReasonCode = "ssh_reachability_failed";
+            RecordEvent("warn", _lastTunnelError);
+            _fileLog.Warn(_lastTunnelError);
+            return;
         }
 
-        if (!_sshSourceBindEnabled)
-        {
-            var (routeProbeOk, routeProbeError) = await ProbeSshReachabilityRouteOnlyAsync(
-                config.TunnelHost,
-                config.TunnelSshPort,
-                cancellationToken);
-
-            if (!routeProbeOk)
-            {
-                _lastTunnelError = $"Route-only probe cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {routeProbeError}";
-                _healthReasonCode = "ssh_reachability_failed";
-                RecordEvent("warn", _lastTunnelError);
-                _fileLog.Warn(_lastTunnelError);
-                return;
-            }
-        }
-
-        _fileLog.Info(
-            $"Starting tunnel with IC1 IfIndex={config.WhitelistAdapterIfIndex}, sourceIp={bindIp}, target={config.TunnelHost}:{config.TunnelSshPort}.");
+        _fileLog.Info($"Starting tunnel target={config.TunnelHost}:{config.TunnelSshPort}.");
 
         if (!SshTunnelProcessFactory.TryCreateReverseTunnelStartInfo(
                 config,
                 out var processInfo,
-                out var error,
-                includeSourceBind: _sshSourceBindEnabled) || processInfo is null)
+                out var error) || processInfo is null)
         {
             _lastTunnelError = error ?? "Tunnel configuration is invalid.";
             _healthReasonCode = "ssh_start_info_invalid";
@@ -1144,14 +999,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                         RecordEvent("warn", $"{conflictMessage} conflictAttempt={_forwardConflictCount} nextRetryIn={cooldown.TotalSeconds:0}s");
                         _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(cooldown);
                         await TryScheduleRemoteForwardCleanupAsync(config, CancellationToken.None);
-                    }
-
-                    if (_sshSourceBindEnabled && IsSshSourceBindFailure(cleaned))
-                    {
-                        _sshSourceBindEnabled = false;
-                        _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow;
-                        _fileLog.Warn("Detected SSH source-bind failure; retrying without -b source binding.");
-                        RecordEvent("warn", "ssh source-bind failed; falling back to route-only tunnel connect");
                     }
 
                     if (HasRemoteForwardFailure(cleaned) && !TryGetRemoteForwardConflictPort(cleaned, out _))
@@ -1456,8 +1303,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                 config,
                 remoteCommand,
                 out var psi,
-                out var error,
-                includeSourceBind: _sshSourceBindEnabled) || psi is null)
+                out var error) || psi is null)
         {
             _fileLog.Warn($"Unable to schedule remote tunnel cleanup: {error ?? "cannot prepare ssh command."}");
             return;
@@ -1530,18 +1376,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         return int.TryParse(match.Groups[1].Value, out port);
     }
 
-    private static bool IsSshSourceBindFailure(string? message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            return false;
-        }
-
-        return message.Contains("Invalid argument", StringComparison.OrdinalIgnoreCase) ||
-               message.Contains("Cannot assign requested address", StringComparison.OrdinalIgnoreCase) ||
-               message.Contains("address not available", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static string EscapePowerShellSingleQuoted(string value)
     {
         return (value ?? string.Empty).Replace("'", "''", StringComparison.Ordinal);
@@ -1590,27 +1424,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         _lastLoggedProbeFailureSignature = signature;
         _lastLoggedProbeFailureUtc = now;
         _fileLog.Warn($"{normalizedPhase} failed. reason={normalizedReason} detail={normalizedDetail}");
-    }
-
-    private static async Task<(bool Success, string Error)> ProbeSshReachabilityFromIc1Async(
-        IPAddress sourceIp,
-        string tunnelHost,
-        int tunnelPort,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var client = new TcpClient();
-            client.Client.Bind(new IPEndPoint(sourceIp, 0));
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(8));
-            await client.ConnectAsync(tunnelHost, tunnelPort, cts.Token);
-            return (true, string.Empty);
-        }
-        catch (Exception ex)
-        {
-            return (false, ex.Message);
-        }
     }
 
     private static async Task<(bool Success, string Error)> ProbeSshReachabilityRouteOnlyAsync(

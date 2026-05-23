@@ -307,6 +307,16 @@ public partial class RelayEditDialog : Window
 
     private async void Apply_Click(object sender, RoutedEventArgs e)
     {
+        await PersistRelayAsync(closeOnSuccess: false);
+    }
+
+    private async void Save_Click(object sender, RoutedEventArgs e)
+    {
+        await PersistRelayAsync(closeOnSuccess: true);
+    }
+
+    private async Task PersistRelayAsync(bool closeOnSuccess)
+    {
         if (!TryUpdateRelayFromControls())
         {
             return;
@@ -321,33 +331,28 @@ public partial class RelayEditDialog : Window
         try
         {
             IsEnabled = false;
-            FeedbackTextBlock.Text = "Applying...";
+            FeedbackTextBlock.Text = closeOnSuccess ? "Saving..." : "Applying...";
             var success = await ApplyRequested(Relay);
             FeedbackTextBlock.Text = success ? "Applied." : "Apply failed. Check service status and logs.";
             if (success)
             {
                 _isRelaySaved = true;
                 RefreshRelayScopedTabs();
+                await RefreshStatusFromSourceAsync();
+                if (closeOnSuccess)
+                {
+                    DialogResult = true;
+                }
             }
         }
         catch (Exception ex)
         {
-            FeedbackTextBlock.Text = $"Apply failed: {ex.Message}";
+            FeedbackTextBlock.Text = $"{(closeOnSuccess ? "Save" : "Apply")} failed: {ex.Message}";
         }
         finally
         {
             IsEnabled = true;
         }
-    }
-
-    private void Save_Click(object sender, RoutedEventArgs e)
-    {
-        if (!TryUpdateRelayFromControls())
-        {
-            return;
-        }
-
-        DialogResult = true;
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
@@ -833,6 +838,7 @@ public partial class RelayEditDialog : Window
         if (!_isRelaySaved || RefreshRelayStatusRequested is null || string.IsNullOrWhiteSpace(Relay.Id))
         {
             LoadStatus();
+            LoadOperationCenterSummary();
             return;
         }
 
@@ -849,6 +855,7 @@ public partial class RelayEditDialog : Window
         }
 
         LoadStatus();
+        LoadOperationCenterSummary();
     }
 
     private async void BootstrapCheck_Click(object sender, RoutedEventArgs e) => await RunGatewayOperationAsync("bootstrap_check");

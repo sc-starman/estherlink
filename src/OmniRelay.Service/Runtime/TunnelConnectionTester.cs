@@ -17,6 +17,16 @@ public sealed class TunnelConnectionTester
 
     public async Task<(bool Success, string Message)> TestAsync(ServiceConfig config, CancellationToken cancellationToken)
     {
+        var routeResult = await NetworkRouteManager.TryEnsureTunnelHostRouteAsync(config, cancellationToken);
+        if (!routeResult.Success)
+        {
+            var routeError = $"Tunnel connection test requires IC1 route pinning. {routeResult.Message}";
+            _fileLog.Warn(routeError);
+            return (false, routeError);
+        }
+
+        _fileLog.Info(routeResult.Message);
+
         var attemptedRepair = false;
         while (true)
         {

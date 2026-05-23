@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TUNNELCTL_BIN="/usr/local/sbin/omnirelay-tunnelctl"
-TUNNELCTL_CONFIG_DIR="/etc/omnirelay/tunnelctl"
-TUNNELCTL_CONFIG_FILE="${TUNNELCTL_CONFIG_DIR}/env"
+TUNNELCTL_BIN="${TUNNELCTL_BIN:-/usr/local/sbin/omnirelay-tunnelctl}"
+TUNNELCTL_CONFIG_DIR="${TUNNELCTL_CONFIG_DIR:-/etc/omnirelay/tunnelctl}"
+TUNNELCTL_CONFIG_FILE="${TUNNELCTL_CONFIG_FILE:-${TUNNELCTL_CONFIG_DIR}/env}"
 
 DEFAULT_BACKEND_HOST="127.0.0.1"
 DEFAULT_BACKEND_PORT="15000"
@@ -19,6 +19,7 @@ PROBE_URL="${DEFAULT_PROBE_URL}"
 PROBE_TIMEOUT_SECONDS="${DEFAULT_TIMEOUT_SECONDS}"
 REMEDIATE_LEVEL="soft"
 OUTPUT_JSON=false
+RELAY_ID=""
 
 usage() {
   cat <<'USAGE'
@@ -39,6 +40,9 @@ Options:
   --probe-url <url>          End-to-end probe URL
   --timeout <seconds>        Probe timeout seconds
   --level <soft|hard>        Remediation level for remediate
+  --install-path <path>      Install location for tunnelctl binary
+  --config-dir <path>        Config directory for tunnelctl env/state
+  --relay-id <id>            Relay id tag for diagnostics/scoping
   --json                     JSON output for status/health/probe/remediate
 USAGE
 }
@@ -369,6 +373,19 @@ parse_args() {
         REMEDIATE_LEVEL="${2:-soft}"
         shift 2
         ;;
+      --install-path)
+        TUNNELCTL_BIN="${2:-}"
+        shift 2
+        ;;
+      --config-dir)
+        TUNNELCTL_CONFIG_DIR="${2:-}"
+        TUNNELCTL_CONFIG_FILE="${TUNNELCTL_CONFIG_DIR}/env"
+        shift 2
+        ;;
+      --relay-id)
+        RELAY_ID="${2:-}"
+        shift 2
+        ;;
       --json)
         OUTPUT_JSON=true
         shift
@@ -385,10 +402,12 @@ parse_args() {
 }
 
 main() {
+  parse_args "$@"
   if [[ "$COMMAND" != "install" ]]; then
     load_config
+    # Re-apply CLI overrides after loading persisted config values.
+    parse_args "$@"
   fi
-  parse_args "$@"
 
   case "$COMMAND" in
     install)

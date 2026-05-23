@@ -125,6 +125,7 @@ public sealed class GatewayRuntime
                 .Select(CloneRelayConfig)
                 .ToList();
             candidateRelays.Add(normalized);
+            ValidateRelayPortIsolationOrThrow(candidateRelays);
             ConfigStore.EnsureRelayPorts(candidateRelays);
             normalized = candidateRelays.First(x => string.Equals(x.Id, normalized.Id, StringComparison.Ordinal));
             var index = _config.Relays.FindIndex(x => string.Equals(x.Id, normalized.Id, StringComparison.Ordinal));
@@ -654,6 +655,7 @@ public sealed class GatewayRuntime
         {
             var previous = CloneConfig(_config);
             _config = CloneConfig(config);
+            ValidateRelayPortIsolationOrThrow(_config.Relays);
             ConfigStore.EnsureRelayPorts(_config.Relays);
             SyncRelayStatusesLocked();
             _config.GatewayType = GatewayTypes.Normalize(_config.GatewayType);
@@ -1527,6 +1529,57 @@ public sealed class GatewayRuntime
                 RuntimeEnabled = relay.LocalGateway?.RuntimeEnabled ?? true
             }
         };
+    }
+
+    private static void ValidateRelayPortIsolationOrThrow(IReadOnlyList<RelayConfig> relays)
+    {
+        var localPortOwners = new Dictionary<int, string>();
+        var remotePortOwners = new Dictionary<int, string>();
+
+        foreach (var relay in relays.Where(x => x.Enabled))
+        {
+            var relayToken = BuildRelayToken(relay);
+
+            if (relay.DataPlaneLocalPort > 0)
+            {
+                EnsureUniquePort(localPortOwners, relay.DataPlaneLocalPort, relayToken, "local data-plane");
+            }
+
+            if (relay.BootstrapSocksLocalPort > 0)
+            {
+                EnsureUniquePort(localPortOwners, relay.BootstrapSocksLocalPort, relayToken, "local bootstrap");
+            }
+
+            if (string.Equals(GatewayTypes.Normalize(relay.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+            {
+                var tunnelRemotePort = relay.RemoteGateway?.TunnelRemotePort ?? 0;
+                if (tunnelRemotePort > 0)
+                {
+                    EnsureUniquePort(remotePortOwners, tunnelRemotePort, relayToken, "remote data-plane");
+                }
+
+                if (relay.BootstrapSocksRemotePort > 0)
+                {
+                    EnsureUniquePort(remotePortOwners, relay.BootstrapSocksRemotePort, relayToken, "remote bootstrap");
+                }
+            }
+        }
+    }
+
+    private static void EnsureUniquePort(Dictionary<int, string> owners, int port, string relayToken, string plane)
+    {
+        if (!owners.TryAdd(port, relayToken))
+        {
+            throw new InvalidOperationException(
+                $"Port isolation conflict on {plane} port {port}: relay '{relayToken}' conflicts with relay '{owners[port]}'.");
+        }
+    }
+
+    private static string BuildRelayToken(RelayConfig relay)
+    {
+        var name = string.IsNullOrWhiteSpace(relay.Name) ? "relay" : relay.Name.Trim();
+        var id = string.IsNullOrWhiteSpace(relay.Id) ? "no-id" : relay.Id.Trim();
+        return $"{name} ({id})";
     }
 
     private static bool RequiresLocalGatewayRestart(ServiceConfig previous, ServiceConfig current)

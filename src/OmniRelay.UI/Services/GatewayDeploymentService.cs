@@ -725,7 +725,10 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress,
         CancellationToken cancellationToken)
     {
-        var tunnelCtlQuoted = ShellQuote(TunnelCtlPath);
+        var tunnelCtlPath = GetTunnelCtlPath(request);
+        var tunnelCtlConfigDir = GetTunnelCtlConfigDir(request);
+        var tunnelCtlQuoted = ShellQuote(tunnelCtlPath);
+        var tunnelCtlPrefix = $"TUNNELCTL_CONFIG_DIR={ShellQuote(tunnelCtlConfigDir)}";
         var levels = new[] { "soft", "hard" };
         CommandExecutionResult? lastProbeResult = null;
         CommandExecutionResult? lastRemediateResult = null;
@@ -742,8 +745,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             var remediateCommand =
                 "set -euo pipefail; " +
                 $"[ -x {tunnelCtlQuoted} ] || {{ echo 'tunnelctl is missing on VPS.'; exit 45; }}; " +
-                $"{tunnelCtlQuoted} remediate --level {ShellQuote(level)} --backend-host 127.0.0.1 --backend-port {backendPort} --json || true; " +
-                $"{tunnelCtlQuoted} probe --backend-host 127.0.0.1 --backend-port {backendPort} --json || true";
+                $"{tunnelCtlPrefix} {tunnelCtlQuoted} remediate --level {ShellQuote(level)} --backend-host 127.0.0.1 --backend-port {backendPort} --json || true; " +
+                $"{tunnelCtlPrefix} {tunnelCtlQuoted} probe --backend-host 127.0.0.1 --backend-port {backendPort} --json || true";
 
             lastRemediateResult = await ExecuteCommandAsync(
                 request.Config,
@@ -994,19 +997,25 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         await UploadTunnelModuleScriptAsync(request, progress, cancellationToken);
 
         const string probeUrl = "https://1.1.1.1/cdn-cgi/trace";
+        var tunnelCtlPath = GetTunnelCtlPath(request);
+        var tunnelCtlConfigDir = GetTunnelCtlConfigDir(request);
+        var relayId = NormalizeRelayId(request.RelayId);
         var command =
             "set -euo pipefail; " +
             $"chmod +x {ShellQuote(RemoteTunnelModuleScriptPath)}; " +
             $"sed -i 's/\\r$//' {ShellQuote(RemoteTunnelModuleScriptPath)} || true; " +
             $"bash -n {ShellQuote(RemoteTunnelModuleScriptPath)} >/tmp/omnirelay-tunnelctl.syntax.log 2>&1 || {{ cat /tmp/omnirelay-tunnelctl.syntax.log; exit 43; }}; " +
             $"bash {ShellQuote(RemoteTunnelModuleScriptPath)} install " +
+            $"--install-path {ShellQuote(tunnelCtlPath)} " +
+            $"--config-dir {ShellQuote(tunnelCtlConfigDir)} " +
+            (string.IsNullOrWhiteSpace(relayId) ? string.Empty : $"--relay-id {ShellQuote(relayId)} ") +
             $"--backend-host '127.0.0.1' " +
             $"--backend-port {request.Config.TunnelRemotePort} " +
             $"--probe-url {ShellQuote(probeUrl)} " +
             $"--timeout 12 --json; " +
-            $"[ -x {ShellQuote(TunnelCtlPath)} ] || {{ echo 'Tunnel module did not install correctly.'; exit 44; }}; " +
-            $"sed -i 's/\\r$//' {ShellQuote(TunnelCtlPath)} || true; " +
-            $"/usr/bin/env bash {ShellQuote(TunnelCtlPath)} status --json >/tmp/omnirelay-tunnelctl.status.log 2>&1 || {{ cat /tmp/omnirelay-tunnelctl.status.log; exit 45; }}";
+            $"[ -x {ShellQuote(tunnelCtlPath)} ] || {{ echo 'Tunnel module did not install correctly.'; exit 44; }}; " +
+            $"sed -i 's/\\r$//' {ShellQuote(tunnelCtlPath)} || true; " +
+            $"TUNNELCTL_CONFIG_DIR={ShellQuote(tunnelCtlConfigDir)} /usr/bin/env bash {ShellQuote(tunnelCtlPath)} status --json >/tmp/omnirelay-tunnelctl.status.log 2>&1 || {{ cat /tmp/omnirelay-tunnelctl.status.log; exit 45; }}";
 
         var result = await ExecuteCommandAsync(
             request.Config,
@@ -1249,6 +1258,22 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return string.IsNullOrWhiteSpace(relayId)
             ? GatewayCtlPath
             : $"/usr/local/sbin/omnirelay-gatewayctl-{relayId}";
+    }
+
+    private static string GetTunnelCtlPath(GatewayDeploymentRequest request)
+    {
+        var relayId = NormalizeRelayId(request.RelayId);
+        return string.IsNullOrWhiteSpace(relayId)
+            ? TunnelCtlPath
+            : $"/usr/local/sbin/omnirelay-tunnelctl-{relayId}";
+    }
+
+    private static string GetTunnelCtlConfigDir(GatewayDeploymentRequest request)
+    {
+        var relayId = NormalizeRelayId(request.RelayId);
+        return string.IsNullOrWhiteSpace(relayId)
+            ? "/etc/omnirelay/tunnelctl"
+            : $"/etc/omnirelay/relays/{relayId}/tunnelctl";
     }
 
     private static string GetRemoteInstallScriptPath(GatewayDeploymentRequest request)
