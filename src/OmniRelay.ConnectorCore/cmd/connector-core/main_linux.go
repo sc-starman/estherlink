@@ -1414,6 +1414,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  connector-core run [--config path] [--metadata path] [--accounting-db path] [--state-file path]")
 	fmt.Fprintln(os.Stderr, "  connector-core check [--config path]")
+	fmt.Fprintln(os.Stderr, "  connector-core tunnel run --config <path> --state-file <path> [--strict-config]")
+	fmt.Fprintln(os.Stderr, "  connector-core tunnel check --config <path> [--strict-config]")
+	fmt.Fprintln(os.Stderr, "  connector-core frps run --config <path> --state-file <path> [--strict-config]")
+	fmt.Fprintln(os.Stderr, "  connector-core frps check --config <path> [--strict-config]")
 }
 
 func main() {
@@ -1427,6 +1431,34 @@ func main() {
 		err = runCommand(os.Args[2:])
 	case "check":
 		err = checkCommand(os.Args[2:])
+	case "tunnel":
+		if len(os.Args) < 3 {
+			usage()
+			os.Exit(2)
+		}
+		switch os.Args[2] {
+		case "run":
+			err = runFrpTunnelCommand(os.Args[3:])
+		case "check":
+			err = checkFrpTunnelCommand(os.Args[3:])
+		default:
+			usage()
+			os.Exit(2)
+		}
+	case "frps":
+		if len(os.Args) < 3 {
+			usage()
+			os.Exit(2)
+		}
+		switch os.Args[2] {
+		case "run":
+			err = runFrpsCommand(os.Args[3:])
+		case "check":
+			err = checkFrpsCommand(os.Args[3:])
+		default:
+			usage()
+			os.Exit(2)
+		}
 	default:
 		usage()
 		os.Exit(2)

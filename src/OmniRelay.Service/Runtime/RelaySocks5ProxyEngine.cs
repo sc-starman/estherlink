@@ -14,6 +14,8 @@ public sealed class RelaySocks5ProxyEngine
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _acceptLoop;
+    private string? _lastTransientFailureSignature;
+    private DateTimeOffset _lastTransientFailureLoggedUtc = DateTimeOffset.MinValue;
 
     public RelaySocks5ProxyEngine(
         RelayConfig relay,
@@ -154,7 +156,17 @@ public sealed class RelaySocks5ProxyEngine
         }
         catch (Exception ex)
         {
-            _log.Warn($"Relay '{_relay.Name}' SOCKS connection failed: {ex.Message}");
+            if (ShouldLogConnectionFailure(ex.Message, out var transient))
+            {
+                if (transient)
+                {
+                    _log.Info($"Relay '{_relay.Name}' SOCKS transient connection failure: {ex.Message}");
+                }
+                else
+                {
+                    _log.Warn($"Relay '{_relay.Name}' SOCKS connection failed: {ex.Message}");
+                }
+            }
             try { await SendReplyAsync(stream, 0x01, IPAddress.Any, 0, CancellationToken.None); } catch { }
         }
         finally
@@ -256,6 +268,43 @@ public sealed class RelaySocks5ProxyEngine
     {
         var length = (await ReadExactAsync(stream, 1, cancellationToken))[0];
         return System.Text.Encoding.ASCII.GetString(await ReadExactAsync(stream, length, cancellationToken));
+    }
+
+    private bool ShouldLogConnectionFailure(string message, out bool transient)
+    {
+        transient = IsTransientFailure(message);
+        if (!transient)
+        {
+            return true;
+        }
+
+        var signature = (message ?? string.Empty).Trim();
+        var now = DateTimeOffset.UtcNow;
+        var transientWindow = signature.Contains("Unexpected EOF", StringComparison.OrdinalIgnoreCase)
+            ? TimeSpan.FromMinutes(2)
+            : TimeSpan.FromSeconds(20);
+        if (string.Equals(_lastTransientFailureSignature, signature, StringComparison.Ordinal) &&
+            now - _lastTransientFailureLoggedUtc < transientWindow)
+        {
+            return false;
+        }
+
+        _lastTransientFailureSignature = signature;
+        _lastTransientFailureLoggedUtc = now;
+        return true;
+    }
+
+    private static bool IsTransientFailure(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        return message.Contains("Unexpected EOF", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("forcibly closed", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("connection reset by peer", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("read EOF", StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task<byte[]> ReadExactAsync(Stream stream, int count, CancellationToken cancellationToken)

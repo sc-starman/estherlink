@@ -183,6 +183,26 @@ public static class ServicePaths
         return Path.Combine(RelayGatewayRuntimeRootDirectory, safeRelayId);
     }
 
+    public static string GetRelayFrpcConfigPath(string relayId)
+    {
+        return Path.Combine(GetRelayLocalGatewayDirectory(relayId), "frpc.toml");
+    }
+
+    public static string GetRelayFrpTunnelStatePath(string relayId)
+    {
+        return Path.Combine(GetRelayLocalGatewayDirectory(relayId), "frp_tunnel_state.json");
+    }
+
+    public static string GetRelayFrpcStdoutLogPath(string relayId)
+    {
+        return Path.Combine(GetRelayLocalGatewayDirectory(relayId), "frpc.stdout.log");
+    }
+
+    public static string GetRelayFrpcStderrLogPath(string relayId)
+    {
+        return Path.Combine(GetRelayLocalGatewayDirectory(relayId), "frpc.stderr.log");
+    }
+
     public static string GetRelayLocalGatewaySingBoxConfigPath(string relayId)
     {
         return Path.Combine(GetRelayLocalGatewayDirectory(relayId), "singbox.config.json");

@@ -9,6 +9,9 @@ PUBLIC_PORT=443
 PANEL_PORT=2054
 BACKEND_PORT=15000
 SSH_PORT=22
+FRP_SERVER_PORT=7000
+FRP_AUTH_TOKEN=""
+RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
 BOOTSTRAP_SOCKS_PORT=16080
 BOOTSTRAP_MODE="tunnel"
 PROXY_CHECK_URL="https://8.8.8.8/,https://dns.google/,https://9.9.9.9/"
@@ -74,6 +77,15 @@ CLOCK_SYNC_MAX_SKEW_SEC=120
 CLOCK_SYNC_STALE_SEC=900
 TUNNELCTL_PATH="/usr/local/sbin/omnirelay-tunnelctl"
 TUNNELCTL_CONFIG_DIR="/etc/omnirelay/tunnelctl"
+SSHD_CONFIG_FILE="/etc/ssh/sshd_config"
+SSHD_CLIENT_ALIVE_INTERVAL=10
+SSHD_CLIENT_ALIVE_COUNT_MAX=2
+SSHD_KEEPALIVE_APPLIED="false"
+FRPS_BIN="/usr/local/bin/frps"
+FRPS_CONFIG_ROOT="/etc/omnirelay/frp"
+FRPS_CONFIG_FILE="${FRPS_CONFIG_ROOT}/frps.toml"
+FRPS_STATE_FILE="${FRPS_CONFIG_ROOT}/frps_state.json"
+FRPS_SERVICE="omnirelay-frps.service"
 
 ACCOUNTING_SYNC_SCRIPT="/usr/local/sbin/omnirelay-accounting-sync"
 ACCOUNTING_SYNC_ENV_FILE="${GATEWAY_ROOT_DIR}/accounting_sync.env"
@@ -89,6 +101,28 @@ progress(){ local p="$1"; shift; printf 'OMNIRELAY_PROGRESS:%s:%s\n' "$p" "$*"; 
 connector_require_root(){ (( EUID == 0 )) || die "This command requires root."; }
 connector_validate_port(){ [[ "$1" =~ ^[0-9]+$ ]] || die "$2 must be integer"; (( $1>=1 && $1<=65535 )) || die "$2 out of range"; }
 connector_normalize_bool(){ case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | xargs)" in true|1|yes|y) echo true;; false|0|no|n) echo false;; *) die "Invalid boolean: $1";; esac; }
+connector_normalize_release_channel(){
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | xargs)" in
+    beta) echo "beta" ;;
+    stable|"") echo "stable" ;;
+    *) die "Invalid --release-channel: ${1:-}. Allowed values: stable, beta" ;;
+  esac
+}
+connector_connector_core_download_url(){
+  local arch="$1"
+  if [[ "$RELEASE_CHANNEL" == "beta" ]]; then
+    printf 'https://omnirelay.net/download/connector-core/beta/linux/%s' "$arch"
+  else
+    printf 'https://omnirelay.net/download/connector-core/linux/%s' "$arch"
+  fi
+}
+connector_omnipanel_download_url(){
+  if [[ "$RELEASE_CHANNEL" == "beta" ]]; then
+    printf 'https://omnirelay.net/download/omni-gateway/beta'
+  else
+    printf 'https://omnirelay.net/download/omni-gateway'
+  fi
+}
 connector_random_string(){ LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c "$1" || true; }
 connector_random_uuid(){ [[ -f /proc/sys/kernel/random/uuid ]] && cat /proc/sys/kernel/random/uuid || uuidgen; }
 connector_check_listener(){ ss -lnt "( sport = :$1 )" 2>/dev/null | awk 'NR>1 {print}' | grep -q . && echo true || echo false; }
@@ -114,6 +148,94 @@ connector_short_hash(){
   else
     printf '%s' "$1" | shasum -a 256 | awk '{print substr($1,1,10)}'
   fi
+}
+
+connector_apply_sshd_keepalive(){
+  if [[ "${SSHD_KEEPALIVE_APPLIED:-false}" == "true" ]]; then
+    return 0
+  fi
+
+  local cfg="${SSHD_CONFIG_FILE}"
+  local interval="${SSHD_CLIENT_ALIVE_INTERVAL}"
+  local count="${SSHD_CLIENT_ALIVE_COUNT_MAX}"
+  [[ "$interval" =~ ^[0-9]+$ ]] || die "invalid sshd ClientAliveInterval: ${interval}"
+  [[ "$count" =~ ^[0-9]+$ ]] || die "invalid sshd ClientAliveCountMax: ${count}"
+
+  if [[ ! -f "$cfg" ]]; then
+    log "sshd keepalive apply skipped: ${cfg} not found."
+    SSHD_KEEPALIVE_APPLIED="true"
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  awk -v interval="$interval" -v count="$count" '
+    BEGIN {
+      inserted = 0
+      in_match = 0
+    }
+    {
+      line = $0
+      trimmed = line
+      sub(/^[ \t]+/, "", trimmed)
+      lower = tolower(trimmed)
+
+      if (lower ~ /^match[ \t]/) {
+        if (!inserted) {
+          print "ClientAliveInterval " interval
+          print "ClientAliveCountMax " count
+          inserted = 1
+        }
+        in_match = 1
+        print line
+        next
+      }
+
+      if (!in_match && (lower ~ /^clientaliveinterval[ \t]/ || lower ~ /^clientalivecountmax[ \t]/)) {
+        next
+      }
+
+      print line
+    }
+    END {
+      if (!inserted) {
+        print ""
+        print "ClientAliveInterval " interval
+        print "ClientAliveCountMax " count
+      }
+    }
+  ' "$cfg" > "$tmp"
+
+  if cmp -s "$cfg" "$tmp"; then
+    rm -f "$tmp"
+    SSHD_KEEPALIVE_APPLIED="true"
+    return 0
+  fi
+
+  local backup="${cfg}.omnirelay.bak"
+  [[ -f "$backup" ]] || cp -a "$cfg" "$backup"
+  cat "$tmp" > "$cfg"
+  rm -f "$tmp"
+
+  local sshd_bin
+  sshd_bin="$(command -v sshd 2>/dev/null || true)"
+  [[ -n "$sshd_bin" ]] || sshd_bin="/usr/sbin/sshd"
+  "$sshd_bin" -t -f "$cfg" >/tmp/omnirelay-sshd-check.log 2>&1 || {
+    cat "$backup" > "$cfg"
+    sed -n '1,120p' /tmp/omnirelay-sshd-check.log >&2 || true
+    die "sshd configuration validation failed after keepalive apply; rollback completed"
+  }
+
+  if systemctl restart ssh >/dev/null 2>&1; then
+    :
+  elif systemctl restart sshd >/dev/null 2>&1; then
+    :
+  else
+    die "failed to restart ssh/sshd after keepalive apply"
+  fi
+
+  log "Applied sshd keepalive settings: ClientAliveInterval=${interval}, ClientAliveCountMax=${count}"
+  SSHD_KEEPALIVE_APPLIED="true"
 }
 
 connector_default_dns_port_for_relay(){
@@ -1388,7 +1510,8 @@ connector_install_connector_core_binary(){
   progress 24 "Installing connector-core runtime"
   local arch="amd64"
   [[ "$(uname -m)" =~ ^(aarch64|arm64)$ ]] && arch="arm64"
-  local artifact_url="https://omnirelay.net/download/connector-core/linux/${arch}"
+  local artifact_url
+  artifact_url="$(connector_connector_core_download_url "$arch")"
   local fallback_base_url="https://github.com/omnirelay/OmniRelay/releases/download/connector-core-v${CONNECTOR_CORE_VERSION}"
   local fallback_url="${fallback_base_url}/connector-core-linux-${arch}.tar.gz"
   local url="${CONNECTOR_CORE_DOWNLOAD_URL:-$artifact_url}"
@@ -1398,7 +1521,7 @@ connector_install_connector_core_binary(){
 
   connector_configure_proxy
   if ! curl -fSL "$url" -o "$tmp"; then
-    if [[ -z "${CONNECTOR_CORE_DOWNLOAD_URL:-}" && "$url" != "$fallback_url" ]]; then
+    if [[ "$RELEASE_CHANNEL" == "stable" && -z "${CONNECTOR_CORE_DOWNLOAD_URL:-}" && "$url" != "$fallback_url" ]]; then
       log "Primary connector-core artifact URL failed (${url}); retrying GitHub release fallback."
       curl -fSL "$fallback_url" -o "$tmp" || {
         connector_clear_proxy
@@ -1423,6 +1546,57 @@ connector_install_connector_core_binary(){
   install -m 0755 "$bin" "$CONNECTOR_BIN"
 }
 
+connector_write_frps_config(){
+  install -d -m 0755 "$FRPS_CONFIG_ROOT"
+  cat > "$FRPS_CONFIG_FILE" <<EOF
+bindPort = ${FRP_SERVER_PORT}
+proxyBindAddr = "127.0.0.1"
+auth.method = "token"
+auth.token = "${FRP_AUTH_TOKEN}"
+transport.tcpMux = true
+transport.tcpMuxKeepaliveInterval = 30
+log.to = "/var/log/omnirelay-frps.log"
+log.level = "info"
+log.maxDays = 7
+EOF
+  chmod 0640 "$FRPS_CONFIG_FILE" || true
+}
+
+connector_write_frps_service(){
+  cat > "/etc/systemd/system/${FRPS_SERVICE}" <<EOF
+[Unit]
+Description=OmniRelay FRP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${CONNECTOR_BIN} frps run --config ${FRPS_CONFIG_FILE} --state-file ${FRPS_STATE_FILE} --strict-config=true
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+connector_install_frps_runtime(){
+  progress 22 "Configuring FRPS runtime"
+  [[ -x "$CONNECTOR_BIN" ]] || die "connector-core runtime is missing: ${CONNECTOR_BIN}"
+  connector_write_frps_config
+  connector_write_frps_service
+  rm -f "$FRPS_BIN" || true
+  systemctl daemon-reload
+  systemctl enable --now "$FRPS_SERVICE" >/dev/null 2>&1 || die "failed to enable/start ${FRPS_SERVICE}"
+}
+
+connector_uninstall_frps_runtime(){
+  systemctl disable --now "$FRPS_SERVICE" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/${FRPS_SERVICE}" "$FRPS_BIN"
+  rm -rf "$FRPS_CONFIG_ROOT"
+  systemctl daemon-reload || true
+}
+
 connector_init(){
   install -d -m 0755 /usr/local/lib/omnirelay "$GATEWAY_ROOT_DIR" "$CONNECTOR_DIR" "$PANEL_APP_DIR" "$PANEL_RELEASES_DIR"
   [[ -f "$BOOTSTRAP_COMMON_SCRIPT" ]] && install -m 0755 "$BOOTSTRAP_COMMON_SCRIPT" /usr/local/lib/omnirelay/bootstrap-common.sh || true
@@ -1445,10 +1619,13 @@ connector_install_runtime(){
   connector_clear_proxy
   connector_ensure_node_runtime
   connector_install_connector_core_binary
+  connector_install_frps_runtime
   connector_write_service_unit
   connector_install_clock_sync_runtime
   connector_install_accounting_runtime
-  systemctl enable --now "$CONNECTOR_SERVICE"
+  # Defer connector service start until protocol render/apply writes a valid config.
+  # Starting too early can hit systemd restart limits during reinstall flows.
+  systemctl enable "$CONNECTOR_SERVICE" >/dev/null 2>&1 || true
 }
 
 connector_validate_dns_profile(){
@@ -1547,6 +1724,7 @@ connector_render_apply(){
   printf '%s\n' "$config_json" > "$CONNECTOR_CONFIG_FILE"
   "$CONNECTOR_BIN" check --config "$CONNECTOR_CONFIG_FILE" >/tmp/omnirelay-singbox-check.log 2>&1 || { sed -n '1,120p' /tmp/omnirelay-singbox-check.log >&2 || true; die "connector-core config validation failed"; }
   jq -n --arg mode "$mode" '{mode:$mode,updatedAtUtc:(now|todate)}' > "$CONNECTOR_STATE_FILE"
+  systemctl reset-failed "$CONNECTOR_SERVICE" >/dev/null 2>&1 || true
   if ! systemctl kill -s HUP "$CONNECTOR_SERVICE" >/dev/null 2>&1; then
     systemctl restart "$CONNECTOR_SERVICE"
   fi
@@ -1848,12 +2026,13 @@ connector_write_metadata_base(){
   local mode="$2"
   local panel_internal
   panel_internal="$(connector_panel_internal_port || echo 0)"
-  jq -n --arg protocol "$protocol_id" --arg mode "$mode" --argjson publicPort "$PUBLIC_PORT" --argjson panelPort "$PANEL_PORT" --argjson backendPort "$BACKEND_PORT" --argjson panelInternalPort "${panel_internal:-0}" '{
+  jq -n --arg protocol "$protocol_id" --arg mode "$mode" --argjson publicPort "$PUBLIC_PORT" --argjson panelPort "$PANEL_PORT" --argjson backendPort "$BACKEND_PORT" --argjson frpServerPort "$FRP_SERVER_PORT" --argjson panelInternalPort "${panel_internal:-0}" '{
     active_protocol:$protocol,
     connector_mode:$mode,
     public_port:$publicPort,
     omnipanel_public_port:$panelPort,
     backend_port:$backendPort,
+    frp_server_port:$frpServerPort,
     omnipanel_internal_port:$panelInternalPort,
     created_at_utc:(now|todate)
   }' > "$GATEWAY_METADATA_FILE"
@@ -1879,7 +2058,9 @@ connector_deploy_omnipanel(){
   dir="${PANEL_RELEASES_DIR}/${rel}"
   mkdir -p "$dir"
   connector_configure_proxy
-  curl -fSL "https://omnirelay.net/download/omni-gateway" -o /tmp/omni-gateway.tar.gz
+  local panel_artifact_url
+  panel_artifact_url="$(connector_omnipanel_download_url)"
+  curl -fSL "$panel_artifact_url" -o /tmp/omni-gateway.tar.gz
   connector_clear_proxy
   tar -xzf /tmp/omni-gateway.tar.gz -C "$dir"
   if [[ ! -f "$dir/server.js" ]]; then
@@ -2002,6 +2183,9 @@ connector_uninstall_runtime(){
   connector_uninstall_clock_sync_runtime
   systemctl disable --now "$CONNECTOR_SERVICE" "$PANEL_SERVICE" >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/${CONNECTOR_SERVICE}.service" "/etc/systemd/system/${PANEL_SERVICE}.service" "$PANEL_SUDOERS_FILE" "$GATEWAYCTL_PATH"
+  if [[ -z "${RELAY_ID:-}" ]]; then
+    connector_uninstall_frps_runtime
+  fi
   if [[ -z "${RELAY_ID:-}" && ! -d /etc/omnirelay/relays ]]; then
     rm -f "$CONNECTOR_COMMON_INSTALLED" /usr/local/lib/omnirelay/bootstrap-common.sh /usr/local/lib/omnirelay/omnipanel-common.sh
     connector_remove_dnsmasq_global_config
@@ -2032,6 +2216,10 @@ connector_validate_common_args(){
   connector_validate_port "$PANEL_PORT" "--panel-port"
   connector_validate_port "$BACKEND_PORT" "--backend-port"
   connector_validate_port "$SSH_PORT" "--ssh-port"
+  connector_validate_port "$FRP_SERVER_PORT" "--frp-server-port"
+  FRP_AUTH_TOKEN="$(printf '%s' "$FRP_AUTH_TOKEN" | tr -d '\r\n' | xargs)"
+  [[ -n "$FRP_AUTH_TOKEN" ]] || die "--frp-auth-token is required"
+  RELEASE_CHANNEL="$(connector_normalize_release_channel "$RELEASE_CHANNEL")"
   connector_validate_port "$BOOTSTRAP_SOCKS_PORT" "--bootstrap-socks-port"
   connector_ensure_bootstrap_common
   BOOTSTRAP_MODE="$(omnirelay_bootstrap_normalize_mode "$BOOTSTRAP_MODE" || true)"

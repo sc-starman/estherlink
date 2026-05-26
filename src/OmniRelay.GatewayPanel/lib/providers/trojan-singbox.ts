@@ -15,11 +15,14 @@ import {
   SINGBOX_PER_CLIENT_CAPABILITIES,
   normalizeClientOptions,
   normalizeImportedClientFile,
+  readUsageByClientIds,
   readRuntimeStatsByClientIds,
   normalizeSpeedLimitKbps,
+  normalizeUsedBytes,
   runGatewaySync,
   listProtocolClientsFromDb,
   upsertProtocolClientToDb,
+  upsertUsageTotalByClientId,
   deleteProtocolClientFromDb,
   randomBase64Token
 } from "@/lib/providers/singbox-shared";
@@ -139,7 +142,14 @@ export class TrojanSingboxProvider implements GatewayProtocolProvider {
 
   public async exportBackup(_session: OmniSession): Promise<ProtocolBackupPayload> {
     const clients = await listProtocolClientsFromDb(this.protocolId);
-    return createJsonClientBackup(this.protocolId, clients);
+    const usageByClientId = await readUsageByClientIds(clients.map((item) => item.id));
+    return createJsonClientBackup(
+      this.protocolId,
+      clients.map((client) => ({
+        ...client,
+        usedBytes: usageByClientId.get(client.id) ?? 0
+      }))
+    );
   }
 
   public async importBackup(_session: OmniSession, input: ProtocolBackupInput): Promise<void> {
@@ -155,6 +165,7 @@ export class TrojanSingboxProvider implements GatewayProtocolProvider {
         authUsername: "",
         authSecret: String(client.password ?? "")
       });
+      await upsertUsageTotalByClientId(client.id, normalizeUsedBytes(client.usedBytes));
     }
     await runGatewaySync();
   }

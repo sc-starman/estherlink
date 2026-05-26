@@ -61,6 +61,14 @@ export function normalizeSpeedLimitKbps(value: unknown): number {
   return Math.trunc(numeric);
 }
 
+export function normalizeUsedBytes(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 0;
+  }
+  return Math.trunc(numeric);
+}
+
 export function normalizeClientOptions(options?: GatewayClientCreateOptions): Required<GatewayClientCreateOptions> {
   return {
     totalGB: normalizeTotalGB(options?.totalGB),
@@ -186,6 +194,18 @@ INSERT OR IGNORE INTO enforcement_state(client_id,disabled_reason,disabled_at,up
   await exec(`${sqlite3Command()} "${dbPath}" "${sql.replace(/"/g, '\\"').replace(/\n/g, " ")}"`);
 }
 
+export async function upsertUsageTotalByClientId(clientId: string, usedBytes: number, dbCandidates?: string[]): Promise<void> {
+  const dbPath = await resolveAccountingDbPath(dbCandidates);
+  const escapedId = clientId.replace(/'/g, "''");
+  const normalizedUsedBytes = normalizeUsedBytes(usedBytes);
+  const now = Math.trunc(Date.now() / 1000);
+  const sql = `
+INSERT OR REPLACE INTO usage_totals(client_id,used_bytes,updated_at)
+VALUES('${escapedId}',${normalizedUsedBytes},${now});
+`;
+  await exec(`${sqlite3Command()} "${dbPath}" "${sql.replace(/"/g, '\\"').replace(/\n/g, " ")}"`);
+}
+
 export async function deleteProtocolClientFromDb(clientId: string, dbCandidates?: string[]): Promise<void> {
   const dbPath = await resolveAccountingDbPath(dbCandidates);
   const escapedId = clientId.replace(/'/g, "''");
@@ -256,7 +276,7 @@ export async function readClientFile(filePath: string): Promise<SingboxManagedCl
 
 export function normalizeImportedClientFile(input: unknown[]): SingboxManagedClient[] {
   return input
-    .map((item) => {
+    .map<SingboxManagedClient | null>((item) => {
       if (typeof item !== "object" || item === null) {
         return null;
       }
@@ -275,8 +295,9 @@ export function normalizeImportedClientFile(input: unknown[]): SingboxManagedCli
         enable: Boolean(record.enable ?? record.enabled ?? true),
         totalGB: normalizeTotalGB(record.totalGB),
         expiryTime: normalizeExpiryTime(record.expiryTime),
-        speedLimitKbps: normalizeSpeedLimitKbps(record.speedLimitKbps)
-      };
+        speedLimitKbps: normalizeSpeedLimitKbps(record.speedLimitKbps),
+        usedBytes: normalizeUsedBytes(record.usedBytes)
+      } satisfies SingboxManagedClient;
     })
     .filter((item): item is SingboxManagedClient => item !== null);
 }

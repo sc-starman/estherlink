@@ -145,7 +145,6 @@ public sealed class GatewayStatePersistenceService : IGatewayStatePersistenceSer
             OutgoingAdapterIfIndex = state.OutgoingAdapterIfIndex,
             ProxyPortText = state.ProxyPortText,
             BootstrapSocksLocalPortText = state.BootstrapSocksLocalPortText,
-            BootstrapSocksRemotePortText = state.BootstrapSocksRemotePortText,
             BootstrapMode = state.BootstrapMode,
             TunnelHost = state.TunnelHost,
             TunnelSshPortText = state.TunnelSshPortText,

@@ -85,6 +85,9 @@ parse_args() {
       --panel-port) require_value "$1" "${2:-}"; PANEL_PORT="$2"; shift 2 ;;
       --backend-port) require_value "$1" "${2:-}"; BACKEND_PORT="$2"; shift 2 ;;
       --ssh-port) require_value "$1" "${2:-}"; SSH_PORT="$2"; shift 2 ;;
+      --frp-server-port) require_value "$1" "${2:-}"; FRP_SERVER_PORT="$2"; shift 2 ;;
+      --frp-auth-token) require_value "$1" "${2:-}"; FRP_AUTH_TOKEN="$2"; shift 2 ;;
+      --release-channel) require_value "$1" "${2:-}"; RELEASE_CHANNEL="$2"; shift 2 ;;
       --bootstrap-socks-port) require_value "$1" "${2:-}"; BOOTSTRAP_SOCKS_PORT="$2"; shift 2 ;;
       --bootstrap-mode) require_value "$1" "${2:-}"; BOOTSTRAP_MODE="$2"; shift 2 ;;
       --vps-ip) require_value "$1" "${2:-}"; VPS_IP="$2"; shift 2 ;;

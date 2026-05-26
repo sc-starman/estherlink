@@ -1794,6 +1794,72 @@
   <data name="Changelog.Current.2.1.24.30" xml:space="preserve">
     <value>v2.1.24</value>
   </data>
+  <data name="Changelog.Current.2.2.10.1" xml:space="preserve">
+    <value>Version 2.2.10: FRP Runtime Tunnel Multiplexing</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.2" xml:space="preserve">
+    <value>Runtime reverse SSH forwarding was replaced with FRP TCP tunnel multiplexing for remote relays.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.3" xml:space="preserve">
+    <value>This reduces reconnect churn under high load and improves tunnel session stability across unstable networks.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.4" xml:space="preserve">
+    <value>SSH is now scoped to management/deployment operations only, while runtime data forwarding is handled by FRP.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.5" xml:space="preserve">
+    <value>Introduced global FRPS per VPS with relay isolation and profile-based token management.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.6" xml:space="preserve">
+    <value>Added dedicated Tunnel configuration in relay setup, including FRPS port, token, and remote data tunnel port controls.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.7" xml:space="preserve">
+    <value>Expanded remote protocol coverage and runtime behavior updates include:</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.8" xml:space="preserve">
+    <value>Improved bootstrap/install orchestration for tunnel mode, including temporary SOCKS preflight handling.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.9" xml:space="preserve">
+    <value>Added FRP-specific tunnel health and reason-code reporting for faster diagnostics and safer auto-recovery.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.10" xml:space="preserve">
+    <value>Connector-core runtime packaging was updated to align tunnel behavior between Windows service and VPS runtime.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.11" xml:space="preserve">
+    <value>Stability updates reduce tunnel-slot contention and improve long-run scalability for multi-relay deployments.</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.12" xml:space="preserve">
+    <value>Hysteria2</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.13" xml:space="preserve">
+    <value>Naive</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.14" xml:space="preserve">
+    <value>ShadowTLS</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.15" xml:space="preserve">
+    <value>Trojan</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.16" xml:space="preserve">
+    <value>VLESS TLS</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.17" xml:space="preserve">
+    <value>VLESS</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.18" xml:space="preserve">
+    <value>Shadowsocks</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.19" xml:space="preserve">
+    <value>Trojan</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.20" xml:space="preserve">
+    <value>OpenVPN</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.21" xml:space="preserve">
+    <value>IPsec</value>
+  </data>
+  <data name="Changelog.Current.2.2.10.22" xml:space="preserve">
+    <value>Per-client speed limiting remains available for supported protocols:</value>
+  </data>
   <data name="Admin.Sidebar.Newsletter" xml:space="preserve">
     <value>Newsletter</value>
   </data>

@@ -1,6 +1,6 @@
 param(
     [string]$ProjectPath = "src\OmniRelay.ConnectorCore",
-    [string]$OutputDirectory = "artifacts\connector-core",
+    [string]$OutputDirectory = "build\connector-core",
     [ValidateSet("linux", "windows")]
     [string[]]$OperatingSystems = @("linux"),
     [string[]]$Architectures = @("amd64", "arm64"),
@@ -52,12 +52,7 @@ $resolvedVersion = Resolve-ReleaseVersion -RootPath $root -ProvidedVersion $Vers
 Write-Host "Connector-core version: $resolvedVersion" -ForegroundColor Yellow
 
 $outDir = Join-Path $root $OutputDirectory
-$stageRoot = Join-Path $outDir "stage"
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-if (Test-Path -LiteralPath $stageRoot) {
-    Remove-Item -LiteralPath $stageRoot -Recurse -Force
-}
-New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
 
 $originalGoos = $env:GOOS
 $originalGoarch = $env:GOARCH
@@ -80,20 +75,15 @@ try {
                 throw "Unsupported architecture '$arch'. Supported values: amd64, arm64."
             }
 
-            $stageDir = Join-Path $stageRoot "$targetOs-$arch"
-            New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+            $targetDir = if (($OperatingSystems.Count -eq 1) -and ($Architectures.Count -eq 1)) {
+                $outDir
+            } else {
+                Join-Path $outDir "$targetOs-$arch"
+            }
+            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
 
             $binaryName = if ($targetOs -eq "windows") { "connector-core.exe" } else { "connector-core" }
-            $binaryPath = Join-Path $stageDir $binaryName
-            $artifactPath = if ($targetOs -eq "windows") {
-                Join-Path $outDir "connector-core-$targetOs-$arch.zip"
-            } else {
-                Join-Path $outDir "connector-core-$targetOs-$arch.tar.gz"
-            }
-
-            if (Test-Path -LiteralPath $artifactPath) {
-                Remove-Item -LiteralPath $artifactPath -Force
-            }
+            $binaryPath = Join-Path $targetDir $binaryName
 
             Write-Host "Building connector-core for $targetOs/$arch..." -ForegroundColor Cyan
             $env:CGO_ENABLED = "0"
@@ -111,22 +101,13 @@ try {
                 os = $targetOs
                 arch = $arch
             }
-            $buildInfo | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $stageDir "connector-core.build.json") -Encoding UTF8
+            $buildInfo | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $targetDir "connector-core.build.json") -Encoding UTF8
 
-            if ($targetOs -eq "windows") {
-                Compress-Archive -Path (Join-Path $stageDir "*") -DestinationPath $artifactPath -CompressionLevel Optimal -Force
-            } else {
-                & tar -czf $artifactPath -C $stageDir .
-                if ($LASTEXITCODE -ne 0) {
-                    throw "tar packaging failed for $targetOs/$arch with exit code $LASTEXITCODE."
-                }
-            }
+            $hash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $fileSize = (Get-Item -LiteralPath $binaryPath).Length
 
-            $hash = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            $fileSize = (Get-Item -LiteralPath $artifactPath).Length
-
-            Write-Host "Connector-core artifact created:" -ForegroundColor Green
-            Write-Host "  Path: $artifactPath"
+            Write-Host "Connector-core binary created:" -ForegroundColor Green
+            Write-Host "  Path: $binaryPath"
             Write-Host "  Size: $fileSize bytes"
             Write-Host "  SHA-256: $hash"
         }

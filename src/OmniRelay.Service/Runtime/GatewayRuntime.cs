@@ -138,6 +138,9 @@ public sealed class GatewayRuntime
                 _config.Relays.Add(normalized);
             }
 
+            ApplyFrpProfileOverridesForRelayLocked(normalized);
+            ValidateFrpProfilesForHostConsistencyOrThrow(_config);
+
             _relayStatuses[normalized.Id] = BuildRelayStatus(normalized, null);
             _relayStatuses[normalized.Id].TunnelState = normalized.Enabled ? "PendingRestart" : "Disabled";
             _relayStatuses[normalized.Id].HealthState = normalized.Enabled ? "Pending" : "Disabled";
@@ -146,6 +149,58 @@ public sealed class GatewayRuntime
                 : "Relay disabled.";
             PersistLocked();
             return CloneRelayConfig(normalized);
+        }
+    }
+
+    private void ApplyFrpProfileOverridesForRelayLocked(RelayConfig relay)
+    {
+        if (!string.Equals(GatewayTypes.Normalize(relay.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var host = (relay.RemoteGateway?.TunnelHost ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return;
+        }
+
+        var requestedPort = relay.FrpProfilePortOverride is > 0 and <= 65535 ? relay.FrpProfilePortOverride : 7000;
+        var requestedToken = (relay.FrpProfileTokenOverride ?? string.Empty).Trim();
+
+        _config.FrpServerProfiles ??= [];
+        var profile = _config.FrpServerProfiles.FirstOrDefault(x =>
+            x is not null &&
+            string.Equals((x.TunnelHost ?? string.Empty).Trim(), host, StringComparison.OrdinalIgnoreCase));
+
+        if (profile is null)
+        {
+            profile = new FrpServerProfile
+            {
+                TunnelHost = host,
+                FrpServerPort = requestedPort,
+                AuthToken = requestedToken
+            };
+            _config.FrpServerProfiles.Add(profile);
+        }
+        else
+        {
+            profile.FrpServerPort = requestedPort;
+            if (!string.IsNullOrWhiteSpace(requestedToken))
+            {
+                profile.AuthToken = requestedToken;
+            }
+        }
+
+        var effectivePort = profile.FrpServerPort is > 0 and <= 65535 ? profile.FrpServerPort : 7000;
+        var effectiveToken = profile.AuthToken ?? string.Empty;
+
+        foreach (var existingRelay in _config.Relays.Where(x =>
+                     string.Equals(GatewayTypes.Normalize(x.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals((x.RemoteGateway?.TunnelHost ?? string.Empty).Trim(), host, StringComparison.OrdinalIgnoreCase)))
+        {
+            existingRelay.FrpProfilePortOverride = effectivePort;
+            existingRelay.FrpProfileTokenOverride = effectiveToken;
         }
     }
 
@@ -1351,12 +1406,17 @@ public sealed class GatewayRuntime
             changed.Add("SSH port");
         }
 
+        if (previous.FrpServerPort != current.FrpServerPort)
+        {
+            changed.Add("FRP server port");
+        }
+
         if (previous.TunnelRemotePort != current.TunnelRemotePort)
         {
             changed.Add("remote data port");
         }
 
-        if (previous.BootstrapSocksRemotePort != current.BootstrapSocksRemotePort)
+        if (previous.TunnelRemotePort != current.TunnelRemotePort)
         {
             changed.Add("remote bootstrap port");
         }
@@ -1396,6 +1456,35 @@ public sealed class GatewayRuntime
             changed.Add("password");
         }
 
+        var previousFrpProfiles = string.Join(
+            "|",
+            (previous.FrpServerProfiles ?? [])
+                .Where(x => x is not null)
+                .Select(x =>
+                {
+                    var host = (x.TunnelHost ?? string.Empty).Trim().ToLowerInvariant();
+                    var port = x.FrpServerPort is > 0 and <= 65535 ? x.FrpServerPort : 7000;
+                    var token = x.AuthToken ?? string.Empty;
+                    return $"{host}:{port}:{token}";
+                })
+                .OrderBy(x => x, StringComparer.Ordinal));
+        var currentFrpProfiles = string.Join(
+            "|",
+            (current.FrpServerProfiles ?? [])
+                .Where(x => x is not null)
+                .Select(x =>
+                {
+                    var host = (x.TunnelHost ?? string.Empty).Trim().ToLowerInvariant();
+                    var port = x.FrpServerPort is > 0 and <= 65535 ? x.FrpServerPort : 7000;
+                    var token = x.AuthToken ?? string.Empty;
+                    return $"{host}:{port}:{token}";
+                })
+                .OrderBy(x => x, StringComparer.Ordinal));
+        if (!string.Equals(previousFrpProfiles, currentFrpProfiles, StringComparison.Ordinal))
+        {
+            changed.Add("FRP server profiles");
+        }
+
         summary = changed.Count == 0 ? string.Empty : string.Join(", ", changed);
         return changed.Count > 0;
     }
@@ -1408,19 +1497,26 @@ public sealed class GatewayRuntime
             GatewayType = GatewayTypes.Normalize(config.GatewayType),
             LocalProxyListenPort = config.LocalProxyListenPort,
             BootstrapSocksLocalPort = config.BootstrapSocksLocalPort,
-            BootstrapSocksRemotePort = config.BootstrapSocksRemotePort,
+            TunnelRemotePort = config.TunnelRemotePort,
             GatewayOnlineInstallEnabled = config.GatewayOnlineInstallEnabled,
             WhitelistAdapterIfIndex = config.WhitelistAdapterIfIndex,
             DefaultAdapterIfIndex = config.DefaultAdapterIfIndex,
             TunnelHost = config.TunnelHost,
             TunnelSshPort = config.TunnelSshPort,
-            TunnelRemotePort = config.TunnelRemotePort,
+            FrpServerPort = config.FrpServerPort,
+            FrpRuntimeToken = config.FrpRuntimeToken,
             TunnelUser = config.TunnelUser,
             TunnelAuthMethod = config.TunnelAuthMethod,
             TunnelPrivateKeyPath = config.TunnelPrivateKeyPath,
             TunnelPrivateKeyPassphrase = config.TunnelPrivateKeyPassphrase,
             TunnelPassword = config.TunnelPassword,
             LicenseKey = config.LicenseKey,
+            FrpServerProfiles = config.FrpServerProfiles?.Select(x => new FrpServerProfile
+            {
+                TunnelHost = x.TunnelHost ?? string.Empty,
+                FrpServerPort = x.FrpServerPort,
+                AuthToken = x.AuthToken ?? string.Empty
+            }).ToList() ?? [],
             Relays = config.Relays?.Select(CloneRelayConfig).ToList() ?? [],
             LocalGateway = new LocalGatewayConfig
             {
@@ -1448,7 +1544,8 @@ public sealed class GatewayRuntime
             OutgoingAdapterIfIndex = relay.OutgoingAdapterIfIndex,
             DataPlaneLocalPort = relay.DataPlaneLocalPort,
             BootstrapSocksLocalPort = relay.BootstrapSocksLocalPort,
-            BootstrapSocksRemotePort = relay.BootstrapSocksRemotePort is > 0 and <= 65535 ? relay.BootstrapSocksRemotePort : 0,
+            FrpProfilePortOverride = relay.FrpProfilePortOverride is > 0 and <= 65535 ? relay.FrpProfilePortOverride : 7000,
+            FrpProfileTokenOverride = relay.FrpProfileTokenOverride ?? string.Empty,
             OmniPanel = new RelayOmniPanelConfig
             {
                 Port = relay.OmniPanel?.Port is > 0 and <= 65535
@@ -1534,7 +1631,7 @@ public sealed class GatewayRuntime
     private static void ValidateRelayPortIsolationOrThrow(IReadOnlyList<RelayConfig> relays)
     {
         var localPortOwners = new Dictionary<int, string>();
-        var remotePortOwners = new Dictionary<int, string>();
+        var remotePortOwnersByHost = new Dictionary<string, Dictionary<int, string>>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var relay in relays.Where(x => x.Enabled))
         {
@@ -1555,13 +1652,19 @@ public sealed class GatewayRuntime
                 var tunnelRemotePort = relay.RemoteGateway?.TunnelRemotePort ?? 0;
                 if (tunnelRemotePort > 0)
                 {
-                    EnsureUniquePort(remotePortOwners, tunnelRemotePort, relayToken, "remote data-plane");
+                    var host = (relay.RemoteGateway?.TunnelHost ?? string.Empty).Trim();
+                    var hostKey = host.ToLowerInvariant();
+                    if (!remotePortOwnersByHost.TryGetValue(hostKey, out var hostOwners))
+                    {
+                        hostOwners = new Dictionary<int, string>();
+                        remotePortOwnersByHost[hostKey] = hostOwners;
+                    }
+                    EnsureUniquePort(hostOwners, tunnelRemotePort, relayToken, "remote data-plane");
                 }
 
-                if (relay.BootstrapSocksRemotePort > 0)
-                {
-                    EnsureUniquePort(remotePortOwners, relay.BootstrapSocksRemotePort, relayToken, "remote bootstrap");
-                }
+                // Legacy field: runtime now uses a single FRP data tunnel remote port.
+                // Skip bootstrap isolation when it mirrors data port to avoid self-conflicts.
+                // Removed: legacy remote bootstrap port validation.
             }
         }
     }
@@ -1572,6 +1675,40 @@ public sealed class GatewayRuntime
         {
             throw new InvalidOperationException(
                 $"Port isolation conflict on {plane} port {port}: relay '{relayToken}' conflicts with relay '{owners[port]}'.");
+        }
+    }
+
+    private static void ValidateFrpProfilesForHostConsistencyOrThrow(ServiceConfig config)
+    {
+        var perHost = new Dictionary<string, (int Port, string Token)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var profile in (config.FrpServerProfiles ?? []).Where(x => x is not null))
+        {
+            var host = (profile.TunnelHost ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                continue;
+            }
+
+            var key = host.ToLowerInvariant();
+            var port = profile.FrpServerPort is > 0 and <= 65535 ? profile.FrpServerPort : 7000;
+            var token = (profile.AuthToken ?? string.Empty).Trim();
+            if (perHost.TryGetValue(key, out var current))
+            {
+                if (current.Port != port)
+                {
+                    throw new InvalidOperationException($"FRP profile conflict for host '{host}': multiple FRPS ports are configured.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(current.Token) &&
+                    !string.IsNullOrWhiteSpace(token) &&
+                    !string.Equals(current.Token, token, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException($"FRP profile conflict for host '{host}': multiple FRP tokens are configured.");
+                }
+                continue;
+            }
+
+            perHost[key] = (port, token);
         }
     }
 
@@ -2604,3 +2741,6 @@ LEFT JOIN relay_client_extensions x ON x.client_id = c.client_id;
         return PolicyAddressIndex.Build(rules);
     }
 }
+
+
+

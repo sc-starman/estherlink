@@ -17,10 +17,13 @@ import {
   normalizeExpiryTime,
   normalizeSpeedLimitKbps,
   normalizeTotalGB,
+  normalizeUsedBytes,
+  readUsageByClientIds,
   readRuntimeStatsByClientIds,
   runGatewaySync,
   listProtocolClientsFromDb,
   upsertProtocolClientToDb,
+  upsertUsageTotalByClientId,
   deleteProtocolClientFromDb
 } from "@/lib/providers/singbox-shared";
 import { createJsonClientBackup, readJsonClientBackup } from "@/lib/providers/backup";
@@ -32,6 +35,7 @@ interface ShadowTlsClientRecord extends GatewayClientRecord {
   totalGB: number;
   expiryTime: number;
   speedLimitKbps: number;
+  usedBytes?: number;
 }
 
 async function getCamouflageServer(): Promise<string> {
@@ -113,7 +117,8 @@ function normalizeImportedClients(input: unknown[]): ShadowTlsClientRecord[] {
       shadowTlsPassword,
       totalGB: normalizeTotalGB(record.totalGB),
       expiryTime: normalizeExpiryTime(record.expiryTime),
-      speedLimitKbps: normalizeSpeedLimitKbps(record.speedLimitKbps)
+      speedLimitKbps: normalizeSpeedLimitKbps(record.speedLimitKbps),
+      usedBytes: normalizeUsedBytes(record.usedBytes)
     };
   });
 }
@@ -265,12 +270,22 @@ export class ShadowTlsShadowsocksProvider implements GatewayProtocolProvider {
 
   public async exportBackup(_session: OmniSession): Promise<ProtocolBackupPayload> {
     const clients = await readClients();
-    return createJsonClientBackup(this.protocolId, clients);
+    const usageByClientId = await readUsageByClientIds(clients.map((item) => item.id));
+    return createJsonClientBackup(
+      this.protocolId,
+      clients.map((client) => ({
+        ...client,
+        usedBytes: usageByClientId.get(client.id) ?? 0
+      }))
+    );
   }
 
   public async importBackup(_session: OmniSession, input: ProtocolBackupInput): Promise<void> {
     const clients = normalizeImportedClients(readJsonClientBackup(input, this.protocolId));
     await writeClients(clients);
+    for (const client of clients) {
+      await upsertUsageTotalByClientId(client.id, normalizeUsedBytes(client.usedBytes));
+    }
     await runGatewaySync();
   }
 }

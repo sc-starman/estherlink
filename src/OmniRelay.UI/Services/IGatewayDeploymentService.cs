@@ -9,6 +9,12 @@ public interface IGatewayDeploymentService
         string sudoPassword,
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default);
+    
+    Task<GatewayOperationResult> TestGatewayTunnelAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default);
 
     Task<GatewayOperationResult> InstallGatewayAsync(
         GatewayDeploymentRequest request,

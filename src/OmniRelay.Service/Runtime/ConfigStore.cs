@@ -7,7 +7,7 @@ namespace OmniRelay.Service.Runtime;
 
 public sealed class ConfigStore
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 10;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -44,6 +44,15 @@ public sealed class ConfigStore
             {
                 SchemaVersion = CurrentSchemaVersion,
                 LicenseKey = Decrypt(stored.EncryptedLicenseKey),
+                FrpServerProfiles = (stored.FrpServerProfiles ?? [])
+                    .Where(x => x is not null)
+                    .Select(x => new FrpServerProfile
+                    {
+                        TunnelHost = x!.TunnelHost ?? string.Empty,
+                        FrpServerPort = x.FrpServerPort,
+                        AuthToken = Decrypt(x.EncryptedAuthToken)
+                    })
+                    .ToList(),
                 Relays = (stored.Relays ?? [])
                     .Where(x => x is not null)
                     .Select(x => ToRelayConfig(x!))
@@ -52,6 +61,7 @@ public sealed class ConfigStore
             };
 
             EnsureRelayPorts(config.Relays);
+            EnsureFrpServerProfiles(config);
             return new PersistedState(config, []);
         }
         catch (Exception ex)
@@ -67,11 +77,21 @@ public sealed class ConfigStore
         {
             ServicePaths.EnsureDirectories();
             EnsureRelayPorts(config.Relays);
+            EnsureFrpServerProfiles(config);
 
             var stored = new PersistedConfig
             {
                 SchemaVersion = CurrentSchemaVersion,
                 EncryptedLicenseKey = Encrypt(config.LicenseKey),
+                FrpServerProfiles = (config.FrpServerProfiles ?? [])
+                    .Where(x => x is not null && !string.IsNullOrWhiteSpace(x.TunnelHost))
+                    .Select(x => new PersistedFrpServerProfile
+                    {
+                        TunnelHost = x.TunnelHost.Trim(),
+                        FrpServerPort = x.FrpServerPort is > 0 and <= 65535 ? x.FrpServerPort : 7000,
+                        EncryptedAuthToken = Encrypt(x.AuthToken)
+                    })
+                    .ToList(),
                 Relays = config.Relays.Select(ToPersistedRelayConfig).ToList()
             };
 
@@ -88,12 +108,12 @@ public sealed class ConfigStore
     internal static void EnsureRelayPorts(IReadOnlyList<RelayConfig> relays)
     {
         var used = new HashSet<int>();
-        var usedRemotePorts = new HashSet<int>();
+        var usedRemotePortsByHost = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+        var nextRemoteByHost = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var usedLocalGatewayPorts = new HashSet<int>();
         var usedLocalOmniPanelPorts = new HashSet<int>();
         var usedRelayIds = new HashSet<string>(StringComparer.Ordinal);
         var next = 24080;
-        var nextRemote = 15000;
         var nextLocalGatewayPort = 2443;
         var nextLocalOmniPanelPort = 2054;
 
@@ -168,15 +188,34 @@ public sealed class ConfigStore
 
             if (string.Equals(relay.GatewayType, GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
             {
-                if (relay.RemoteGateway.TunnelRemotePort <= 0 || !usedRemotePorts.Add(relay.RemoteGateway.TunnelRemotePort))
+                relay.FrpProfilePortOverride = relay.FrpProfilePortOverride is > 0 and <= 65535
+                    ? relay.FrpProfilePortOverride
+                    : 7000;
+
+                var hostKey = BuildFrpServerProfileKey(relay.RemoteGateway.TunnelHost, relay.FrpProfilePortOverride);
+                if (!usedRemotePortsByHost.TryGetValue(hostKey, out var usedRemotePorts))
                 {
-                    relay.RemoteGateway.TunnelRemotePort = AllocatePort(usedRemotePorts, ref nextRemote);
+                    usedRemotePorts = new HashSet<int>();
+                    usedRemotePortsByHost[hostKey] = usedRemotePorts;
+                    nextRemoteByHost[hostKey] = 15000;
                 }
 
-                if (relay.BootstrapSocksRemotePort <= 0 || !usedRemotePorts.Add(relay.BootstrapSocksRemotePort))
+                var requestedRemotePort = relay.RemoteGateway.TunnelRemotePort;
+                if (requestedRemotePort > 0 && requestedRemotePort <= 65535 && usedRemotePorts.Add(requestedRemotePort))
                 {
-                    relay.BootstrapSocksRemotePort = AllocatePort(usedRemotePorts, ref nextRemote);
+                    if (requestedRemotePort >= nextRemoteByHost[hostKey])
+                    {
+                        nextRemoteByHost[hostKey] = requestedRemotePort + 1;
+                    }
                 }
+                else
+                {
+                    var nextRemote = nextRemoteByHost[hostKey];
+                    relay.RemoteGateway.TunnelRemotePort = AllocatePort(usedRemotePorts, ref nextRemote);
+                    nextRemoteByHost[hostKey] = nextRemote;
+                }
+
+                // FRP runtime uses a single data remote port on RemoteGateway.
             }
         }
     }
@@ -211,7 +250,7 @@ public sealed class ConfigStore
             OutgoingAdapterIfIndex = stored.OutgoingAdapterIfIndex,
             DataPlaneLocalPort = stored.DataPlaneLocalPort,
             BootstrapSocksLocalPort = stored.BootstrapSocksLocalPort,
-            BootstrapSocksRemotePort = stored.BootstrapSocksRemotePort,
+            // Legacy field is no longer used; keep backwards compatibility by mirroring into RemoteGateway if needed.
             OmniPanel = stored.OmniPanel ?? new RelayOmniPanelConfig(),
             RemoteGateway = stored.RemoteGateway ?? new RemoteGatewayConfig(),
             LocalGateway = stored.LocalGateway ?? new LocalGatewayConfig()
@@ -219,6 +258,10 @@ public sealed class ConfigStore
 
         relay.RemoteGateway.TunnelPrivateKeyPassphrase = Decrypt(stored.EncryptedTunnelKeyPassphrase);
         relay.RemoteGateway.TunnelPassword = Decrypt(stored.EncryptedTunnelPassword);
+        if (relay.RemoteGateway.TunnelRemotePort <= 0 && stored.TunnelRemotePort > 0)
+        {
+            relay.RemoteGateway.TunnelRemotePort = stored.TunnelRemotePort;
+        }
         relay.OmniPanel.Port = relay.OmniPanel.Port is > 0 and <= 65535
             ? relay.OmniPanel.Port
             : (relay.RemoteGateway.PanelPort is > 0 and <= 65535 ? relay.RemoteGateway.PanelPort : 2054);
@@ -258,7 +301,9 @@ public sealed class ConfigStore
             OutgoingAdapterIfIndex = relay.OutgoingAdapterIfIndex,
             DataPlaneLocalPort = relay.DataPlaneLocalPort,
             BootstrapSocksLocalPort = relay.BootstrapSocksLocalPort,
-            BootstrapSocksRemotePort = relay.BootstrapSocksRemotePort,
+            TunnelRemotePort = relay.RemoteGateway?.TunnelRemotePort is > 0 and <= 65535
+                ? relay.RemoteGateway.TunnelRemotePort
+                : 0,
             OmniPanel = new RelayOmniPanelConfig
             {
                 Port = relay.OmniPanel?.Port is > 0 and <= 65535 ? relay.OmniPanel.Port : remote.PanelPort,
@@ -307,6 +352,92 @@ public sealed class ConfigStore
         };
     }
 
+    internal static void EnsureFrpServerProfiles(ServiceConfig config)
+    {
+        config.FrpServerProfiles ??= [];
+        var profiles = new Dictionary<string, FrpServerProfile>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var existing in config.FrpServerProfiles.Where(x => x is not null))
+        {
+            var host = (existing.TunnelHost ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                continue;
+            }
+
+            var port = existing.FrpServerPort is > 0 and <= 65535 ? existing.FrpServerPort : 7000;
+            var key = BuildFrpServerProfileKey(host, port);
+            var token = string.IsNullOrWhiteSpace(existing.AuthToken) ? GenerateFrpToken() : existing.AuthToken.Trim();
+            if (profiles.TryGetValue(key, out var current))
+            {
+                if (string.IsNullOrWhiteSpace(current.AuthToken))
+                {
+                    current.AuthToken = token;
+                }
+                continue;
+            }
+
+            profiles[key] = new FrpServerProfile
+            {
+                TunnelHost = host,
+                FrpServerPort = port,
+                AuthToken = token
+            };
+        }
+
+        foreach (var relay in config.Relays.Where(x => x is not null))
+        {
+            relay.RemoteGateway ??= new RemoteGatewayConfig();
+            if (!string.Equals(GatewayTypes.Normalize(relay.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var host = (relay.RemoteGateway.TunnelHost ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                continue;
+            }
+
+            var requestedPort = relay.FrpProfilePortOverride is > 0 and <= 65535 ? relay.FrpProfilePortOverride : 7000;
+            var key = BuildFrpServerProfileKey(host, requestedPort);
+            if (!profiles.TryGetValue(key, out var profile))
+            {
+                var seedToken = string.IsNullOrWhiteSpace(relay.FrpProfileTokenOverride)
+                    ? GenerateFrpToken()
+                    : relay.FrpProfileTokenOverride.Trim();
+                profile = new FrpServerProfile
+                {
+                    TunnelHost = host,
+                    FrpServerPort = requestedPort,
+                    AuthToken = seedToken
+                };
+                profiles[key] = profile;
+            }
+
+            relay.FrpProfileTokenOverride = profile.AuthToken;
+            relay.FrpProfilePortOverride = profile.FrpServerPort is > 0 and <= 65535 ? profile.FrpServerPort : 7000;
+        }
+
+        config.FrpServerProfiles = profiles.Values
+            .OrderBy(x => x.TunnelHost, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.FrpServerPort)
+            .ToList();
+
+        config.FrpRuntimeToken = config.FrpServerProfiles.FirstOrDefault()?.AuthToken ?? string.Empty;
+    }
+
+    internal static string BuildFrpServerProfileKey(string tunnelHost, int frpServerPort)
+    {
+        var host = (tunnelHost ?? string.Empty).Trim().ToLowerInvariant();
+        return host;
+    }
+
+    private static string GenerateFrpToken()
+    {
+        return Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+    }
+
     private static string Encrypt(string plainText)
     {
         var bytes = Encoding.UTF8.GetBytes(plainText ?? string.Empty);
@@ -337,7 +468,15 @@ public sealed class ConfigStore
     {
         public int SchemaVersion { get; set; } = CurrentSchemaVersion;
         public string? EncryptedLicenseKey { get; set; }
+        public List<PersistedFrpServerProfile>? FrpServerProfiles { get; set; }
         public List<PersistedRelayConfig>? Relays { get; set; }
+    }
+
+    private sealed class PersistedFrpServerProfile
+    {
+        public string? TunnelHost { get; set; }
+        public int FrpServerPort { get; set; } = 7000;
+        public string? EncryptedAuthToken { get; set; }
     }
 
     private sealed class PersistedRelayConfig
@@ -352,7 +491,7 @@ public sealed class ConfigStore
         public int OutgoingAdapterIfIndex { get; set; } = -1;
         public int DataPlaneLocalPort { get; set; }
         public int BootstrapSocksLocalPort { get; set; }
-        public int BootstrapSocksRemotePort { get; set; } = 16080;
+        public int TunnelRemotePort { get; set; } = 16080;
         public RelayOmniPanelConfig? OmniPanel { get; set; }
         public RemoteGatewayConfig? RemoteGateway { get; set; }
         public string? EncryptedTunnelKeyPassphrase { get; set; }
@@ -365,3 +504,6 @@ public sealed record PersistedState(ServiceConfig Config, IReadOnlyList<string> 
 {
     public static PersistedState Empty { get; } = new(new ServiceConfig { SchemaVersion = ConfigStore.CurrentSchemaVersion }, []);
 }
+
+
+

@@ -79,7 +79,7 @@ public sealed class GatewayOrchestratorService
 
             _state.ProxyPortText = NormalizeOrDefault(remoteProfile.ProxyPortText, "24080");
             _state.BootstrapSocksLocalPortText = NormalizeOrDefault(remoteProfile.BootstrapSocksLocalPortText, "24081");
-            _state.BootstrapSocksRemotePortText = NormalizeOrDefault(remoteProfile.BootstrapSocksRemotePortText, "16080");
+            _state.TunnelRemotePortText = NormalizeOrDefault(remoteProfile.TunnelRemotePortText, "16080");
             _state.BootstrapMode = GatewayBootstrapModes.Normalize(remoteProfile.BootstrapMode);
             _state.TunnelHost = NormalizeOrDefault(remoteProfile.TunnelHost, "vps.example.com");
             _state.TunnelSshPortText = NormalizeOrDefault(remoteProfile.TunnelSshPortText, "22");
@@ -1041,8 +1041,8 @@ public sealed class GatewayOrchestratorService
         var config = BuildServiceConfigForRelay(relay);
         var response = await _gatewayClient.TestTunnelConnectionAsync(config, cancellationToken);
         return response?.Success == true
-            ? SetAction(true, "Relay tunnel connection test succeeded.")
-            : SetAction(false, $"Relay tunnel test failed: {response?.Error ?? "service unavailable"}");
+            ? SetAction(true, "Relay connection test succeeded.")
+            : SetAction(false, $"Relay connection test failed: {response?.Error ?? "service unavailable"}");
     }
 
     public async Task<OperationResult> InstallStartServiceAsync(CancellationToken cancellationToken = default)
@@ -1196,13 +1196,12 @@ public sealed class GatewayOrchestratorService
             GatewayType = gatewayType,
             LocalProxyListenPort = proxyPort,
             BootstrapSocksLocalPort = ParsePositivePort(_state.BootstrapSocksLocalPortText, "Bootstrap SOCKS local port"),
-            BootstrapSocksRemotePort = ParsePositivePort(_state.BootstrapSocksRemotePortText, "Bootstrap SOCKS remote port"),
+            TunnelRemotePort = tunnelRemotePort,
             GatewayOnlineInstallEnabled = true,
             WhitelistAdapterIfIndex = _state.VpsAdapter?.IfIndex ?? -1,
             DefaultAdapterIfIndex = _state.OutgoingAdapter?.IfIndex ?? -1,
             TunnelHost = _state.TunnelHost.Trim(),
             TunnelSshPort = tunnelSshPort,
-            TunnelRemotePort = tunnelRemotePort,
             TunnelUser = _state.TunnelUser.Trim(),
             TunnelAuthMethod = authMethod,
             TunnelPrivateKeyPath = _state.TunnelKeyPath.Trim(),
@@ -1226,17 +1225,25 @@ public sealed class GatewayOrchestratorService
     private static ServiceConfig BuildServiceConfigForRelay(RelayConfig relay)
     {
         var remote = relay.RemoteGateway ?? new RemoteGatewayConfig();
+        var profile = new FrpServerProfile
+        {
+            TunnelHost = remote.TunnelHost.Trim(),
+            FrpServerPort = NormalizePortOrDefault(relay.FrpProfilePortOverride, 7000),
+            AuthToken = relay.FrpProfileTokenOverride ?? string.Empty
+        };
         return new ServiceConfig
         {
             GatewayType = GatewayTypes.Normalize(relay.GatewayType),
             LocalProxyListenPort = NormalizePortOrDefault(relay.DataPlaneLocalPort, 24080),
             BootstrapSocksLocalPort = NormalizePortOrDefault(relay.BootstrapSocksLocalPort, 24081),
-            BootstrapSocksRemotePort = NormalizePortOrDefault(relay.BootstrapSocksRemotePort, 16080),
+            TunnelRemotePort = NormalizePortOrDefault(remote.TunnelRemotePort, 15000),
             WhitelistAdapterIfIndex = relay.IncomingAdapterIfIndex,
             DefaultAdapterIfIndex = relay.OutgoingAdapterIfIndex,
-            TunnelHost = remote.TunnelHost,
+            TunnelHost = profile.TunnelHost,
             TunnelSshPort = NormalizePortOrDefault(remote.TunnelSshPort, 22),
-            TunnelRemotePort = NormalizePortOrDefault(remote.TunnelRemotePort, 15000),
+            FrpServerPort = profile.FrpServerPort,
+            FrpRuntimeToken = profile.AuthToken,
+            FrpServerProfiles = new List<FrpServerProfile> { profile },
             TunnelUser = string.IsNullOrWhiteSpace(remote.TunnelUser) ? "OmniRelay" : remote.TunnelUser.Trim(),
             TunnelAuthMethod = TunnelAuthMethods.Normalize(remote.TunnelAuthMethod),
             TunnelPrivateKeyPath = remote.TunnelPrivateKeyPath,
@@ -1338,11 +1345,10 @@ public sealed class GatewayOrchestratorService
             OutgoingAdapterIfIndex = _state.OutgoingAdapter?.IfIndex,
             ProxyPortText = _state.ProxyPortText,
             BootstrapSocksLocalPortText = _state.BootstrapSocksLocalPortText,
-            BootstrapSocksRemotePortText = _state.BootstrapSocksRemotePortText,
+            TunnelRemotePortText = _state.TunnelRemotePortText,
             BootstrapMode = GatewayBootstrapModes.Normalize(_state.BootstrapMode),
             TunnelHost = _state.TunnelHost,
             TunnelSshPortText = _state.TunnelSshPortText,
-            TunnelRemotePortText = _state.TunnelRemotePortText,
             SelectedGatewayProtocol = _state.SelectedGatewayProtocol,
             GatewayPublicPortText = _state.GatewayPublicPortText,
             GatewayPanelPortText = _state.GatewayPanelPortText,
@@ -1404,11 +1410,10 @@ public sealed class GatewayOrchestratorService
             OutgoingAdapterIfIndex = _state.OutgoingAdapter?.IfIndex,
             ProxyPortText = _state.ProxyPortText,
             BootstrapSocksLocalPortText = _state.BootstrapSocksLocalPortText,
-            BootstrapSocksRemotePortText = _state.BootstrapSocksRemotePortText,
+            TunnelRemotePortText = _state.TunnelRemotePortText,
             BootstrapMode = GatewayBootstrapModes.Normalize(_state.BootstrapMode),
             TunnelHost = _state.TunnelHost,
             TunnelSshPortText = _state.TunnelSshPortText,
-            TunnelRemotePortText = _state.TunnelRemotePortText,
             SelectedGatewayProtocol = _state.SelectedGatewayProtocol,
             GatewayPublicPortText = _state.GatewayPublicPortText,
             GatewayPanelPortText = _state.GatewayPanelPortText,
@@ -1476,11 +1481,10 @@ public sealed class GatewayOrchestratorService
             OutgoingAdapterIfIndex = state.OutgoingAdapterIfIndex,
             ProxyPortText = state.ProxyPortText,
             BootstrapSocksLocalPortText = state.BootstrapSocksLocalPortText,
-            BootstrapSocksRemotePortText = state.BootstrapSocksRemotePortText,
+            TunnelRemotePortText = state.TunnelRemotePortText,
             BootstrapMode = GatewayBootstrapModes.Normalize(state.BootstrapMode),
             TunnelHost = state.TunnelHost,
             TunnelSshPortText = state.TunnelSshPortText,
-            TunnelRemotePortText = state.TunnelRemotePortText,
             SelectedGatewayProtocol = state.SelectedGatewayProtocol,
             GatewayPublicPortText = state.GatewayPublicPortText,
             GatewayPanelPortText = state.GatewayPanelPortText,
@@ -1910,3 +1914,6 @@ public sealed class GatewayOrchestratorService
     }
 
 }
+
+
+

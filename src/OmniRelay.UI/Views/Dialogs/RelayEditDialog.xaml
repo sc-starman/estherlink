@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Relay Configuration"
-        Width="860"
+        Width="900"
         Height="700"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brush.Background}">
@@ -138,8 +138,31 @@
                         <PasswordBox x:Name="TunnelPasswordBox" Grid.Row="6" Grid.Column="1" Style="{StaticResource FormPasswordBoxStyle}"/>
                         <TextBlock Grid.Row="7" Text="Operation" Style="{StaticResource FormLabelStyle}"/>
                         <WrapPanel Grid.Row="7" Grid.Column="1" Margin="0,8,0,0">
-                            <Button Content="Test Tunnel" Width="120" Click="TestTunnel_Click" Style="{StaticResource SecondaryButtonStyle}"/>
+                            <Button Content="Test Connection" Width="130" Click="TestTunnel_Click" Style="{StaticResource SecondaryButtonStyle}"/>
                         </WrapPanel>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="TunnelTab" Header="Tunnel">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid x:Name="TunnelGrid" Margin="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="190"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="FRPS Port" Style="{StaticResource FormLabelStyle}"/>
+                        <TextBox x:Name="FrpServerPortTextBox" Grid.Row="0" Grid.Column="1" Width="120" HorizontalAlignment="Left" Style="{StaticResource FormTextBoxStyle}"/>
+                        <TextBlock Grid.Row="1" Text="FRP Token" Style="{StaticResource FormLabelStyle}"/>
+                        <TextBox x:Name="FrpAuthTokenTextBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource FormTextBoxStyle}"/>
+                        <TextBlock Grid.Row="2" Text="Data Tunnel Remote Port" Style="{StaticResource FormLabelStyle}"/>
+                        <TextBox x:Name="TunnelRemotePortTextBox" Grid.Row="2" Grid.Column="1" Width="120" HorizontalAlignment="Left" Style="{StaticResource FormTextBoxStyle}"/>
                     </Grid>
                 </ScrollViewer>
             </TabItem>
@@ -358,7 +381,7 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem x:Name="OperationsTab" Header="Operation Center">
+            <TabItem x:Name="OperationsTab" Header="Gateway Control">
                 <Grid Margin="10">
                     <StackPanel x:Name="OperationLockedPanel">
                         <TextBlock Text="Use Apply first so gateway operations can run against this saved Relay." Style="{StaticResource MutedTextStyle}"/>
@@ -366,7 +389,8 @@
                     <StackPanel x:Name="OperationContentPanel" Visibility="Collapsed">
                         <TextBlock Text="Gateway Operations" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <WrapPanel Margin="0,0,0,8">
-                            <Button Content="Bootstrap Check" Width="130" Click="BootstrapCheck_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                            <Button Content="Test Tunnel" Width="130" Click="TestRuntimeTunnel_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
+                            <Button Content="Bootstrap Check" Width="140" Click="BootstrapCheck_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                             <Button Content="Clear Cached Sudo" Width="140" Click="ClearCachedSudo_Click" Style="{StaticResource SecondaryButtonStyle}"/>
                         </WrapPanel>
                         <Grid Margin="0,0,0,10">
@@ -398,7 +422,7 @@
                             </Grid.RowDefinitions>
                             <TextBlock Grid.Row="0" Text="Gateway Service State" Style="{StaticResource FormLabelStyle}"/>
                             <TextBlock x:Name="OperationGatewayServiceStateText" Grid.Row="0" Grid.Column="1" Style="{StaticResource ValueTextStyle}"/>
-                            <TextBlock Grid.Row="1" Text="Bootstrap Check" Style="{StaticResource FormLabelStyle}"/>
+                            <TextBlock Grid.Row="1" Text="Test Tunnel" Style="{StaticResource FormLabelStyle}"/>
                             <TextBlock x:Name="OperationBootstrapStateText" Grid.Row="1" Grid.Column="1" Style="{StaticResource ValueTextStyle}"/>
                             <TextBlock Grid.Row="2" Text="Health" Style="{StaticResource FormLabelStyle}"/>
                             <TextBlock x:Name="OperationHealthSummaryText" Grid.Row="2" Grid.Column="1" Style="{StaticResource ValueTextStyle}" TextWrapping="Wrap"/>

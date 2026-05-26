@@ -89,8 +89,7 @@ public class ViewModelBehaviorTests
                 TunnelHost = "203.0.113.10",
                 TunnelUser = "omnirelay",
                 TunnelSshPort = 22,
-                TunnelRemotePort = 15000,
-                BootstrapSocksRemotePort = 16080
+                TunnelRemotePort = 15000
             },
             SelectedGatewayProtocol = GatewayProtocols.VlessTlsSingbox,
             GatewayPublicPort = 443,

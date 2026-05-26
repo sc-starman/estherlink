@@ -81,6 +81,9 @@ parse_args() {
       --panel-port) require_value "$1" "${2:-}"; PANEL_PORT="$2"; shift 2 ;;
       --backend-port) require_value "$1" "${2:-}"; BACKEND_PORT="$2"; shift 2 ;;
       --ssh-port) require_value "$1" "${2:-}"; SSH_PORT="$2"; shift 2 ;;
+      --frp-server-port) require_value "$1" "${2:-}"; FRP_SERVER_PORT="$2"; shift 2 ;;
+      --frp-auth-token) require_value "$1" "${2:-}"; FRP_AUTH_TOKEN="$2"; shift 2 ;;
+      --release-channel) require_value "$1" "${2:-}"; RELEASE_CHANNEL="$2"; shift 2 ;;
       --bootstrap-socks-port) require_value "$1" "${2:-}"; BOOTSTRAP_SOCKS_PORT="$2"; shift 2 ;;
       --bootstrap-mode) require_value "$1" "${2:-}"; BOOTSTRAP_MODE="$2"; shift 2 ;;
       --vps-ip) require_value "$1" "${2:-}"; VPS_IP="$2"; shift 2 ;;
@@ -311,13 +314,13 @@ protocol_build_config_json() {
       jq -c -n --argjson publicPort "$PUBLIC_PORT" --argjson tls "$runtime_tls" --arg username "$(jq -r '.proxy.username' <<<"$runtime")" --arg password "$(jq -r '.proxy.password' <<<"$runtime")" --arg network "$(jq -r '.naive.network // empty' <<<"$runtime")" --arg quicCc "$(jq -r '.naive.quicCc // empty' <<<"$runtime")" --argjson backendOutbound "$backend_outbound" '{log:{level:"warn"},inbounds:[{type:"naive",tag:"naive-in",listen:"::",listen_port:$publicPort,users:[{username:$username,password:$password}],network:(if ($network|length)>0 then $network else null end),tls:{enabled:($tls.enabled==true),server_name:$tls.serverName,certificate_path:$tls.certFile,key_path:$tls.keyFile},quic:(if ($quicCc|length)>0 then {congestion_control:$quicCc} else null end)}],outbounds:[$backendOutbound,{type:"direct",tag:"direct"}],route:{final:"tunnel-backend"}}'
       ;;
     shadowsocks_singbox)
-      jq -c -n --argjson publicPort "$PUBLIC_PORT" --arg ssServerPassword "$(jq -r '.ssServerPassword' <<<"$runtime")" --argjson users "$users_pw_json" --argjson backendOutbound "$backend_outbound" '{log:{level:"warn"},inbounds:[{type:"shadowsocks",tag:"ss-in",listen:"::",listen_port:$publicPort,method:"2022-blake3-aes-128-gcm",password:$ssServerPassword,users:$users}],outbounds:[$backendOutbound,{type:"direct",tag:"direct"}],route:{final:"tunnel-backend"}}'
+      jq -c -n --argjson publicPort "$PUBLIC_PORT" --arg ssServerPassword "$(jq -r '.ssServerPassword' <<<"$runtime")" --argjson users "$users_pw_json" --argjson backendOutbound "$backend_outbound" '{log:{level:"warn"},inbounds:[{type:"shadowsocks",tag:"ss-in",listen:"::",listen_port:$publicPort,network:"tcp",method:"2022-blake3-aes-128-gcm",password:$ssServerPassword,users:$users,multiplex:{enabled:true}}],outbounds:[$backendOutbound,{type:"direct",tag:"direct"}],route:{final:"tunnel-backend"}}'
       ;;
     shadowtls_v3_shadowsocks_singbox)
       local ch cp
       ch="$(jq -r '.shadowtls.camouflageServer // "www.cloudflare.com:443"' <<<"$runtime")"
       cp="${ch##*:}"; ch="${ch%:*}"; [[ "$cp" =~ ^[0-9]+$ ]] || cp=443
-      jq -c -n --argjson publicPort "$PUBLIC_PORT" --arg ssServerPassword "$(jq -r '.ssServerPassword' <<<"$runtime")" --argjson users "$users_pw_json" --arg ch "$ch" --argjson cp "$cp" --argjson strict "$(jq -r '.shadowtls.strictMode' <<<"$runtime")" --arg wildcard "$(jq -r '.shadowtls.wildcardSni // empty' <<<"$runtime")" --argjson backendOutbound "$backend_outbound" '{log:{level:"warn"},inbounds:[{type:"shadowtls",tag:"shadowtls-in",listen:"::",listen_port:$publicPort,version:3,users:$users,handshake:{server:$ch,server_port:$cp},strict_mode:$strict,wildcard_sni:(if ($wildcard|length)>0 then $wildcard else null end),detour:"ss-inner"},{type:"shadowsocks",tag:"ss-inner",listen:"127.0.0.1",listen_port:32080,method:"2022-blake3-aes-128-gcm",password:$ssServerPassword,users:$users}],outbounds:[$backendOutbound,{type:"direct",tag:"direct"}],route:{final:"tunnel-backend"}}'
+      jq -c -n --argjson publicPort "$PUBLIC_PORT" --arg ssServerPassword "$(jq -r '.ssServerPassword' <<<"$runtime")" --argjson users "$users_pw_json" --arg ch "$ch" --argjson cp "$cp" --argjson strict "$(jq -r '.shadowtls.strictMode' <<<"$runtime")" --arg wildcard "$(jq -r '.shadowtls.wildcardSni // empty' <<<"$runtime")" --argjson backendOutbound "$backend_outbound" '{log:{level:"warn"},inbounds:[{type:"shadowtls",tag:"shadowtls-in",listen:"::",listen_port:$publicPort,version:3,users:$users,handshake:{server:$ch,server_port:$cp},strict_mode:$strict,wildcard_sni:(if ($wildcard|length)>0 then $wildcard else null end),detour:"ss-inner"},{type:"shadowsocks",tag:"ss-inner",listen:"127.0.0.1",listen_port:32080,network:"tcp",method:"2022-blake3-aes-128-gcm",password:$ssServerPassword,users:$users,multiplex:{enabled:true}}],outbounds:[$backendOutbound,{type:"direct",tag:"direct"}],route:{final:"tunnel-backend"}}'
       ;;
   esac
 }

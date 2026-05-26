@@ -16,15 +16,13 @@ internal static class SshTunnelProcessFactory
         {
             "-NT",
             "-o", "ExitOnForwardFailure=yes",
-            "-o", "ServerAliveInterval=30",
-            "-o", "ServerAliveCountMax=3",
+            "-o", "ServerAliveInterval=10",
+            "-o", "ServerAliveCountMax=2",
             "-o", "TCPKeepAlive=yes"
         };
 
         args.Add("-R");
         args.Add($"127.0.0.1:{config.TunnelRemotePort}:127.0.0.1:{config.LocalProxyListenPort}");
-        args.Add("-R");
-        args.Add($"127.0.0.1:{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}");
 
         return TryCreateStartInfo(config, args, out startInfo, out error, null);
     }
@@ -157,11 +155,6 @@ internal static class SshTunnelProcessFactory
             return "Bootstrap SOCKS local port must be between 1 and 65535.";
         }
 
-        if (config.BootstrapSocksRemotePort <= 0 || config.BootstrapSocksRemotePort > 65535)
-        {
-            return "Bootstrap SOCKS remote port must be between 1 and 65535.";
-        }
-
         return null;
     }
 
@@ -255,3 +248,4 @@ internal static class SshTunnelProcessFactory
         return launcherPath;
     }
 }
+

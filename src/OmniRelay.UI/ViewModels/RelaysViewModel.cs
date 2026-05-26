@@ -500,7 +500,8 @@ public partial class RelaysViewModel : ObservableObject
         target.OutgoingAdapterIfIndex = source.OutgoingAdapterIfIndex;
         target.DataPlaneLocalPort = source.DataPlaneLocalPort;
         target.BootstrapSocksLocalPort = source.BootstrapSocksLocalPort;
-        target.BootstrapSocksRemotePort = source.BootstrapSocksRemotePort;
+        target.FrpProfilePortOverride = source.FrpProfilePortOverride is > 0 and <= 65535 ? source.FrpProfilePortOverride : 7000;
+        target.FrpProfileTokenOverride = source.FrpProfileTokenOverride ?? string.Empty;
         var sourcePanel = source.OmniPanel ?? new RelayOmniPanelConfig();
         target.OmniPanel = new RelayOmniPanelConfig
         {
@@ -593,10 +594,106 @@ public partial class RelaysViewModel : ObservableObject
         editDialog.DeletePolicyListRequested += DeleteRelayPolicyListFromDialogAsync;
         editDialog.RefreshRelayStatusRequested += RefreshRelayStatusFromDialogAsync;
         editDialog.GatewayOperationRequested += RunRelayGatewayOperationFromDialogAsync;
+        editDialog.ResolveFrpProfileForHostRequested += ResolveFrpProfileForHostFromDialog;
         editDialog.ClearCachedSudoRequested += () =>
         {
             _sudoCache.Clear();
             return Task.FromResult(new OperationResult(true, "Cached sudo password cleared for this session."));
+        };
+    }
+
+    private RelayEditDialog.FrpHostProfileResolution? ResolveFrpProfileForHostFromDialog(string host)
+    {
+        var normalizedHost = (host ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedHost))
+        {
+            return null;
+        }
+
+        var hostRelays = _state.Relays
+            .Where(x =>
+                string.Equals(GatewayTypes.Normalize(x.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals((x.RemoteGateway?.TunnelHost ?? string.Empty).Trim(), normalizedHost, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (hostRelays.Count == 0)
+        {
+            return new RelayEditDialog.FrpHostProfileResolution { Found = false };
+        }
+
+        var nextTunnelRemotePort = hostRelays
+            .Select(x => x.RemoteGateway?.TunnelRemotePort is > 0 and <= 65535 ? x.RemoteGateway.TunnelRemotePort : 0)
+            .Where(x => x > 0)
+            .DefaultIfEmpty(14999)
+            .Max() + 1;
+        if (nextTunnelRemotePort <= 0 || nextTunnelRemotePort > 65535)
+        {
+            nextTunnelRemotePort = 15000;
+        }
+
+        var ports = hostRelays
+            .Select(x => x.FrpProfilePortOverride is > 0 and <= 65535 ? x.FrpProfilePortOverride : 7000)
+            .Distinct()
+            .ToList();
+
+        if (ports.Count > 1)
+        {
+            var selectedPort = hostRelays
+                .GroupBy(x => x.FrpProfilePortOverride is > 0 and <= 65535 ? x.FrpProfilePortOverride : 7000)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key)
+                .First()
+                .Key;
+            var selectedToken = hostRelays
+                .Select(x => (x.FrpProfileTokenOverride ?? string.Empty).Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .GroupBy(x => x, StringComparer.Ordinal)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.Key)
+                .FirstOrDefault() ?? string.Empty;
+
+            return new RelayEditDialog.FrpHostProfileResolution
+            {
+                Found = true,
+                HasConflict = true,
+                FrpServerPort = selectedPort,
+                AuthToken = selectedToken,
+                SuggestedTunnelRemotePort = nextTunnelRemotePort,
+                ConflictMessage = $"FRP profile conflict for host '{normalizedHost}': multiple FRPS ports are configured. Using the most common profile in UI; save/apply must resolve conflict."
+            };
+        }
+
+        var tokens = hostRelays
+            .Select(x => (x.FrpProfileTokenOverride ?? string.Empty).Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (tokens.Count > 1)
+        {
+            var selectedPort = ports.Count == 0 ? 7000 : ports[0];
+            var selectedToken = tokens
+                .GroupBy(x => x, StringComparer.Ordinal)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.Key)
+                .First();
+            return new RelayEditDialog.FrpHostProfileResolution
+            {
+                Found = true,
+                HasConflict = true,
+                FrpServerPort = selectedPort,
+                AuthToken = selectedToken,
+                SuggestedTunnelRemotePort = nextTunnelRemotePort,
+                ConflictMessage = $"FRP profile conflict for host '{normalizedHost}': multiple FRP tokens are configured. Using the most common profile in UI; save/apply must resolve conflict."
+            };
+        }
+
+        return new RelayEditDialog.FrpHostProfileResolution
+        {
+            Found = true,
+            FrpServerPort = ports[0],
+            AuthToken = tokens.Count == 0 ? string.Empty : tokens[0],
+            SuggestedTunnelRemotePort = nextTunnelRemotePort
         };
     }
 
@@ -685,7 +782,8 @@ public partial class RelaysViewModel : ObservableObject
 
             var title = operation switch
             {
-                "bootstrap_check" => "Gateway Bootstrap Check",
+                "test_tunnel" => "Gateway Test Tunnel",
+                "bootstrap_check" => "Gateway Test Tunnel",
                 "install" => "Gateway Install",
                 "start" => "Gateway Start",
                 "stop" => "Gateway Stop",
@@ -700,6 +798,7 @@ public partial class RelaysViewModel : ObservableObject
 
             Func<IProgress<DeploymentProgressSnapshot>, CancellationToken, Task<GatewayOperationResult>> execute = operation switch
             {
+                "test_tunnel" => (progress, token) => _gatewayDeployment.TestGatewayTunnelAsync(EnsureRequest(), sudoPassword, progress, token),
                 "bootstrap_check" => (progress, token) => _gatewayDeployment.CheckGatewayBootstrapAsync(EnsureRequest(), sudoPassword, progress, token),
                 "install" => (progress, token) => _gatewayDeployment.InstallGatewayAsync(EnsureRequest(), sudoPassword, progress, token),
                 "start" => (progress, token) => _gatewayDeployment.StartGatewayAsync(EnsureRequest(), sudoPassword, progress, token),
@@ -882,17 +981,25 @@ public partial class RelaysViewModel : ObservableObject
         var remote = relay.RemoteGateway ?? new RemoteGatewayConfig();
         var incomingIfIndex = NetworkAdapterCatalog.TryResolveIfIndex(relay.IncomingAdapterId, relay.IncomingAdapterIfIndex, out var inIf) ? inIf : relay.IncomingAdapterIfIndex;
         var outgoingIfIndex = NetworkAdapterCatalog.TryResolveIfIndex(relay.OutgoingAdapterId, relay.OutgoingAdapterIfIndex, out var outIf) ? outIf : relay.OutgoingAdapterIfIndex;
+        var profile = new FrpServerProfile
+        {
+            TunnelHost = remote.TunnelHost.Trim(),
+            FrpServerPort = NormalizePortOrDefault(relay.FrpProfilePortOverride, 7000),
+            AuthToken = relay.FrpProfileTokenOverride ?? string.Empty
+        };
         return new ServiceConfig
         {
             GatewayType = GatewayTypes.Normalize(relay.GatewayType),
             LocalProxyListenPort = NormalizePortOrDefault(relay.DataPlaneLocalPort, 24080),
             BootstrapSocksLocalPort = NormalizePortOrDefault(relay.BootstrapSocksLocalPort, 24081),
-            BootstrapSocksRemotePort = NormalizePortOrDefault(relay.BootstrapSocksRemotePort, 16080),
+            TunnelRemotePort = NormalizePortOrDefault(remote.TunnelRemotePort, 15000),
             WhitelistAdapterIfIndex = incomingIfIndex,
             DefaultAdapterIfIndex = outgoingIfIndex,
-            TunnelHost = remote.TunnelHost.Trim(),
+            TunnelHost = profile.TunnelHost,
             TunnelSshPort = NormalizePortOrDefault(remote.TunnelSshPort, 22),
-            TunnelRemotePort = NormalizePortOrDefault(remote.TunnelRemotePort, 15000),
+            FrpServerPort = profile.FrpServerPort,
+            FrpRuntimeToken = profile.AuthToken,
+            FrpServerProfiles = new List<FrpServerProfile> { profile },
             TunnelUser = string.IsNullOrWhiteSpace(remote.TunnelUser) ? "OmniRelay" : remote.TunnelUser.Trim(),
             TunnelAuthMethod = TunnelAuthMethods.Normalize(remote.TunnelAuthMethod),
             TunnelPrivateKeyPath = remote.TunnelPrivateKeyPath,
@@ -1009,7 +1116,6 @@ public partial class RelaysViewModel : ObservableObject
             Name = type == GatewayTypes.Local ? "Local Relay" : "Remote Relay",
             GatewayType = type,
             Enabled = true,
-            BootstrapSocksRemotePort = 0,
             OmniPanel = new RelayOmniPanelConfig
             {
                 Port = 2054
@@ -1040,7 +1146,8 @@ public partial class RelaysViewModel : ObservableObject
             OutgoingAdapterIfIndex = relay?.OutgoingAdapterIfIndex ?? -1,
             DataPlaneLocalPort = relay?.DataPlaneLocalPort ?? 0,
             BootstrapSocksLocalPort = relay?.BootstrapSocksLocalPort ?? 0,
-            BootstrapSocksRemotePort = relay?.BootstrapSocksRemotePort ?? 0,
+            FrpProfilePortOverride = relay?.FrpProfilePortOverride is > 0 and <= 65535 ? relay.FrpProfilePortOverride : 7000,
+            FrpProfileTokenOverride = relay?.FrpProfileTokenOverride ?? string.Empty,
             OmniPanel = new RelayOmniPanelConfig
             {
                 Port = relay?.OmniPanel?.Port is > 0 and <= 65535 ? relay.OmniPanel.Port : (relay?.RemoteGateway?.PanelPort is > 0 and <= 65535 ? relay.RemoteGateway.PanelPort : 2054),
@@ -1132,3 +1239,6 @@ public sealed class RelayRowViewModel
     private static bool IsHealthyState(string? value) =>
         string.Equals((value ?? string.Empty).Trim(), "healthy", StringComparison.OrdinalIgnoreCase);
 }
+
+
+

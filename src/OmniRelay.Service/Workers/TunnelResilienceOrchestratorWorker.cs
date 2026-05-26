@@ -1197,16 +1197,13 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         CancellationToken cancellationToken)
     {
         var tunnelForwardSignature = $"127.0.0.1:{config.TunnelRemotePort}:127.0.0.1:{config.LocalProxyListenPort}";
-        var bootstrapForwardSignature = $"127.0.0.1:{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}";
         var tunnelHost = (config.TunnelHost ?? string.Empty).Trim();
         var tunnelUser = (config.TunnelUser ?? string.Empty).Trim();
         var command =
             "$killed = @(); " +
             "$matched = @(); " +
             "$forwardA = '" + EscapePowerShellSingleQuoted(tunnelForwardSignature) + "'; " +
-            "$forwardB = '" + EscapePowerShellSingleQuoted(bootstrapForwardSignature) + "'; " +
             "$forwardALegacy = ':" + config.TunnelRemotePort + ":127.0.0.1:" + config.LocalProxyListenPort + "'; " +
-            "$forwardBLegacy = ':" + config.BootstrapSocksRemotePort + ":127.0.0.1:" + config.BootstrapSocksLocalPort + "'; " +
             "$targetHost = '" + EscapePowerShellSingleQuoted(tunnelHost) + "'; " +
             "$targetUser = '" + EscapePowerShellSingleQuoted(tunnelUser) + "'; " +
             "Get-CimInstance Win32_Process -Filter \"Name = 'ssh.exe'\" | " +
@@ -1214,9 +1211,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             "  $_.CommandLine -and " +
             "  (" +
             "    $_.CommandLine -like ('*' + $forwardA + '*') -or " +
-            "    $_.CommandLine -like ('*' + $forwardB + '*') -or " +
             "    $_.CommandLine -like ('*' + $forwardALegacy + '*') -or " +
-            "    $_.CommandLine -like ('*' + $forwardBLegacy + '*') -or " +
             "    (" +
             "      $_.CommandLine -like '* -R *' -and " +
             "      $_.CommandLine -like ('*' + $targetUser + '@' + $targetHost + '*')" +
@@ -1277,13 +1272,13 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         OmniRelay.Core.Configuration.ServiceConfig config,
         CancellationToken cancellationToken)
     {
-        if (config.TunnelRemotePort <= 0 || config.BootstrapSocksRemotePort <= 0)
+        if (config.TunnelRemotePort <= 0)
         {
             return;
         }
 
-        // Clean only stale listener owners for the forwarded ports.
-        var ports = $"{config.TunnelRemotePort} {config.BootstrapSocksRemotePort}";
+        // Clean stale listener owner for the forwarded data port.
+        var ports = $"{config.TunnelRemotePort}";
         var remoteCommand =
             "ports=" + ShellSingleQuote(ports) + "; " +
             "killed=0; " +
@@ -1628,3 +1623,4 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         return false;
     }
 }
+

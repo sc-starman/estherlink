@@ -1,6 +1,8 @@
 param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
+    [ValidateSet("stable", "beta")]
+    [string]$Channel = "stable",
     [switch]$RebuildOmniPanel
 )
 
@@ -10,8 +12,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $installerProject = Join-Path $root "src\OmniRelay.Installer\OmniRelay.Installer.wixproj"
 $productWxsPath = Join-Path $root "src\OmniRelay.Installer\Product.wxs"
 $prepareOmniPanelAssetsScript = Join-Path $root "scripts\prepare_service_omnipanel_assets.ps1"
-$buildConnectorCoreScript = Join-Path $root "scripts\build_connector_core.ps1"
+$gatewayAssetChannelMarkerPath = Join-Path $root "src\OmniRelay.UI\gateway_asset_channel.txt"
 $connectorCoreServiceDir = Join-Path $root "src\OmniRelay.Service\connector-core"
+$connectorCoreProjectDir = Join-Path $root "src\OmniRelay.ConnectorCore"
 $uiProject = Join-Path $root "src\OmniRelay.UI\OmniRelay.UI.csproj"
 $serviceProject = Join-Path $root "src\OmniRelay.Service\OmniRelay.Service.csproj"
 
@@ -55,38 +58,56 @@ function Stop-LockingNodeProcesses {
 }
 
 function Ensure-ConnectorCoreWindowsRuntime {
-    if (-not (Test-Path -LiteralPath $buildConnectorCoreScript)) {
-        throw "Connector-core build script not found: $buildConnectorCoreScript"
+    if (-not (Test-Path -LiteralPath $connectorCoreProjectDir)) {
+        throw "Connector-core project directory not found: $connectorCoreProjectDir"
+    }
+
+    $goBin = Get-Command go -ErrorAction SilentlyContinue
+    if ($null -eq $goBin) {
+        throw "Go toolchain was not found on PATH."
     }
 
     New-Item -ItemType Directory -Path $connectorCoreServiceDir -Force | Out-Null
     $connectorCoreExe = Join-Path $connectorCoreServiceDir "connector-core.exe"
-    if (Test-Path -LiteralPath $connectorCoreExe) {
-        Write-Host "Connector-core runtime already present: $connectorCoreExe" -ForegroundColor DarkGray
-        return
+
+    $originalGoos = $env:GOOS
+    $originalGoarch = $env:GOARCH
+    $originalCgoEnabled = $env:CGO_ENABLED
+
+    Push-Location $connectorCoreProjectDir
+    try {
+        Write-Host "Building connector-core Windows runtime (amd64)..." -ForegroundColor Cyan
+        $env:CGO_ENABLED = "0"
+        $env:GOOS = "windows"
+        $env:GOARCH = "amd64"
+        & go build -trimpath -ldflags "-s -w" -o $connectorCoreExe ./cmd/connector-core
+        if ($LASTEXITCODE -ne 0) {
+            throw "connector-core go build failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+        $env:GOOS = $originalGoos
+        $env:GOARCH = $originalGoarch
+        $env:CGO_ENABLED = $originalCgoEnabled
     }
 
-    Write-Host "Building connector-core Windows runtime (amd64)..." -ForegroundColor Cyan
-    powershell -ExecutionPolicy Bypass -File $buildConnectorCoreScript -OperatingSystems @("windows") -Architectures @("amd64")
-    $artifact = Join-Path $root "artifacts\connector-core\connector-core-windows-amd64.zip"
-    if (-not (Test-Path -LiteralPath $artifact)) {
-        throw "Connector-core Windows artifact not found after build: $artifact"
+    Write-Host "Connector-core runtime ready in service payload: $connectorCoreExe" -ForegroundColor Green
+}
+
+function Write-GatewayAssetChannelMarker {
+    param([Parameter(Mandatory = $true)][string]$ChannelValue)
+
+    $normalized = $ChannelValue.Trim().ToLowerInvariant()
+    if ($normalized -ne "beta" -and $normalized -ne "stable") {
+        throw "Invalid channel marker value: $ChannelValue"
     }
 
-    $tempExtract = Join-Path $root "artifacts\connector-core\extract-windows-amd64"
-    if (Test-Path -LiteralPath $tempExtract) {
-        Remove-Item -LiteralPath $tempExtract -Recurse -Force
-    }
-    New-Item -ItemType Directory -Path $tempExtract -Force | Out-Null
-    Expand-Archive -LiteralPath $artifact -DestinationPath $tempExtract -Force
-
-    $builtExe = Join-Path $tempExtract "connector-core.exe"
-    if (-not (Test-Path -LiteralPath $builtExe)) {
-        throw "connector-core.exe not found inside artifact: $artifact"
-    }
-
-    Copy-Item -LiteralPath $builtExe -Destination $connectorCoreExe -Force
-    Write-Host "Connector-core runtime copied to service payload: $connectorCoreExe" -ForegroundColor Green
+    [System.IO.File]::WriteAllText(
+        $gatewayAssetChannelMarkerPath,
+        "$normalized`n",
+        [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Gateway asset channel marker set to: $normalized" -ForegroundColor Yellow
 }
 
 function Increment-InstallerPatchVersion {
@@ -120,6 +141,7 @@ function Increment-InstallerPatchVersion {
 }
 
 Increment-InstallerPatchVersion -FilePath $productWxsPath
+Write-GatewayAssetChannelMarker -ChannelValue $Channel
 Ensure-ConnectorCoreWindowsRuntime
 Stop-LockingNodeProcesses -RepoRootPath $root
 if (-not (Test-Path -LiteralPath $prepareOmniPanelAssetsScript)) {
@@ -127,6 +149,8 @@ if (-not (Test-Path -LiteralPath $prepareOmniPanelAssetsScript)) {
 }
 
 Write-Host "Preparing service OmniPanel assets..." -ForegroundColor Cyan
+$env:OMNIRELAY_GATEWAY_ASSET_CHANNEL = $Channel
+Write-Host "Using gateway asset channel: $Channel" -ForegroundColor Cyan
 if ($RebuildOmniPanel) {
     powershell -ExecutionPolicy Bypass -File $prepareOmniPanelAssetsScript -BuildPanel
 }

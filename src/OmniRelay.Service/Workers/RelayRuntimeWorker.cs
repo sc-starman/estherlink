@@ -158,13 +158,10 @@ public sealed class RelayRuntimeWorker : BackgroundService
         private readonly GatewayRuntime _runtime;
         private readonly FileLogWriter _log;
         private readonly RelaySocks5ProxyEngine _dataPlane;
-        private readonly RelayBootstrapSocksEngine _bootstrap;
         private readonly Queue<string> _events = new();
         private readonly Queue<DateTimeOffset> _recentTunnelExitTimestamps = new();
         private Process? _sshProcess;
         private readonly SemaphoreSlim _tunnelLifecycleLock = new(1, 1);
-        private Mutex? _remoteTunnelMutex;
-        private bool _remoteTunnelMutexHeld;
         private Process? _localGatewayProcess;
         private Process? _omniPanelProcess;
         private DateTimeOffset? _processStartedAtUtc;
@@ -184,7 +181,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
         private bool _endToEndProbeOk;
         private bool _remoteProbeModuleAvailable = true;
         private bool _remoteProbeMissingLogged;
-        private bool _bootstrapSocksListening;
         private bool _tunnelConnected;
         private bool _stopping;
         private string _localGatewayState = "inactive";
@@ -203,6 +199,7 @@ public sealed class RelayRuntimeWorker : BackgroundService
         private string? _lastLoggedProbeFailureSignature;
         private DateTimeOffset? _lastLoggedProbeFailureUtc;
         private string? _activeTunnelConnectionId;
+        private string _frpTunnelStatePath = string.Empty;
         private DateTimeOffset _nextTunnelctlCompatCheckUtc = DateTimeOffset.MinValue;
         private bool _tunnelctlCompatVerified;
 
@@ -215,14 +212,11 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 _relay,
                 runtime,
                 log);
-            _bootstrap = new RelayBootstrapSocksEngine(_relay, log);
         }
 
         public bool Matches(RelayConfig relay)
         {
             return relay.DataPlaneLocalPort == _relay.DataPlaneLocalPort &&
-                   relay.BootstrapSocksLocalPort == _relay.BootstrapSocksLocalPort &&
-                   relay.BootstrapSocksRemotePort == _relay.BootstrapSocksRemotePort &&
                    string.Equals(relay.IncomingAdapterId, _relay.IncomingAdapterId, StringComparison.OrdinalIgnoreCase) &&
                    relay.IncomingAdapterIfIndex == _relay.IncomingAdapterIfIndex &&
                    string.Equals(relay.OutgoingAdapterId, _relay.OutgoingAdapterId, StringComparison.OrdinalIgnoreCase) &&
@@ -252,7 +246,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
             try
             {
                 await _dataPlane.StartAsync(cancellationToken);
-                await _bootstrap.StartAsync(cancellationToken);
                 await PulseAsync(cancellationToken);
             }
             catch (Exception ex)
@@ -268,7 +261,18 @@ public sealed class RelayRuntimeWorker : BackgroundService
 
         public async Task PulseAsync(CancellationToken cancellationToken)
         {
+            var runtimeConfig = _runtime.GetConfigSnapshot();
             var config = ToServiceConfig(_relay);
+            if (string.Equals(GatewayTypes.Normalize(_relay.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+            {
+                var resolvedProfile = ResolveFrpServerProfile(runtimeConfig, config.TunnelHost);
+                config.FrpServerPort = resolvedProfile?.FrpServerPort is > 0 and <= 65535
+                    ? resolvedProfile.FrpServerPort
+                    : 7000;
+                config.FrpRuntimeToken = string.IsNullOrWhiteSpace(resolvedProfile?.AuthToken)
+                    ? string.Empty
+                    : resolvedProfile.AuthToken.Trim();
+            }
             UpdateAdapterStatus();
             var now = DateTimeOffset.UtcNow;
             NormalizeScheduledTimes(now);
@@ -282,7 +286,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 _currentRecoveryTier = 0;
                 _recoveryAction = null;
                 _tunnelConnected = false;
-                _bootstrapSocksListening = _bootstrap.Running;
                 _localProbeOk = true;
                 _endToEndProbeOk = true;
                 _tunnelState = "LocalMode";
@@ -344,9 +347,9 @@ public sealed class RelayRuntimeWorker : BackgroundService
             if (overallHealthy && IsTunnelFlapping())
             {
                 overallHealthy = false;
-                _healthReasonCode = "ssh_tunnel_flapping";
-                _lastTunnelError ??= "SSH tunnel session is unstable (frequent exits).";
-                _lastBootstrapError = "local_probe_failed:ssh_tunnel_flapping";
+                _healthReasonCode = "frp_tunnel_flapping";
+                _lastTunnelError ??= "FRP tunnel session is unstable (frequent exits).";
+                _lastBootstrapError = "local_probe_failed:frp_tunnel_flapping";
             }
 
             if (probeCycleExecuted)
@@ -378,9 +381,19 @@ public sealed class RelayRuntimeWorker : BackgroundService
                         _currentRecoveryTier = 0;
                         if (string.IsNullOrWhiteSpace(_healthReasonCode))
                         {
-                            _healthReasonCode = "ssh_session_not_established";
+                            _healthReasonCode = "frp_session_not_established";
                         }
 
+                        PublishStatus();
+                        return;
+                    }
+
+                    if (string.Equals(_healthReasonCode, "frp_server_not_ready", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _healthState = "Pending";
+                        _tunnelState = "PendingProvisioning";
+                        _recoveryAction = "waiting_gateway_install";
+                        _currentRecoveryTier = 0;
                         PublishStatus();
                         return;
                     }
@@ -408,14 +421,12 @@ public sealed class RelayRuntimeWorker : BackgroundService
             await StopLocalGatewayRuntimeAsync();
             await StopLocalOmniPanelRuntimeAsync();
             await _dataPlane.StopAsync();
-            await _bootstrap.StopAsync();
             _tunnelState = "Stopped";
             _healthState = "Disconnected";
             _healthReasonCode = "relay_stopped";
             _lastTunnelError = reason;
             _lastBootstrapError = reason;
             _tunnelConnected = false;
-            _bootstrapSocksListening = false;
             PublishStatus(enabled: false);
         }
 
@@ -426,7 +437,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 return;
             }
 
-            _bootstrapSocksListening = _bootstrap.Running;
             _runtime.SetRelayRuntimeStatus(BuildStatus(enabled));
         }
 
@@ -448,6 +458,11 @@ public sealed class RelayRuntimeWorker : BackgroundService
             if (_sshProcess is null || _sshProcess.HasExited)
             {
                 _localProbeOk = false;
+                if (string.Equals(_healthReasonCode, "frp_server_not_ready", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
                 if (string.IsNullOrWhiteSpace(_healthReasonCode))
                 {
                     _healthReasonCode = "tunnel_process_not_running";
@@ -460,7 +475,7 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 return;
             }
 
-            _tunnelConnected = await HasEstablishedSshSessionAsync(_sshProcess.Id, config, cancellationToken);
+            _tunnelConnected = await HasEstablishedFrpSessionAsync(config, cancellationToken);
             if (_tunnelConnected)
             {
                 _lastConnectedAtUtc = DateTimeOffset.UtcNow;
@@ -469,20 +484,19 @@ public sealed class RelayRuntimeWorker : BackgroundService
                      DateTimeOffset.UtcNow - _processStartedAtUtc.Value >= UnestablishedGracePeriod &&
                      DateTimeOffset.UtcNow >= _nextRecoveryAllowedAtUtc)
             {
-                _lastTunnelError = "SSH session not established within grace period.";
+                _lastTunnelError = "FRP session not established within grace period.";
                 RecordEvent("warn", _lastTunnelError);
                 await StopTunnelProcessAsync();
             }
 
             var backendProbe = await ProbeBackendEndpointAsync(config.LocalProxyListenPort, cancellationToken);
             _localProbeOk = _tunnelConnected && backendProbe.Success;
-            _bootstrapSocksListening = await IsLoopbackTcpListeningAsync(config.BootstrapSocksLocalPort, cancellationToken);
 
             if (!_localProbeOk)
             {
-                _healthReasonCode = !_tunnelConnected ? "ssh_session_not_established" : backendProbe.ReasonCode;
+                _healthReasonCode = !_tunnelConnected ? "frp_session_not_established" : backendProbe.ReasonCode;
                 _lastTunnelError = !_tunnelConnected
-                    ? "SSH tunnel session is not established."
+                    ? "FRP tunnel session is not established."
                     : $"Local backend probe failed: {backendProbe.ReasonCode}";
                 _lastBootstrapError = $"local_probe_failed:{_healthReasonCode}";
                 LogProbeFailure("local_probe", _healthReasonCode ?? "unknown", _lastTunnelError ?? "Local probe failed.");
@@ -541,6 +555,21 @@ public sealed class RelayRuntimeWorker : BackgroundService
             _recoveryAction = $"tier{tier}";
             var localPathFailure = !_localProbeOk || !_tunnelConnected;
             var attemptedRecovery = false;
+            if (localPathFailure &&
+                string.Equals(_healthReasonCode, "frp_remote_port_in_use", StringComparison.OrdinalIgnoreCase))
+            {
+                var cooldown = GetForwardConflictCooldown(Math.Max(_forwardConflictCount, 1));
+                var candidateNext = DateTimeOffset.UtcNow.Add(cooldown);
+                if (candidateNext > _nextRecoveryAllowedAtUtc)
+                {
+                    _nextRecoveryAllowedAtUtc = candidateNext;
+                }
+
+                _tunnelState = "Degraded";
+                _recoveryAction = "waiting_remote_port_release";
+                _currentRecoveryTier = 0;
+                return;
+            }
 
             try
             {
@@ -590,7 +619,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
                         if (requiresLocalRestart)
                         {
                             await StopTunnelProcessAsync();
-                            await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
                             attemptedRecovery = true;
                         }
                     }
@@ -607,9 +635,8 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 }
                 else if (tier == 2)
                 {
-                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier2: tunnel recycle with stale-ssh cleanup");
+                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier2: tunnel recycle");
                     await StopTunnelProcessAsync();
-                    await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
                     attemptedRecovery = true;
                 }
                 else
@@ -621,11 +648,8 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     }
 
                     await _dataPlane.StopAsync();
-                    await _bootstrap.StopAsync();
                     await StopTunnelProcessAsync();
-                    await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
                     await _dataPlane.StartAsync(cancellationToken);
-                    await _bootstrap.StartAsync(cancellationToken);
                     attemptedRecovery = true;
                 }
             }
@@ -653,7 +677,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
             try
             {
                 await StopTunnelProcessCoreAsync();
-                await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
 
                 if (string.IsNullOrWhiteSpace(config.TunnelHost))
                 {
@@ -663,15 +686,21 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     return;
                 }
 
-                var (routeProbeOk, routeProbeError) = await ProbeSshReachabilityRouteOnlyAsync(
+                if (!await EnsureRemoteFrpsReadyAsync(config, cancellationToken))
+                {
+                    _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(45));
+                    return;
+                }
+
+                var (routeProbeOk, routeProbeError) = await ProbeTcpReachabilityAsync(
                     config.TunnelHost,
-                    config.TunnelSshPort,
+                    config.FrpServerPort,
                     cancellationToken);
 
                 if (!routeProbeOk)
                 {
-                    _lastTunnelError = $"Route-only probe cannot reach {config.TunnelHost}:{config.TunnelSshPort}. {routeProbeError}";
-                    _healthReasonCode = "ssh_reachability_failed";
+                    _lastTunnelError = $"Route-only probe cannot reach FRPS {config.TunnelHost}:{config.FrpServerPort}. {routeProbeError}";
+                    _healthReasonCode = "frp_reachability_failed";
                     RecordEvent("warn", _lastTunnelError);
                     _log.Warn(_lastTunnelError);
                     return;
@@ -679,39 +708,36 @@ public sealed class RelayRuntimeWorker : BackgroundService
 
                 var connectionId = Guid.NewGuid().ToString("N")[..12];
                 _activeTunnelConnectionId = connectionId;
-                _log.Info($"Starting relay '{_relay.Name}' tunnel target={config.TunnelHost}:{config.TunnelSshPort}. connectionId={connectionId} remotePorts={config.TunnelRemotePort}/{config.BootstrapSocksRemotePort}");
+                _log.Info($"Starting relay '{_relay.Name}' FRP tunnel target={config.TunnelHost}:{config.FrpServerPort}. connectionId={connectionId} remotePort={config.TunnelRemotePort}");
 
-            if (!SshTunnelProcessFactory.TryCreateReverseTunnelStartInfo(
+            if (!FrpTunnelProcessFactory.TryCreateReverseTunnelStartInfo(
                     config,
+                    _relay.Id,
                     out var processInfo,
+                    out var frpContext,
                     out var error) || processInfo is null)
             {
                 _lastTunnelError = error ?? "Tunnel configuration is invalid.";
-                _healthReasonCode = "ssh_start_info_invalid";
+                _healthReasonCode = _lastTunnelError.Contains("binary is missing", StringComparison.OrdinalIgnoreCase)
+                    ? "frp_client_missing"
+                    : _lastTunnelError.Contains("auth token is required", StringComparison.OrdinalIgnoreCase)
+                        ? "frp_server_profile_missing"
+                        : "frp_start_info_invalid";
                 RecordEvent("error", _lastTunnelError);
                 return;
             }
 
-            if (!TryAcquireRemoteTunnelMutex(config))
-            {
-                _lastTunnelError = "Another OmniRelay instance is already owning this relay tunnel slot.";
-                _healthReasonCode = "tunnel_slot_in_use";
-                _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(30));
-                RecordEvent("warn", _lastTunnelError);
-                _log.Warn($"Relay '{_relay.Name}' tunnel slot is already owned by another process. Backing off for 30s. connectionId={connectionId}. {GetTunnelOwnerDiagnostic(config)}");
-                return;
-            }
-
-            _sshProcess = Process.Start(processInfo);
+                await PruneDuplicateFrpTunnelProcessesAsync();
+                _sshProcess = Process.Start(processInfo);
             if (_sshProcess is null)
             {
-                ReleaseRemoteTunnelMutex();
-                _lastTunnelError = "Failed to start ssh process.";
-                _healthReasonCode = "ssh_process_start_failed";
+                _lastTunnelError = "Failed to start FRP process.";
+                _healthReasonCode = "frp_process_start_failed";
                 RecordEvent("error", _lastTunnelError);
                     return;
                 }
 
+                _frpTunnelStatePath = frpContext?.StatePath ?? string.Empty;
                 _sshProcess.StandardInput.Close();
                 _processStartedAtUtc = DateTimeOffset.UtcNow;
                 _reconnectCount++;
@@ -719,8 +745,8 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 _lastTunnelError = null;
                 _healthReasonCode = null;
                 _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow;
-                RecordEvent("info", $"relay '{_relay.Name}' tunnel process started pid={_sshProcess.Id} reconnectCount={_reconnectCount} connectionId={connectionId}");
-                _log.Info($"Relay '{_relay.Name}' tunnel process started. pid={_sshProcess.Id} reconnectCount={_reconnectCount} connectionId={connectionId}");
+                RecordEvent("info", $"relay '{_relay.Name}' FRP process started pid={_sshProcess.Id} reconnectCount={_reconnectCount} connectionId={connectionId}");
+                _log.Info($"Relay '{_relay.Name}' FRP process started. pid={_sshProcess.Id} reconnectCount={_reconnectCount} connectionId={connectionId}");
 
                 var processRef = _sshProcess;
                 _ = Task.Run(async () =>
@@ -741,45 +767,52 @@ public sealed class RelayRuntimeWorker : BackgroundService
                         if (!string.IsNullOrWhiteSpace(cleaned))
                         {
                             _lastTunnelError = cleaned;
-                            _healthReasonCode = "ssh_process_exited_with_error";
-                            _log.Warn($"Relay '{_relay.Name}' tunnel process exited. connectionId={connectionId} exitCode={exitCode} error={cleaned}");
-                            RecordEvent("warn", $"ssh process exited: connectionId={connectionId} {cleaned}");
+                            _healthReasonCode = "frp_process_exited_with_error";
+                            _log.Warn($"Relay '{_relay.Name}' FRP process exited. connectionId={connectionId} exitCode={exitCode} error={cleaned}");
+                            RecordEvent("warn", $"frp process exited: connectionId={connectionId} {cleaned}");
 
-                            if (TryGetRemoteForwardConflictPort(cleaned, out var conflictPort))
+                            if (HasFrpPortConflict(cleaned, out var conflictPort))
                             {
                                 var portText = conflictPort > 0 ? conflictPort.ToString() : config.TunnelRemotePort.ToString();
                                 _forwardConflictCount++;
                                 var cooldown = GetForwardConflictCooldown(_forwardConflictCount);
-                                _healthReasonCode = "remote_forward_port_in_use";
+                                _healthReasonCode = "frp_remote_port_in_use";
                                 _lastTunnelError =
-                                    $"Gateway remote-forward port {portText} is already in use by another SSH session/relay. " +
-                                    "Stop the other relay/session or use a different Tunnel Remote Port.";
+                                    $"Gateway FRP remote port {portText} is already in use by another relay/session. " +
+                                    "Stop the conflicting relay/session or use a different Tunnel Remote Port.";
                                 _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(cooldown);
                                 RecordEvent("warn", $"{_lastTunnelError} conflictAttempt={_forwardConflictCount} nextRetryIn={cooldown.TotalSeconds:0}s");
-                                await TryScheduleRemoteForwardCleanupAsync(config, CancellationToken.None, connectionId);
                             }
-
-                            if (HasRemoteForwardFailure(cleaned) && !TryGetRemoteForwardConflictPort(cleaned, out _))
+                            else if (cleaned.Contains("proxy", StringComparison.OrdinalIgnoreCase) &&
+                                     cleaned.Contains("already", StringComparison.OrdinalIgnoreCase))
                             {
-                                await TryScheduleRemoteForwardCleanupAsync(config, CancellationToken.None, connectionId);
+                                _healthReasonCode = "frp_proxy_register_failed";
+                            }
+                            else if (cleaned.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+                                     cleaned.Contains("auth", StringComparison.OrdinalIgnoreCase))
+                            {
+                                _healthReasonCode = cleaned.Contains("mismatch", StringComparison.OrdinalIgnoreCase) ||
+                                                    cleaned.Contains("invalid", StringComparison.OrdinalIgnoreCase)
+                                    ? "frp_server_token_mismatch"
+                                    : "frp_auth_failed";
                             }
                         }
                         else if (exitCode == -1)
                         {
-                            _lastTunnelError = "ssh exited with code -1.";
-                            _healthReasonCode = "ssh_process_exited";
+                            _lastTunnelError = "connector-core tunnel exited with code -1.";
+                            _healthReasonCode = "frp_process_exited";
                             _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(15));
-                            _log.Warn($"Relay '{_relay.Name}' tunnel process exited. connectionId={connectionId} exitCode=-1");
+                            _log.Warn($"Relay '{_relay.Name}' FRP process exited. connectionId={connectionId} exitCode=-1");
                             RecordEvent("warn", _lastTunnelError);
                         }
                         else if (exitCode != 0)
                         {
                             var message = string.IsNullOrWhiteSpace(stdout)
-                                ? $"ssh exited with code {exitCode}."
-                                : $"ssh exited with code {exitCode}: {stdout.Trim()}";
+                                ? $"connector-core tunnel exited with code {exitCode}."
+                                : $"connector-core tunnel exited with code {exitCode}: {stdout.Trim()}";
                             _lastTunnelError = message;
-                            _healthReasonCode = "ssh_process_exited";
-                            _log.Warn($"Relay '{_relay.Name}' tunnel process exited. connectionId={connectionId} {message}");
+                            _healthReasonCode = "frp_process_exited";
+                            _log.Warn($"Relay '{_relay.Name}' FRP process exited. connectionId={connectionId} {message}");
                             RecordEvent("warn", message);
                         }
 
@@ -801,7 +834,7 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     {
                         _activeTunnelConnectionId = null;
                     }
-                    ReleaseRemoteTunnelMutex();
+                    _frpTunnelStatePath = string.Empty;
                 }
                 catch
                 {
@@ -809,7 +842,7 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     {
                         _activeTunnelConnectionId = null;
                     }
-                    ReleaseRemoteTunnelMutex();
+                    _frpTunnelStatePath = string.Empty;
                 }
             });
             }
@@ -857,68 +890,86 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 _processStartedAtUtc = null;
                 _tunnelConnected = false;
                 _activeTunnelConnectionId = null;
-                ReleaseRemoteTunnelMutex();
+                _frpTunnelStatePath = string.Empty;
             }
         }
 
-        private bool TryAcquireRemoteTunnelMutex(ServiceConfig config)
+        private async Task PruneDuplicateFrpTunnelProcessesAsync()
         {
-            var name = BuildRemoteTunnelMutexName(config);
             try
             {
-                _remoteTunnelMutex ??= new Mutex(false, name);
-                if (_remoteTunnelMutexHeld)
+                var frpcConfig = ServicePaths.GetRelayFrpcConfigPath(_relay.Id);
+                var currentPid = Process.GetCurrentProcess().Id;
+                var trackedPid = _sshProcess?.Id ?? -1;
+                var command =
+                    "$cfg = '" + EscapePowerShellSingleQuoted(frpcConfig) + "'; " +
+                    "$self = " + currentPid + "; " +
+                    "$tracked = " + trackedPid + "; " +
+                    "Get-CimInstance Win32_Process | " +
+                    "Where-Object { $_.CommandLine -and ($_.Name -ieq 'connector-core.exe' -or $_.Name -ieq 'connector-core') -and $_.CommandLine -like ('*tunnel*run*--config*' + $cfg + '*') -and $_.ProcessId -ne $self -and $_.ProcessId -ne $tracked } | " +
+                    "ForEach-Object { $_.ProcessId }";
+
+                var psi = new ProcessStartInfo
                 {
-                    return true;
+                    FileName = "powershell",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                psi.ArgumentList.Add("-NoLogo");
+                psi.ArgumentList.Add("-NoProfile");
+                psi.ArgumentList.Add("-ExecutionPolicy");
+                psi.ArgumentList.Add("Bypass");
+                psi.ArgumentList.Add("-Command");
+                psi.ArgumentList.Add(command);
+
+                using var process = new Process { StartInfo = psi };
+                if (!process.Start())
+                {
+                    return;
                 }
 
-                if (!_remoteTunnelMutex.WaitOne(0))
+                var stdout = await process.StandardOutput.ReadToEndAsync();
+                _ = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                var pids = stdout
+                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(x => int.TryParse(x, out var pid) ? pid : -1)
+                    .Where(pid => pid > 0)
+                    .Distinct()
+                    .ToArray();
+
+                if (pids.Length == 0)
                 {
-                    return false;
+                    return;
                 }
 
-                _remoteTunnelMutexHeld = true;
-                return true;
-            }
-            catch (AbandonedMutexException)
-            {
-                _remoteTunnelMutexHeld = true;
-                return true;
-            }
-            catch
-            {
-                return true;
-            }
-        }
+                var killed = 0;
+                foreach (var pid in pids)
+                {
+                    try
+                    {
+                        using var stale = Process.GetProcessById(pid);
+                        stale.Kill(entireProcessTree: true);
+                        killed++;
+                    }
+                    catch
+                    {
+                    }
+                }
 
-        private void ReleaseRemoteTunnelMutex()
-        {
-            if (!_remoteTunnelMutexHeld || _remoteTunnelMutex is null)
-            {
-                return;
+                if (killed > 0)
+                {
+                    _log.Info($"Relay '{_relay.Name}' FRP duplicate tunnel cleanup: matched={pids.Length}, killed={killed}");
+                    RecordEvent("info", $"frp duplicate tunnel cleanup: matched={pids.Length}, killed={killed}");
+                    await Task.Delay(400);
+                }
             }
-
-            try
+            catch (Exception ex)
             {
-                _remoteTunnelMutex.ReleaseMutex();
+                _log.Warn($"Relay '{_relay.Name}' FRP duplicate tunnel cleanup failed: {ex.Message}");
             }
-            catch
-            {
-            }
-            finally
-            {
-                _remoteTunnelMutexHeld = false;
-            }
-        }
-
-        private static string BuildRemoteTunnelMutexName(ServiceConfig config)
-        {
-            var key = $"{(config.TunnelHost ?? string.Empty).Trim().ToLowerInvariant()}|" +
-                      $"{(config.TunnelUser ?? string.Empty).Trim().ToLowerInvariant()}|" +
-                      $"{config.TunnelSshPort}|{config.TunnelRemotePort}|{config.BootstrapSocksRemotePort}";
-            var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(key));
-            var token = Convert.ToHexString(bytes[..12]);
-            return $"Global\\OmniRelay.RemoteTunnel.{token}";
         }
 
         private async Task<(bool Success, string Protocol, string ReasonCode)> ProbeBackendEndpointAsync(int port, CancellationToken cancellationToken)
@@ -1128,22 +1179,41 @@ public sealed class RelayRuntimeWorker : BackgroundService
         {
             try
             {
-                var signatureA = $":{config.TunnelRemotePort}:127.0.0.1:{config.LocalProxyListenPort}";
-                var signatureB = $":{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}";
-                var owners = Process.GetProcessesByName("ssh")
-                    .Select(p =>
-                    {
-                        try
-                        {
-                            return (p.Id, Cmd: p.MainWindowTitle);
-                        }
-                        catch
-                        {
-                            return (p.Id, Cmd: string.Empty);
-                        }
-                    })
-                    .Where(x => !string.IsNullOrWhiteSpace(x.Cmd) && (x.Cmd.Contains(signatureA, StringComparison.Ordinal) || x.Cmd.Contains(signatureB, StringComparison.Ordinal)))
-                    .Select(x => x.Id.ToString())
+                var frpcConfig = ServicePaths.GetRelayFrpcConfigPath(_relay.Id);
+                var command =
+                    "$cfg = '" + EscapePowerShellSingleQuoted(frpcConfig) + "'; " +
+                    "Get-CimInstance Win32_Process | " +
+                    "Where-Object { $_.CommandLine -and ($_.Name -ieq 'connector-core.exe' -or $_.Name -ieq 'connector-core') -and $_.CommandLine -like ('*tunnel*run*--config*' + $cfg + '*') } | " +
+                    "ForEach-Object { $_.ProcessId }";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "powershell",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                psi.ArgumentList.Add("-NoLogo");
+                psi.ArgumentList.Add("-NoProfile");
+                psi.ArgumentList.Add("-ExecutionPolicy");
+                psi.ArgumentList.Add("Bypass");
+                psi.ArgumentList.Add("-Command");
+                psi.ArgumentList.Add(command);
+
+                using var process = new Process { StartInfo = psi };
+                if (!process.Start())
+                {
+                    return "ownerPid=unknown";
+                }
+
+                var stdout = process.StandardOutput.ReadToEnd();
+                _ = process.StandardError.ReadToEnd();
+                process.WaitForExit(2000);
+                var owners = stdout
+                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.Ordinal)
                     .ToArray();
                 return owners.Length == 0 ? "ownerPid=unknown" : $"ownerPid={string.Join(",", owners)}";
             }
@@ -1159,178 +1229,103 @@ public sealed class RelayRuntimeWorker : BackgroundService
             TimeSpan timeout,
             CancellationToken cancellationToken)
         {
-            if (!SshTunnelProcessFactory.TryCreateRemoteCommandStartInfo(
-                    config,
-                    remoteCommand,
-                    out var startInfo,
-                    out var createError) || startInfo is null)
+            static async Task<(bool Success, string Stdout, string Stderr, string? Error)> ExecuteOnceAsync(
+                ServiceConfig cfg,
+                string cmd,
+                TimeSpan execTimeout,
+                CancellationToken ct)
             {
-                return (false, string.Empty, string.Empty, createError ?? "failed to create ssh command");
-            }
-
-            Process? process = null;
-            try
-            {
-                process = new Process { StartInfo = startInfo };
-                if (!process.Start())
+                if (!SshTunnelProcessFactory.TryCreateRemoteCommandStartInfo(
+                        cfg,
+                        cmd,
+                        out var startInfo,
+                        out var createError) || startInfo is null)
                 {
-                    return (false, string.Empty, string.Empty, "failed to start ssh process");
+                    return (false, string.Empty, string.Empty, createError ?? "failed to create ssh command");
                 }
 
-                process.StandardInput.Close();
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(timeout);
-                var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-                var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
-                await process.WaitForExitAsync(timeoutCts.Token);
-                var stdout = (await stdoutTask).Trim();
-                var stderr = (await stderrTask).Trim();
-                if (process.ExitCode != 0)
-                {
-                    var detail = FirstNonEmpty(stderr, stdout);
-                    var message = string.IsNullOrWhiteSpace(detail)
-                        ? $"ssh exited with code {process.ExitCode}"
-                        : $"ssh exited with code {process.ExitCode}: {detail}";
-                    return (false, stdout, stderr, message);
-                }
-
-                return (true, stdout, stderr, null);
-            }
-            catch (OperationCanceledException ex)
-            {
-                return (false, string.Empty, string.Empty, ex.Message);
-            }
-            catch (Exception ex)
-            {
-                return (false, string.Empty, string.Empty, ex.Message);
-            }
-            finally
-            {
+                Process? process = null;
                 try
                 {
-                    if (process is { HasExited: false })
+                    process = new Process { StartInfo = startInfo };
+                    if (!process.Start())
                     {
-                        process.Kill(entireProcessTree: true);
+                        return (false, string.Empty, string.Empty, "failed to start ssh process");
                     }
-                }
-                catch
-                {
-                }
 
-                process?.Dispose();
+                    process.StandardInput.Close();
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeoutCts.CancelAfter(execTimeout);
+                    var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+                    var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+                    await process.WaitForExitAsync(timeoutCts.Token);
+                    var stdout = (await stdoutTask).Trim();
+                    var stderr = (await stderrTask).Trim();
+                    if (process.ExitCode != 0)
+                    {
+                        var detail = FirstNonEmpty(stderr, stdout);
+                        var message = string.IsNullOrWhiteSpace(detail)
+                            ? $"ssh exited with code {process.ExitCode}"
+                            : $"ssh exited with code {process.ExitCode}: {detail}";
+                        return (false, stdout, stderr, message);
+                    }
+
+                    return (true, stdout, stderr, null);
+                }
+                catch (OperationCanceledException ex)
+                {
+                    return (false, string.Empty, string.Empty, ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    return (false, string.Empty, string.Empty, ex.Message);
+                }
+                finally
+                {
+                    try
+                    {
+                        if (process is { HasExited: false })
+                        {
+                            process.Kill(entireProcessTree: true);
+                        }
+                    }
+                    catch
+                    {
+                    }
+
+                    process?.Dispose();
+                }
             }
+
+            var first = await ExecuteOnceAsync(config, remoteCommand, timeout, cancellationToken);
+            if (first.Success)
+            {
+                return first;
+            }
+
+            var firstDetail = FirstNonEmpty(first.Stderr, first.Stdout, first.Error) ?? string.Empty;
+            if (!SshKnownHostsRepair.LooksLikeHostKeyMismatch(firstDetail))
+            {
+                return first;
+            }
+
+            var repair = await SshKnownHostsRepair.TryRepairAsync(config, cancellationToken);
+            _log.Warn($"Relay '{_relay.Name}' detected SSH host-key mismatch while running remote command. {repair.Message}");
+            if (!repair.Success)
+            {
+                return first;
+            }
+
+            var second = await ExecuteOnceAsync(config, remoteCommand, timeout, cancellationToken);
+            if (!second.Success)
+            {
+                return second;
+            }
+
+            RecordEvent("warn", "ssh known_hosts entry repaired automatically and remote command retried successfully");
+            return second;
         }
 
-        private async Task CleanupOrphanTunnelProcessesAsync(ServiceConfig config, CancellationToken cancellationToken)
-        {
-            var tunnelForwardSignature = $"127.0.0.1:{config.TunnelRemotePort}:127.0.0.1:{config.LocalProxyListenPort}";
-            var bootstrapForwardSignature = $"127.0.0.1:{config.BootstrapSocksRemotePort}:127.0.0.1:{config.BootstrapSocksLocalPort}";
-            var tunnelHost = (config.TunnelHost ?? string.Empty).Trim();
-            var tunnelUser = (config.TunnelUser ?? string.Empty).Trim();
-            var command =
-                "$killed = @(); " +
-                "$matched = @(); " +
-                "$forwardA = '" + EscapePowerShellSingleQuoted(tunnelForwardSignature) + "'; " +
-                "$forwardB = '" + EscapePowerShellSingleQuoted(bootstrapForwardSignature) + "'; " +
-                "$forwardALegacy = ':" + config.TunnelRemotePort + ":127.0.0.1:" + config.LocalProxyListenPort + "'; " +
-                "$forwardBLegacy = ':" + config.BootstrapSocksRemotePort + ":127.0.0.1:" + config.BootstrapSocksLocalPort + "'; " +
-                "$targetHost = '" + EscapePowerShellSingleQuoted(tunnelHost) + "'; " +
-                "$targetUser = '" + EscapePowerShellSingleQuoted(tunnelUser) + "'; " +
-                "Get-CimInstance Win32_Process -Filter \"Name = 'ssh.exe'\" | " +
-                "Where-Object { " +
-                "  $_.CommandLine -and " +
-                "  $_.CommandLine -like ('*' + $targetUser + '@' + $targetHost + '*') -and " +
-                "  (" +
-                "    $_.CommandLine -like ('*' + $forwardA + '*') -or " +
-                "    $_.CommandLine -like ('*' + $forwardB + '*') -or " +
-                "    $_.CommandLine -like ('*' + $forwardALegacy + '*') -or " +
-                "    $_.CommandLine -like ('*' + $forwardBLegacy + '*')" +
-                "  )" +
-                "} | " +
-                "ForEach-Object { $matched += $_.ProcessId; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; if ($?) { $killed += $_.ProcessId } }; " +
-                "Write-Output ('Relay stale ssh cleanup: matched=' + $matched.Count + ', killed=' + $killed.Count)";
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = "powershell",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            psi.ArgumentList.Add("-NoLogo");
-            psi.ArgumentList.Add("-NoProfile");
-            psi.ArgumentList.Add("-ExecutionPolicy");
-            psi.ArgumentList.Add("Bypass");
-            psi.ArgumentList.Add("-Command");
-            psi.ArgumentList.Add(command);
-
-            try
-            {
-                using var process = new Process { StartInfo = psi };
-                if (!process.Start())
-                {
-                    return;
-                }
-
-                var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-                var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-                await process.WaitForExitAsync(cancellationToken);
-                var stdout = (await stdoutTask).Trim();
-                var stderr = (await stderrTask).Trim();
-                if (!string.IsNullOrWhiteSpace(stdout))
-                {
-                    _log.Info(stdout);
-                }
-
-                if (!string.IsNullOrWhiteSpace(stderr))
-                {
-                    _log.Warn($"Relay stale tunnel cleanup stderr: {stderr}");
-                }
-            }
-            catch (Exception ex)
-            {
-                _log.Warn($"Failed to cleanup stale relay tunnel ssh processes: {ex.Message}");
-            }
-        }
-
-        private async Task TryScheduleRemoteForwardCleanupAsync(ServiceConfig config, CancellationToken cancellationToken, string? connectionId = null)
-        {
-            if (config.TunnelRemotePort <= 0 || config.BootstrapSocksRemotePort <= 0)
-            {
-                return;
-            }
-
-            var ports = $"{config.TunnelRemotePort} {config.BootstrapSocksRemotePort}";
-            var remoteCommand =
-                "ports=" + ShellSingleQuote(ports) + "; " +
-                "killed=0; " +
-                "for p in $ports; do " +
-                "for pid in $(ss -lntp \"( sport = :$p )\" 2>/dev/null | sed -n \"s/.*pid=\\([0-9]\\+\\).*/\\1/p\" | sort -u); do " +
-                "kill -KILL \"$pid\" >/dev/null 2>&1 && killed=$((killed+1)) || true; " +
-                "done; " +
-                "done; " +
-                "remaining=0; " +
-                "for p in $ports; do " +
-                "c=$(ss -lntp \"( sport = :$p )\" 2>/dev/null | sed -n \"s/.*pid=\\([0-9]\\+\\).*/\\1/p\" | wc -l); " +
-                "remaining=$((remaining+c)); " +
-                "done; " +
-                "echo \"Remote forward listener cleanup attempted for ports: $ports; killed=$killed; remaining_listeners=$remaining\"";
-
-            var (ok, stdout, stderr, error) = await ExecuteRemoteGatewayctlCommandAsync(
-                config,
-                remoteCommand,
-                TimeSpan.FromSeconds(12),
-                cancellationToken);
-            if (!ok)
-            {
-                _log.Warn($"Remote relay tunnel cleanup request failed: {FirstNonEmpty(stderr, stdout, error) ?? "unknown error"} connectionId={connectionId ?? _activeTunnelConnectionId ?? "none"}");
-            }
-            else if (!string.IsNullOrWhiteSpace(stdout))
-            {
-                _log.Info($"{stdout} connectionId={connectionId ?? _activeTunnelConnectionId ?? "none"}");
-            }
-        }
 
         private async Task EnsureLocalGatewayRuntimeAsync(CancellationToken cancellationToken)
         {
@@ -2834,9 +2829,9 @@ exit /b %ERRORLEVEL%
             _log.Warn($"Relay '{_relay.Name}' {normalizedPhase} failed. reason={normalizedReason} detail={normalizedDetail}");
         }
 
-        private static async Task<(bool Success, string Error)> ProbeSshReachabilityRouteOnlyAsync(
-            string tunnelHost,
-            int tunnelPort,
+        private static async Task<(bool Success, string Error)> ProbeTcpReachabilityAsync(
+            string host,
+            int port,
             CancellationToken cancellationToken)
         {
             try
@@ -2844,7 +2839,7 @@ exit /b %ERRORLEVEL%
                 using var client = new TcpClient();
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 cts.CancelAfter(TimeSpan.FromSeconds(8));
-                await client.ConnectAsync(tunnelHost, tunnelPort, cts.Token);
+                await client.ConnectAsync(host, port, cts.Token);
                 return (true, string.Empty);
             }
             catch (Exception ex)
@@ -2853,165 +2848,98 @@ exit /b %ERRORLEVEL%
             }
         }
 
-        private static async Task<bool> HasEstablishedSshSessionAsync(
-            int processId,
-            ServiceConfig config,
-            CancellationToken cancellationToken)
+        private async Task<bool> EnsureRemoteFrpsReadyAsync(ServiceConfig config, CancellationToken cancellationToken)
         {
-            var hostCandidates = await ResolveTunnelHostCandidatesAsync(config.TunnelHost, cancellationToken);
-            var lines = await ReadNetstatTcpLinesAsync(cancellationToken);
+            var command =
+                "set -euo pipefail; " +
+                "systemctl is-active omnirelay-frps.service >/dev/null 2>&1 || { echo 'frps_inactive'; exit 71; }; " +
+                $"ss -lnt '( sport = :{config.FrpServerPort} )' 2>/dev/null | awk 'NR>1 {{ found=1 }} END {{ exit found ? 0 : 1 }}' || {{ echo 'frps_port_not_listening'; exit 72; }}; " +
+                "echo 'frps_ready';";
+            var (ok, stdout, stderr, error) = await ExecuteRemoteGatewayctlCommandAsync(
+                config,
+                command,
+                TimeSpan.FromSeconds(12),
+                cancellationToken);
 
-            foreach (var line in lines)
-            {
-                var parts = SplitColumns(line);
-                if (parts.Length < 5 ||
-                    !parts[0].Equals("TCP", StringComparison.OrdinalIgnoreCase) ||
-                    !int.TryParse(parts[^1], out var pid) ||
-                    pid != processId ||
-                    !parts[^2].Equals("ESTABLISHED", StringComparison.OrdinalIgnoreCase) ||
-                    !TryParseEndpoint(parts[^3], out var remoteHost, out var remotePort) ||
-                    remotePort != config.TunnelSshPort)
-                {
-                    continue;
-                }
-
-                if (HostMatchesCandidates(remoteHost, hostCandidates))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static async Task<IReadOnlyList<string>> ReadNetstatTcpLinesAsync(CancellationToken cancellationToken)
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "netstat",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            psi.ArgumentList.Add("-ano");
-            psi.ArgumentList.Add("-p");
-            psi.ArgumentList.Add("tcp");
-
-            using var process = new Process { StartInfo = psi };
-            if (!process.Start())
-            {
-                return [];
-            }
-
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-            var stdout = await stdoutTask;
-            _ = await stderrTask;
-
-            return stdout
-                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim())
-                .Where(x => x.Length > 0)
-                .ToArray();
-        }
-
-        private static string[] SplitColumns(string line)
-        {
-            return line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        }
-
-        private static bool TryParseEndpoint(string token, out string host, out int port)
-        {
-            host = string.Empty;
-            port = 0;
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                return false;
-            }
-
-            var value = token.Trim();
-            if (value.StartsWith("[", StringComparison.Ordinal))
-            {
-                var end = value.LastIndexOf(']');
-                if (end <= 1 || end + 2 >= value.Length || value[end + 1] != ':')
-                {
-                    return false;
-                }
-
-                host = value[1..end];
-                return int.TryParse(value[(end + 2)..], out port);
-            }
-
-            var lastColon = value.LastIndexOf(':');
-            if (lastColon <= 0 || lastColon >= value.Length - 1)
-            {
-                return false;
-            }
-
-            host = value[..lastColon];
-            return int.TryParse(value[(lastColon + 1)..], out port);
-        }
-
-        private static async Task<HashSet<string>> ResolveTunnelHostCandidatesAsync(string host, CancellationToken cancellationToken)
-        {
-            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var normalized = (host ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(normalized))
-            {
-                return set;
-            }
-
-            set.Add(normalized);
-            if (IPAddress.TryParse(normalized, out var ip))
-            {
-                set.Add(ip.ToString());
-                return set;
-            }
-
-            try
-            {
-                var addresses = await Dns.GetHostAddressesAsync(normalized, cancellationToken);
-                foreach (var address in addresses)
-                {
-                    set.Add(address.ToString());
-                }
-            }
-            catch
-            {
-            }
-
-            return set;
-        }
-
-        private static bool HostMatchesCandidates(string remoteHost, HashSet<string> candidates)
-        {
-            var normalizedRemote = (remoteHost ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(normalizedRemote))
-            {
-                return false;
-            }
-
-            if (candidates.Contains(normalizedRemote))
+            if (ok)
             {
                 return true;
             }
 
-            if (!IPAddress.TryParse(normalizedRemote, out var remoteIp))
+            var detail = FirstNonEmpty(stderr, stdout, error) ?? "FRPS readiness probe failed.";
+            _healthReasonCode = "frp_server_not_ready";
+            _tunnelState = "PendingProvisioning";
+            _healthState = "Pending";
+            _recoveryAction = "waiting_gateway_install";
+            _lastTunnelError = $"FRPS is not ready on VPS ({config.TunnelHost}:{config.FrpServerPort}). Install/Start gateway first. Detail: {detail}";
+            LogProbeFailure("frp_server_probe", _healthReasonCode, _lastTunnelError);
+            return false;
+        }
+
+        private async Task<bool> HasEstablishedFrpSessionAsync(
+            ServiceConfig config,
+            CancellationToken cancellationToken)
+        {
+            if (_sshProcess is null || _sshProcess.HasExited)
             {
                 return false;
             }
 
-            foreach (var candidate in candidates)
+            if (string.IsNullOrWhiteSpace(_frpTunnelStatePath))
             {
-                if (IPAddress.TryParse(candidate, out var candidateIp) && candidateIp.Equals(remoteIp))
-                {
-                    return true;
-                }
+                return DateTimeOffset.UtcNow - (_processStartedAtUtc ?? DateTimeOffset.MinValue) > TimeSpan.FromSeconds(4);
             }
 
-            return false;
+            try
+            {
+                if (!File.Exists(_frpTunnelStatePath))
+                {
+                    return DateTimeOffset.UtcNow - (_processStartedAtUtc ?? DateTimeOffset.MinValue) > TimeSpan.FromSeconds(6);
+                }
+
+                var json = await File.ReadAllTextAsync(_frpTunnelStatePath, cancellationToken);
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    return false;
+                }
+
+                using var document = JsonDocument.Parse(json);
+                if (!document.RootElement.TryGetProperty("sessionEstablished", out var establishedProp) ||
+                    establishedProp.ValueKind != JsonValueKind.True && establishedProp.ValueKind != JsonValueKind.False)
+                {
+                    return false;
+                }
+
+                var established = establishedProp.GetBoolean();
+                if (!document.RootElement.TryGetProperty("lastError", out var lastErrorProp))
+                {
+                    return established;
+                }
+
+                var lastError = lastErrorProp.GetString() ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(lastError))
+                {
+                    _lastTunnelError = lastError;
+                    if (lastError.Contains("token", StringComparison.OrdinalIgnoreCase) &&
+                        (lastError.Contains("mismatch", StringComparison.OrdinalIgnoreCase) ||
+                         lastError.Contains("invalid", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _healthReasonCode = "frp_server_token_mismatch";
+                    }
+                    else if (lastError.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+                             lastError.Contains("auth", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _healthReasonCode = "frp_auth_failed";
+                    }
+                }
+
+                return established;
+            }
+            catch
+            {
+                return DateTimeOffset.UtcNow - (_processStartedAtUtc ?? DateTimeOffset.MinValue) > TimeSpan.FromSeconds(6) &&
+                       _sshProcess is { HasExited: false };
+            }
         }
 
         private static async Task ReadExactAsync(NetworkStream stream, byte[] buffer, CancellationToken cancellationToken)
@@ -3064,25 +2992,14 @@ exit /b %ERRORLEVEL%
         {
             return conflictCount switch
             {
-                <= 1 => TimeSpan.FromSeconds(15),
-                2 => TimeSpan.FromSeconds(30),
-                _ => TimeSpan.FromSeconds(45)
+                <= 1 => TimeSpan.FromSeconds(15 + Random.Shared.Next(1, 5)),
+                2 => TimeSpan.FromSeconds(30 + Random.Shared.Next(2, 8)),
+                3 => TimeSpan.FromSeconds(60 + Random.Shared.Next(3, 12)),
+                _ => TimeSpan.FromSeconds(120 + Random.Shared.Next(5, 20))
             };
         }
 
-        private static bool HasRemoteForwardFailure(string? error)
-        {
-            if (string.IsNullOrWhiteSpace(error))
-            {
-                return false;
-            }
-
-            return error.Contains("remote port forwarding failed", StringComparison.OrdinalIgnoreCase) ||
-                   error.Contains("forwarding failed", StringComparison.OrdinalIgnoreCase) ||
-                   error.Contains("administratively prohibited", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static bool TryGetRemoteForwardConflictPort(string? error, out int port)
+        private static bool HasFrpPortConflict(string? error, out int port)
         {
             port = 0;
             if (string.IsNullOrWhiteSpace(error))
@@ -3090,9 +3007,22 @@ exit /b %ERRORLEVEL%
                 return false;
             }
 
+            if (error.Contains("port already used", StringComparison.OrdinalIgnoreCase) ||
+                error.Contains("remote port already", StringComparison.OrdinalIgnoreCase) ||
+                error.Contains("address already in use", StringComparison.OrdinalIgnoreCase))
+            {
+                var numeric = Regex.Match(error, @"\b([1-9][0-9]{0,4})\b", RegexOptions.CultureInvariant);
+                if (numeric.Success && int.TryParse(numeric.Groups[1].Value, out var detectedPort))
+                {
+                    port = detectedPort;
+                }
+
+                return true;
+            }
+
             var match = Regex.Match(
                 error,
-                @"remote port forwarding failed for listen port\s+(\d+)",
+                @"(?:listen|remote).*port\s+(\d+)",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (!match.Success)
             {
@@ -3195,7 +3125,7 @@ exit /b %ERRORLEVEL%
                 TunnelReconnectCount = _reconnectCount,
                 TunnelLastError = _lastTunnelError,
                 DataPlaneListening = _dataPlane.Running,
-                BootstrapSocksListening = _bootstrapSocksListening,
+                BootstrapSocksListening = false,
                 BootstrapSocksRemoteForwardActive = _tunnelConnected && _localProbeOk,
                 BootstrapSocksLastError = _lastBootstrapError,
                 IncomingAdapterIp = incomingIp?.ToString(),
@@ -3261,27 +3191,44 @@ exit /b %ERRORLEVEL%
 
         private static ServiceConfig ToServiceConfig(RelayConfig relay)
         {
+            var remote = relay.RemoteGateway ?? new RemoteGatewayConfig();
             return new ServiceConfig
             {
                 GatewayType = GatewayTypes.Normalize(relay.GatewayType),
                 LocalProxyListenPort = relay.DataPlaneLocalPort,
                 BootstrapSocksLocalPort = relay.BootstrapSocksLocalPort,
-                BootstrapSocksRemotePort = relay.BootstrapSocksRemotePort,
+                TunnelRemotePort = remote.TunnelRemotePort is > 0 and <= 65535 ? remote.TunnelRemotePort : 15000,
                 WhitelistAdapterIfIndex = NetworkAdapterCatalog.TryResolveIfIndex(relay.IncomingAdapterId, relay.IncomingAdapterIfIndex, out var incomingIfIndex) ? incomingIfIndex : relay.IncomingAdapterIfIndex,
                 DefaultAdapterIfIndex = NetworkAdapterCatalog.TryResolveIfIndex(relay.OutgoingAdapterId, relay.OutgoingAdapterIfIndex, out var outgoingIfIndex) ? outgoingIfIndex : relay.OutgoingAdapterIfIndex,
-                TunnelHost = relay.RemoteGateway.TunnelHost,
-                TunnelSshPort = relay.RemoteGateway.TunnelSshPort,
-                TunnelRemotePort = relay.RemoteGateway.TunnelRemotePort,
-                TunnelUser = relay.RemoteGateway.TunnelUser,
-                TunnelAuthMethod = relay.RemoteGateway.TunnelAuthMethod,
-                TunnelPrivateKeyPath = relay.RemoteGateway.TunnelPrivateKeyPath,
-                TunnelPrivateKeyPassphrase = relay.RemoteGateway.TunnelPrivateKeyPassphrase,
-                TunnelPassword = relay.RemoteGateway.TunnelPassword
+                TunnelHost = remote.TunnelHost,
+                TunnelSshPort = remote.TunnelSshPort,
+                FrpServerPort = 7000,
+                FrpRuntimeToken = string.Empty,
+                TunnelUser = remote.TunnelUser,
+                TunnelAuthMethod = remote.TunnelAuthMethod,
+                TunnelPrivateKeyPath = remote.TunnelPrivateKeyPath,
+                TunnelPrivateKeyPassphrase = remote.TunnelPrivateKeyPassphrase,
+                TunnelPassword = remote.TunnelPassword
             };
+        }
+
+        private static FrpServerProfile? ResolveFrpServerProfile(ServiceConfig runtimeConfig, string? tunnelHost)
+        {
+            var host = (tunnelHost ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                return null;
+            }
+
+            var profiles = runtimeConfig.FrpServerProfiles ?? [];
+            return profiles.FirstOrDefault(x =>
+                x is not null &&
+                string.Equals((x.TunnelHost ?? string.Empty).Trim(), host, StringComparison.OrdinalIgnoreCase));
         }
 
         private static RelayConfig Clone(RelayConfig relay)
         {
+            var remote = relay.RemoteGateway;
             return new RelayConfig
             {
                 Id = relay.Id,
@@ -3294,7 +3241,7 @@ exit /b %ERRORLEVEL%
                 OutgoingAdapterIfIndex = relay.OutgoingAdapterIfIndex,
                 DataPlaneLocalPort = relay.DataPlaneLocalPort,
                 BootstrapSocksLocalPort = relay.BootstrapSocksLocalPort,
-                BootstrapSocksRemotePort = relay.BootstrapSocksRemotePort,
+                FrpProfilePortOverride = 7000,
                 OmniPanel = new RelayOmniPanelConfig
                 {
                     Port = relay.OmniPanel?.Port is > 0 and <= 65535
@@ -3356,3 +3303,6 @@ exit /b %ERRORLEVEL%
         }
     }
 }
+
+
+

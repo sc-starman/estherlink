@@ -16,10 +16,13 @@ import {
   normalizeClientOptions,
   normalizeImportedClientFile,
   listProtocolClientsFromDb,
+  readUsageByClientIds,
   readRuntimeStatsByClientIds,
   normalizeSpeedLimitKbps,
+  normalizeUsedBytes,
   runGatewaySync,
   upsertProtocolClientToDb,
+  upsertUsageTotalByClientId,
   deleteProtocolClientFromDb
 } from "@/lib/providers/singbox-shared";
 import { createJsonClientBackup, readJsonClientBackup } from "@/lib/providers/backup";
@@ -169,7 +172,14 @@ export class ShadowsocksSingboxProvider implements GatewayProtocolProvider {
 
   public async exportBackup(_session: OmniSession): Promise<ProtocolBackupPayload> {
     const clients = await listProtocolClientsFromDb(this.protocolId);
-    return createJsonClientBackup(this.protocolId, clients);
+    const usageByClientId = await readUsageByClientIds(clients.map((item) => item.id));
+    return createJsonClientBackup(
+      this.protocolId,
+      clients.map((client) => ({
+        ...client,
+        usedBytes: usageByClientId.get(client.id) ?? 0
+      }))
+    );
   }
 
   public async importBackup(_session: OmniSession, input: ProtocolBackupInput): Promise<void> {
@@ -185,6 +195,7 @@ export class ShadowsocksSingboxProvider implements GatewayProtocolProvider {
         authUsername: "",
         authSecret: String(client.password ?? "")
       });
+      await upsertUsageTotalByClientId(client.id, normalizeUsedBytes(client.usedBytes));
     }
     await runGatewaySync();
   }

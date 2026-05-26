@@ -1,6 +1,8 @@
 param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Debug",
+    [ValidateSet("stable", "beta")]
+    [string]$Channel = "beta",
     [string]$ServiceName = "OmniRelay.Service",
     [string]$ServiceDisplayName = "OmniRelay Service",
     [switch]$SkipUiLaunch,
@@ -37,6 +39,7 @@ function Ensure-Elevated {
         "-ExecutionPolicy", "Bypass",
         "-File", "`"$PSCommandPath`"",
         "-Configuration", $Configuration,
+        "-Channel", $Channel,
         "-ServiceName", "`"$ServiceName`"",
         "-ServiceDisplayName", "`"$ServiceDisplayName`"",
         "-Elevated"
@@ -74,6 +77,30 @@ function Stop-LockingNodeProcesses {
             }
             catch {
                 Write-Host "Failed to stop node.exe PID=$($_.ProcessId): $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+}
+
+function Stop-LockingConnectorCoreProcesses {
+    param([string]$RepoRootPath)
+
+    Write-Step "Stopping connector-core processes that may lock service outputs"
+    $serviceBin = (Join-Path $RepoRootPath "src\OmniRelay.Service\bin").ToLowerInvariant()
+    $serviceSource = (Join-Path $RepoRootPath "src\OmniRelay.Service\connector-core").ToLowerInvariant()
+    $localGatewayRoot = "c:\\programdata\\omnirelay\\local-gateway\\relays\\"
+
+    Get-CimInstance Win32_Process -Filter "name = 'connector-core.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+        $cmdLine = $_.CommandLine
+        if ($null -eq $cmdLine) { $cmdLine = "" }
+        $cmd = $cmdLine.ToLowerInvariant()
+        if ($cmd.Contains($serviceBin) -or $cmd.Contains($serviceSource) -or $cmd.Contains($localGatewayRoot)) {
+            try {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+                Write-Host "Stopped connector-core.exe PID=$($_.ProcessId)" -ForegroundColor DarkYellow
+            }
+            catch {
+                Write-Host "Failed to stop connector-core.exe PID=$($_.ProcessId): $($_.Exception.Message)" -ForegroundColor Yellow
             }
         }
     }
@@ -137,6 +164,10 @@ Ensure-Elevated
 Assert-Admin
 Stop-UiProcesses
 Stop-LockingNodeProcesses -RepoRootPath $repoRoot
+Stop-LockingConnectorCoreProcesses -RepoRootPath $repoRoot
+
+$env:OMNIRELAY_GATEWAY_ASSET_CHANNEL = $Channel
+Write-Step "Using gateway asset channel: $Channel"
 
 Write-Step "Stopping and reinstalling Windows relay service"
 Remove-ServiceIfExists -Name $ServiceName

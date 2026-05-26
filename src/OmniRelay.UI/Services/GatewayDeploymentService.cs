@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Net;
+using System.Net.Sockets;
 
 namespace OmniRelay.UI.Services;
 
@@ -35,6 +36,24 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        return await CheckGatewayBootstrapInternalAsync(
+            request,
+            sudoPassword,
+            progress,
+            cancellationToken,
+            bootstrapTunnelAlreadyEstablished: false);
+    }
+
+    private async Task<GatewayOperationResult> CheckGatewayBootstrapInternalAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken,
+        bool bootstrapTunnelAlreadyEstablished,
+        int? bootstrapSocksRemotePortOverride = null)
+    {
+        Process? bootstrapTunnelProcess = null;
+        int? temporaryBootstrapPort = null;
         try
         {
             ValidateRequest(request);
@@ -51,6 +70,18 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 return new GatewayOperationResult(true, "Direct bootstrap mode selected; SOCKS bootstrap preflight skipped.");
             }
 
+            if (!bootstrapTunnelAlreadyEstablished)
+            {
+                var bootstrapSession = await StartTemporaryBootstrapTunnelAsync(request, progress, cancellationToken);
+                if (!bootstrapSession.Success || bootstrapSession.Process is null)
+                {
+                    return new GatewayOperationResult(false, bootstrapSession.Message);
+                }
+
+                bootstrapTunnelProcess = bootstrapSession.Process;
+                temporaryBootstrapPort = bootstrapSession.RemotePort;
+            }
+
             progress?.Report(new DeploymentProgressSnapshot
             {
                 Phase = DeploymentPhases.GatewayBootstrap,
@@ -58,7 +89,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 Message = "Checking SOCKS bootstrap endpoint"
             });
 
-            var socksPort = request.Config.BootstrapSocksRemotePort.ToString();
+            var socksPort = (bootstrapSocksRemotePortOverride ?? temporaryBootstrapPort ?? request.Config.TunnelRemotePort).ToString();
             var command = """
                 set -euo pipefail;
                 ss -lnt '( sport = :__PORT__ )' 2>/dev/null | awk 'NR>1 {print $0}' | grep -q . || { echo 'SOCKS listener is not present on 127.0.0.1:__PORT__'; exit 41; };
@@ -183,9 +214,16 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             return new GatewayOperationResult(false, $"Gateway bootstrap check failed: {ex.Message}");
         }
+        finally
+        {
+            if (!bootstrapTunnelAlreadyEstablished)
+            {
+                await StopTemporaryBootstrapTunnelAsync(bootstrapTunnelProcess, progress);
+            }
+        }
     }
 
-    public async Task<GatewayOperationResult> InstallGatewayAsync(
+    public async Task<GatewayOperationResult> TestGatewayTunnelAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
         IProgress<DeploymentProgressSnapshot>? progress = null,
@@ -196,15 +234,148 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             ValidateRequest(request);
             EnsureSudoPassword(sudoPassword);
 
-            var bootstrap = await CheckGatewayBootstrapAsync(request, sudoPassword, progress, cancellationToken);
-            if (!bootstrap.Success)
+            progress?.Report(new DeploymentProgressSnapshot
             {
-                return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrap.Message}");
+                Phase = DeploymentPhases.GatewayHealth,
+                Percent = 10,
+                Message = "Checking FRPS service readiness"
+            });
+
+            var frpPort = request.Config.FrpServerPort.ToString();
+            var frpsCheckCommand = """
+                set -euo pipefail;
+                systemctl is-active omnirelay-frps.service >/dev/null 2>&1 || { echo 'FRPS service is not active'; exit 71; };
+                ss -lnt '( sport = :__FRP_PORT__ )' 2>/dev/null | awk 'NR>1{found=1} END{exit found?0:1}' || { echo 'FRPS control port is not listening on __FRP_PORT__'; exit 72; };
+                echo 'FRPS service is active and listening.';
+                """.Replace("__FRP_PORT__", frpPort);
+
+            var frpsReady = await ExecuteCommandAsync(
+                request.Config,
+                frpsCheckCommand,
+                sudoPassword,
+                line =>
+                {
+                    var clean = SanitizeTerminalLine(line);
+                    if (!string.IsNullOrWhiteSpace(clean))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayHealth,
+                            Percent = 0,
+                            Message = $"[vps] {clean}"
+                        });
+                    }
+                },
+                cancellationToken);
+
+            if (!frpsReady.Success)
+            {
+                return new GatewayOperationResult(false, $"FRP server is not ready: {frpsReady.ErrorMessage}");
+            }
+
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayHealth,
+                Percent = 60,
+                Message = "Checking runtime tunnel health"
+            });
+
+            var health = await GetHealthAsync(request, sudoPassword, progress, cancellationToken);
+            if (!health.TunnelHealthy)
+            {
+                var reason = string.IsNullOrWhiteSpace(health.TunnelReason) ? "unknown" : health.TunnelReason;
+                return new GatewayOperationResult(false, $"Tunnel is unhealthy: {reason}");
+            }
+
+            if (!health.BackendListener)
+            {
+                return new GatewayOperationResult(false, "Tunnel backend listener is down.");
+            }
+
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayHealth,
+                Percent = 100,
+                Message = "FRP tunnel test passed"
+            });
+            return new GatewayOperationResult(true, "FRP tunnel test passed.");
+        }
+        catch (Exception ex)
+        {
+            return new GatewayOperationResult(false, $"FRP tunnel test failed: {ex.Message}");
+        }
+    }
+
+    public async Task<GatewayOperationResult> InstallGatewayAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        Process? bootstrapTunnelProcess = null;
+        int? bootstrapSocksRemotePortOverride = null;
+        try
+        {
+            ValidateRequest(request);
+            EnsureSudoPassword(sudoPassword);
+
+            if (IsTunnelBootstrapMode(request))
+            {
+                var bootstrapSession = await StartTemporaryBootstrapTunnelAsync(request, progress, cancellationToken);
+                if (!bootstrapSession.Success || bootstrapSession.Process is null)
+                {
+                    return new GatewayOperationResult(false, bootstrapSession.Message);
+                }
+
+                bootstrapTunnelProcess = bootstrapSession.Process;
+                bootstrapSocksRemotePortOverride = bootstrapSession.RemotePort;
+
+                if (bootstrapSession.RemotePort <= 0)
+                {
+                    return new GatewayOperationResult(false, "Temporary bootstrap tunnel started without a valid VPS remote port.");
+                }
+
+                var bootstrap = await CheckGatewayBootstrapInternalAsync(
+                    request,
+                    sudoPassword,
+                    progress,
+                    cancellationToken,
+                    bootstrapTunnelAlreadyEstablished: true,
+                    bootstrapSocksRemotePortOverride: bootstrapSocksRemotePortOverride);
+                if (!bootstrap.Success)
+                {
+                    return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrap.Message}");
+                }
+            }
+            else
+            {
+                var bootstrap = await CheckGatewayBootstrapInternalAsync(
+                    request,
+                    sudoPassword,
+                    progress,
+                    cancellationToken,
+                    bootstrapTunnelAlreadyEstablished: true);
+                if (!bootstrap.Success)
+                {
+                    return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrap.Message}");
+                }
             }
 
             await EnsureTunnelModuleInstalledAsync(request, sudoPassword, DeploymentPhases.GatewayInstall, progress, cancellationToken);
             await EnsureCleanProtocolSwitchAsync(request, sudoPassword, progress, cancellationToken);
-            await EnsureRuntimeSocksBackendReadyForInstallAsync(request, sudoPassword, progress, cancellationToken);
+            if (!string.Equals(GatewayTypes.Normalize(request.Config.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+            {
+                await EnsureRuntimeSocksBackendReadyForInstallAsync(request, sudoPassword, progress, cancellationToken);
+            }
+            else
+            {
+                progress?.Report(new DeploymentProgressSnapshot
+                {
+                    Phase = DeploymentPhases.GatewayInstall,
+                    Percent = 4,
+                    Message = "Skipping pre-install backend probe for remote FRP runtime"
+                });
+            }
 
             progress?.Report(new DeploymentProgressSnapshot
             {
@@ -275,7 +446,8 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 uploadedOpenVpnSharedCaCertRemotePath,
                 uploadedOpenVpnSharedClientCertRemotePath,
                 uploadedOpenVpnSharedClientKeyRemotePath,
-                uploadedOpenVpnSharedTlsCryptKeyRemotePath);
+                uploadedOpenVpnSharedTlsCryptKeyRemotePath,
+                bootstrapSocksRemotePortOverride);
             var remoteInstallScriptPath = GetRemoteInstallScriptPath(request);
             var command =
                 "set -euo pipefail; " +
@@ -320,6 +492,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                 return new GatewayOperationResult(false, result.ErrorMessage);
             }
 
+            if (string.Equals(GatewayTypes.Normalize(request.Config.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
+            {
+                await WaitForFrpBackendListenerAfterInstallAsync(request, sudoPassword, progress, cancellationToken);
+            }
+
             var panelHost = string.IsNullOrWhiteSpace(request.GatewayPanelDomain)
                 ? request.Config.TunnelHost
                 : request.GatewayPanelDomain.Trim();
@@ -335,6 +512,10 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         catch (Exception ex)
         {
             return new GatewayOperationResult(false, $"Gateway install failed: {ex.Message}");
+        }
+        finally
+        {
+            await StopTemporaryBootstrapTunnelAsync(bootstrapTunnelProcess, progress);
         }
     }
 
@@ -562,13 +743,28 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         });
 
         var gatewayCtlPath = GetGatewayCtlPath(request);
+        var uninstallProtocol = probe.ProtocolDetermined
+            ? GatewayProtocols.Normalize(probe.CurrentProtocol)
+            : selectedProtocol;
+
+        if (string.IsNullOrWhiteSpace(uninstallProtocol))
+        {
+            uninstallProtocol = selectedProtocol;
+        }
+
+        var uninstallProtocolArg = BuildProtocolIdArg(uninstallProtocol);
+        if (string.IsNullOrWhiteSpace(uninstallProtocolArg))
+        {
+            throw new InvalidOperationException("Cannot determine protocol for strict uninstall.");
+        }
+
         // Keep pre-install uninstall backward-compatible with older gatewayctl versions
         // that don't understand newer protocol-specific flags.
         var args = BuildCommonArgs(request, includeBootstrapMode: true).Trim();
         var uninstallCommand =
             "set -euo pipefail; " +
             $"[ -x {ShellQuote(gatewayCtlPath)} ] || {{ echo 'Gateway control script not found during pre-install switch cleanup.'; exit 31; }}; " +
-            $"{ShellQuote(gatewayCtlPath)} uninstall {args}";
+            $"{ShellQuote(gatewayCtlPath)} uninstall {args} {uninstallProtocolArg}";
 
         var uninstallResult = await ExecuteCommandAsync(
             request.Config,
@@ -598,6 +794,50 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             },
             cancellationToken);
 
+        if (!uninstallResult.Success &&
+            LooksLikeUnknownProtocolArgument(uninstallResult.ErrorMessage))
+        {
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 3,
+                Message = "Strict uninstall fallback: legacy gatewayctl detected, retrying without --protocol"
+            });
+
+            var fallbackUninstallCommand =
+                "set -euo pipefail; " +
+                $"[ -x {ShellQuote(gatewayCtlPath)} ] || {{ echo 'Gateway control script not found during pre-install switch cleanup.'; exit 31; }}; " +
+                $"{ShellQuote(gatewayCtlPath)} uninstall {args}";
+
+            uninstallResult = await ExecuteCommandAsync(
+                request.Config,
+                fallbackUninstallCommand,
+                sudoPassword,
+                line =>
+                {
+                    var clean = SanitizeTerminalLine(line);
+                    if (TryParseProgressLine(clean, out var pct, out var message))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayInstall,
+                            Percent = Math.Clamp(pct, 0, 100),
+                            Message = $"[switch-uninstall-legacy] {message}"
+                        });
+                    }
+                    else if (!string.IsNullOrWhiteSpace(clean))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayInstall,
+                            Percent = 0,
+                            Message = $"[vps] {clean}"
+                        });
+                    }
+                },
+                cancellationToken);
+        }
+
         if (!uninstallResult.Success)
         {
             throw new InvalidOperationException($"Gateway protocol switch uninstall failed: {uninstallResult.ErrorMessage}");
@@ -619,6 +859,17 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
     {
         if (!IsTunnelBootstrapMode(request))
         {
+            return;
+        }
+
+        if (!await GatewayCtlExistsAsync(request, sudoPassword, cancellationToken))
+        {
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 4,
+                Message = "Skipping runtime backend preflight for first-time install (gatewayctl not present yet)"
+            });
             return;
         }
 
@@ -714,6 +965,286 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             Percent = 4,
             Message = $"Runtime tunnel backend check passed (127.0.0.1:{backendPort})"
         });
+    }
+
+    private async Task<bool> GatewayCtlExistsAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        CancellationToken cancellationToken)
+    {
+        var gatewayCtlPath = GetGatewayCtlPath(request);
+        var command = $"set -euo pipefail; [ -x {ShellQuote(gatewayCtlPath)} ]";
+        var result = await ExecuteCommandAsync(
+            request.Config,
+            command,
+            sudoPassword,
+            null,
+            cancellationToken);
+        return result.Success;
+    }
+
+    private async Task WaitForFrpBackendListenerAfterInstallAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var backendPort = request.Config.TunnelRemotePort;
+        if (backendPort <= 0 || backendPort > 65535)
+        {
+            return;
+        }
+
+        var command =
+            "set -euo pipefail; " +
+            $"ss -lnt '( sport = :{backendPort} )' 2>/dev/null | awk 'NR>1{{found=1}} END{{exit found?0:1}}'";
+
+        for (var attempt = 1; attempt <= 6; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await ExecuteCommandAsync(
+                request.Config,
+                command,
+                sudoPassword,
+                null,
+                cancellationToken);
+
+            if (result.Success)
+            {
+                progress?.Report(new DeploymentProgressSnapshot
+                {
+                    Phase = DeploymentPhases.GatewayInstall,
+                    Percent = 95,
+                    Message = $"FRP backend listener is active on VPS (127.0.0.1:{backendPort})"
+                });
+                return;
+            }
+
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 90,
+                Message = $"Waiting for FRP backend listener on VPS (127.0.0.1:{backendPort}) ({attempt}/6)"
+            });
+
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+        }
+    }
+
+    private async Task<(bool Success, Process? Process, string Message, int RemotePort)> StartTemporaryBootstrapTunnelAsync(
+        GatewayDeploymentRequest request,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        var localSocksPort = await ResolveTemporaryBootstrapLocalSocksPortAsync(request.Config, cancellationToken);
+        var attemptedRepair = false;
+        foreach (var temporaryRemotePort in BuildTemporaryBootstrapPortCandidates(request))
+        {
+            var forwards = new List<(int RemotePort, int LocalPort)>
+            {
+                (temporaryRemotePort, localSocksPort)
+            };
+
+            if (!SshCliStartInfoFactory.TryCreateBoundSshReverseForwardStartInfo(
+                    request.Config,
+                    forwards,
+                    out var startInfo,
+                    out var bindIp,
+                    out var error) || startInfo is null)
+            {
+                return (false, null, error ?? "Cannot prepare temporary bootstrap reverse tunnel command.", 0);
+            }
+
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayBootstrap,
+                Percent = 5,
+                Message = $"Opening temporary bootstrap SOCKS reverse tunnel from IC1 IPv4 {bindIp} (local 127.0.0.1:{localSocksPort})"
+            });
+
+            Process? process = null;
+            try
+            {
+                process = Process.Start(startInfo);
+                if (process is null)
+                {
+                    return (false, null, "Failed to start temporary bootstrap reverse tunnel process.", 0);
+                }
+
+                process.StandardInput.Close();
+                await Task.Delay(TimeSpan.FromMilliseconds(1200), cancellationToken);
+                if (process.HasExited)
+                {
+                    var stderr = (await process.StandardError.ReadToEndAsync(cancellationToken)).Trim();
+                    var stdout = (await process.StandardOutput.ReadToEndAsync(cancellationToken)).Trim();
+                    var detail = FirstNonEmpty(stderr, stdout) ?? $"ssh exited with code {process.ExitCode}.";
+                    process.Dispose();
+
+                    if (!attemptedRepair && SshCliStartInfoFactory.LooksLikeHostKeyMismatch(detail))
+                    {
+                        attemptedRepair = true;
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayBootstrap,
+                            Percent = 5,
+                            Message = "Detected SSH host-key mismatch; repairing known_hosts entry and retrying bootstrap tunnel"
+                        });
+
+                        var repair = await SshCliStartInfoFactory.TryRepairKnownHostEntryAsync(request.Config, cancellationToken);
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayBootstrap,
+                            Percent = 5,
+                            Message = repair.Message
+                        });
+                        if (repair.Success)
+                        {
+                            continue;
+                        }
+
+                        return (false, null, $"Temporary bootstrap tunnel failed: {detail} | {repair.Message}", 0);
+                    }
+
+                    if (LooksLikeRemoteForwardPortInUse(detail))
+                    {
+                        progress?.Report(new DeploymentProgressSnapshot
+                        {
+                            Phase = DeploymentPhases.GatewayBootstrap,
+                            Percent = 5,
+                            Message = $"Temporary bootstrap port {temporaryRemotePort} is busy on VPS; trying next candidate"
+                        });
+                        continue;
+                    }
+
+                    return (false, null, $"Temporary bootstrap tunnel failed: {detail}", 0);
+                }
+
+                progress?.Report(new DeploymentProgressSnapshot
+                {
+                    Phase = DeploymentPhases.GatewayBootstrap,
+                    Percent = 8,
+                    Message = $"Temporary bootstrap SOCKS reverse tunnel established on VPS port {temporaryRemotePort}"
+                });
+
+                return (true, process, "Temporary bootstrap SOCKS reverse tunnel established.", temporaryRemotePort);
+            }
+            catch (OperationCanceledException)
+            {
+                if (process is not null)
+                {
+                    await StopProcessAsync(process);
+                    process.Dispose();
+                }
+
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (process is not null)
+                {
+                    await StopProcessAsync(process);
+                    process.Dispose();
+                }
+
+                return (false, null, $"Temporary bootstrap tunnel failed: {ex.Message}", 0);
+            }
+        }
+
+        return (false, null, "Temporary bootstrap tunnel failed: no available temporary SSH bootstrap port on VPS.", 0);
+    }
+
+    private static async Task<int> ResolveTemporaryBootstrapLocalSocksPortAsync(ServiceConfig config, CancellationToken cancellationToken)
+    {
+        var dataPort = config.LocalProxyListenPort;
+        if (dataPort > 0 && await IsLoopbackTcpListeningAsync(dataPort, cancellationToken))
+        {
+            return dataPort;
+        }
+
+        return dataPort;
+    }
+
+    private static async Task<bool> IsLoopbackTcpListeningAsync(int port, CancellationToken cancellationToken)
+    {
+        if (port <= 0 || port > 65535)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var tcp = new TcpClient(AddressFamily.InterNetwork);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(800));
+            await tcp.ConnectAsync(IPAddress.Loopback, port, timeoutCts.Token);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static async Task StopTemporaryBootstrapTunnelAsync(
+        Process? process,
+        IProgress<DeploymentProgressSnapshot>? progress)
+    {
+        if (process is null)
+        {
+            return;
+        }
+
+        try
+        {
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayBootstrap,
+                Percent = 100,
+                Message = "Closing temporary bootstrap reverse tunnel"
+            });
+            await StopProcessAsync(process);
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    private static IEnumerable<int> BuildTemporaryBootstrapPortCandidates(GatewayDeploymentRequest request)
+    {
+        var reserved = new HashSet<int>
+        {
+            request.Config.TunnelRemotePort,
+            request.Config.TunnelRemotePort
+        };
+
+        for (var port = 26080; port <= 26120; port++)
+        {
+            if (!reserved.Contains(port))
+            {
+                yield return port;
+            }
+        }
+
+        for (var port = 20080; port <= 20120; port++)
+        {
+            if (!reserved.Contains(port))
+            {
+                yield return port;
+            }
+        }
+    }
+
+    private static bool LooksLikeRemoteForwardPortInUse(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            return false;
+        }
+
+        return detail.Contains("remote port forwarding failed for listen port", StringComparison.OrdinalIgnoreCase)
+               || detail.Contains("address already in use", StringComparison.OrdinalIgnoreCase)
+               || detail.Contains("cannot listen to port", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<CommandExecutionResult> TryRecoverRuntimeSocksBackendForInstallAsync(
@@ -1542,10 +2073,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         string openVpnSharedCaCertRemotePath,
         string openVpnSharedClientCertRemotePath,
         string openVpnSharedClientKeyRemotePath,
-        string openVpnSharedTlsCryptKeyRemotePath)
+        string openVpnSharedTlsCryptKeyRemotePath,
+        int? bootstrapSocksRemotePortOverride = null)
     {
         var args =
-            $"install {BuildCommonArgs(request, includeBootstrapMode: true)} {BuildProtocolArgs(request)} " +
+            $"install {BuildCommonArgs(request, includeBootstrapMode: true, bootstrapSocksRemotePortOverride: bootstrapSocksRemotePortOverride)} {BuildProtocolArgs(request)} " +
             $"--tunnel-auth {ShellQuote(MapTunnelAuth(request.Config))} " +
             $"--panel-user {ShellQuote(panelUser)} " +
             $"--panel-password {ShellQuote(panelPassword)} " +
@@ -1570,15 +2102,25 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return args;
     }
 
-    private static string BuildCommonArgs(GatewayDeploymentRequest request, bool includeBootstrapMode = false)
+    private static string BuildCommonArgs(
+        GatewayDeploymentRequest request,
+        bool includeBootstrapMode = false,
+        int? bootstrapSocksRemotePortOverride = null)
     {
+        var releaseChannel = ResolveGatewayAssetReleaseChannel();
+        var bootstrapSocksPort = bootstrapSocksRemotePortOverride is > 0 and <= 65535
+            ? bootstrapSocksRemotePortOverride.Value
+            : (request.Config.TunnelRemotePort is > 0 and <= 65535 ? request.Config.TunnelRemotePort : request.Config.TunnelRemotePort);
         var args = new List<string>
         {
             "--public-port", request.GatewayPublicPort.ToString(),
             "--panel-port", request.GatewayPanelPort.ToString(),
             "--backend-port", request.Config.TunnelRemotePort.ToString(),
             "--ssh-port", request.Config.TunnelSshPort.ToString(),
-            "--bootstrap-socks-port", request.Config.BootstrapSocksRemotePort.ToString(),
+            "--frp-server-port", request.Config.FrpServerPort.ToString(),
+            "--frp-auth-token", ShellQuote((request.Config.FrpRuntimeToken ?? string.Empty).Trim()),
+            "--release-channel", ShellQuote(releaseChannel),
+            "--bootstrap-socks-port", bootstrapSocksPort.ToString(),
             "--vps-ip", ShellQuote(request.Config.TunnelHost.Trim()),
             "--tunnel-user", ShellQuote(request.Config.TunnelUser.Trim()),
             "--doh-endpoints", ShellQuote(request.GatewayDohEndpoints.Trim())
@@ -1598,6 +2140,29 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         }
 
         return string.Join(" ", args);
+    }
+
+    private static string ResolveGatewayAssetReleaseChannel()
+    {
+        var raw = Environment.GetEnvironmentVariable("OMNIRELAY_GATEWAY_ASSET_CHANNEL");
+        var normalized = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            try
+            {
+                var markerPath = Path.Combine(AppContext.BaseDirectory, "gateway_asset_channel.txt");
+                if (File.Exists(markerPath))
+                {
+                    normalized = (File.ReadAllText(markerPath) ?? string.Empty).Trim().ToLowerInvariant();
+                }
+            }
+            catch
+            {
+                normalized = string.Empty;
+            }
+        }
+
+        return normalized == "beta" ? "beta" : "stable";
     }
 
     private static string BuildProtocolArgs(GatewayDeploymentRequest request)
@@ -1739,6 +2304,37 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return string.Join(" ", args);
     }
 
+    private static string BuildProtocolIdArg(string? protocol)
+    {
+        var normalized = GatewayProtocols.Normalize(protocol);
+        if (string.Equals(normalized, GatewayProtocols.VlessTlsSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.MixedSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.SocksSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.HttpSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.Hysteria2Singbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.TrojanSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.NaiveSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.ShadowTlsV3ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"--protocol {ShellQuote(normalized)}";
+        }
+
+        return string.Empty;
+    }
+
+    private static bool LooksLikeUnknownProtocolArgument(string? errorMessage)
+    {
+        if (string.IsNullOrWhiteSpace(errorMessage))
+        {
+            return false;
+        }
+
+        return errorMessage.Contains("Unknown argument: --protocol", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string NormalizePanelSslMode(string? value)
     {
         return string.Equals(value?.Trim(), "uploaded", StringComparison.OrdinalIgnoreCase)
@@ -1792,9 +2388,14 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             throw new InvalidOperationException("Tunnel remote port is invalid.");
         }
 
-        if (request.Config.BootstrapSocksRemotePort <= 0 || request.Config.BootstrapSocksRemotePort > 65535)
+        if (request.Config.FrpServerPort <= 0 || request.Config.FrpServerPort > 65535)
         {
-            throw new InvalidOperationException("Bootstrap SOCKS remote port is invalid.");
+            throw new InvalidOperationException("FRP server port is invalid.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Config.FrpRuntimeToken))
+        {
+            throw new InvalidOperationException("FRP auth token is missing for the selected VPS profile.");
         }
 
         if (request.GatewayPublicPort == request.GatewayPanelPort)
@@ -2046,6 +2647,19 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return string.IsNullOrWhiteSpace(firstError) ? "Remote command failed." : firstError.Trim();
     }
 
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return null;
+    }
+
     private static string SanitizeTerminalLine(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
@@ -2188,4 +2802,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         };
     }
 }
+
+
 

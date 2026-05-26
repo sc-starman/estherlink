@@ -17,8 +17,11 @@ import {
 import {
   deleteProtocolClientFromDb,
   listProtocolClientsFromDb,
+  normalizeUsedBytes,
+  readUsageByClientIds,
   readRuntimeStatsByClientIds,
-  upsertProtocolClientToDb
+  upsertProtocolClientToDb,
+  upsertUsageTotalByClientId
 } from "@/lib/providers/singbox-shared";
 import { resolveProtocolConfigPort, resolveProtocolConfigString } from "@/lib/protocol-config";
 
@@ -758,10 +761,14 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
 
   public async exportBackup(_session: OmniSession): Promise<ProtocolBackupPayload> {
     const clients = await readClients();
+    const usageByClientId = await readUsageByClientIds(clients.map((item) => item.id), getAccountingDbCandidates());
     const payload = {
       protocolId: this.protocolId,
       exportedAt: new Date().toISOString(),
-      clients
+      clients: clients.map((client) => ({
+        ...client,
+        usedBytes: usageByClientId.get(client.id) ?? 0
+      }))
     };
     const body = new TextEncoder().encode(`${JSON.stringify(payload, null, 2)}\n`);
     return {
@@ -809,7 +816,8 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
         password,
         totalGB: normalizeTotalGB(row.totalGB),
         expiryTime: normalizeExpiryTime(row.expiryTime),
-        speedLimitKbps: normalizeSpeedLimitKbps(row.speedLimitKbps)
+        speedLimitKbps: normalizeSpeedLimitKbps(row.speedLimitKbps),
+        usedBytes: normalizeUsedBytes(row.usedBytes)
       });
     }
 
@@ -829,6 +837,7 @@ export class OpenVpnProvider implements GatewayProtocolProvider {
         },
         dbCandidates
       );
+      await upsertUsageTotalByClientId(client.id, normalizeUsedBytes(client.usedBytes), dbCandidates);
     }
     await syncOpenVpn();
   }

@@ -13,7 +13,15 @@ internal static class SshKnownHostsRepair
             return false;
         }
 
+        if (text.Contains("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         return text.Contains("REMOTE HOST IDENTIFICATION HAS CHANGED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("POSSIBLE DNS SPOOFING DETECTED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("has changed and you have requested strict checking", StringComparison.OrdinalIgnoreCase) ||
                text.Contains("Host key verification failed", StringComparison.OrdinalIgnoreCase) ||
                text.Contains("Offending", StringComparison.OrdinalIgnoreCase);
     }

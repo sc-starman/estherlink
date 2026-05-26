@@ -12,7 +12,10 @@ public sealed class RelayConfig
     public int OutgoingAdapterIfIndex { get; set; } = -1;
     public int DataPlaneLocalPort { get; set; }
     public int BootstrapSocksLocalPort { get; set; }
-    public int BootstrapSocksRemotePort { get; set; } = 16080;
+    // Transient UI-to-service override for shared FRP profile port updates.
+    public int FrpProfilePortOverride { get; set; } = 7000;
+    // Transient UI-to-service override for shared FRP profile token updates.
+    public string FrpProfileTokenOverride { get; set; } = string.Empty;
     public RelayOmniPanelConfig OmniPanel { get; set; } = new();
     public RemoteGatewayConfig RemoteGateway { get; set; } = new();
     public LocalGatewayConfig LocalGateway { get; set; } = new();
@@ -33,7 +36,7 @@ public sealed class RelayOmniPanelConfig
     public string LastError { get; set; } = string.Empty;
 }
 
-public sealed class RemoteGatewayConfig
+    public sealed class RemoteGatewayConfig
 {
     public string TunnelHost { get; set; } = string.Empty;
     public int TunnelSshPort { get; set; } = 22;

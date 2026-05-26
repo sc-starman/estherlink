@@ -8,7 +8,7 @@ param(
     [string]$UploadBaseUrl,
     [switch]$InsecureSkipTlsVerify,
     [string]$ArtifactPath,
-    [string]$BuildOutputDirectory = "artifacts\connector-core",
+    [string]$BuildOutputDirectory = "build\connector-core",
     [ValidateSet("stable", "beta")]
     [string]$Channel = "stable",
 
@@ -64,23 +64,72 @@ function Resolve-ArtifactPath {
         throw "Build script not found: $buildScript"
     }
 
-    Write-Host "No -ArtifactPath provided. Building connector-core artifact first..." -ForegroundColor Yellow
+    Write-Host "No -ArtifactPath provided. Building connector-core binary first..." -ForegroundColor Yellow
     & $buildScript -OutputDirectory $OutputDirectory -OperatingSystems @($TargetOs) -Architectures @($TargetArch) 2>&1 | ForEach-Object {
         Write-Host $_
     }
 
-    $artifactRoot = Join-Path $RootPath $OutputDirectory
-    $expectedName = if ($TargetOs -eq "windows") {
+    $binaryRoot = Join-Path $RootPath $OutputDirectory
+    $binaryName = if ($TargetOs -eq "windows") { "connector-core.exe" } else { "connector-core" }
+    $directPath = Join-Path $binaryRoot $binaryName
+    if (Test-Path -LiteralPath $directPath) {
+        return (Resolve-Path -LiteralPath $directPath).Path
+    }
+
+    $nestedPath = Join-Path (Join-Path $binaryRoot "$TargetOs-$TargetArch") $binaryName
+    if (Test-Path -LiteralPath $nestedPath) {
+        return (Resolve-Path -LiteralPath $nestedPath).Path
+    }
+
+    throw "Connector-core binary not found after build. Checked: $directPath and $nestedPath"
+}
+
+function New-UploadPackageFromBinary {
+    param(
+        [Parameter(Mandatory = $true)][string]$BinaryPath,
+        [Parameter(Mandatory = $true)][string]$TargetOs,
+        [Parameter(Mandatory = $true)][string]$TargetArch
+    )
+
+    if (-not (Test-Path -LiteralPath $BinaryPath)) {
+        throw "Binary file not found: $BinaryPath"
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "omnirelay-connector-upload"
+    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+
+    $stageDir = Join-Path $tempRoot ("stage-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+
+    $binaryName = if ($TargetOs -eq "windows") { "connector-core.exe" } else { "connector-core" }
+    $stagedBinary = Join-Path $stageDir $binaryName
+    Copy-Item -LiteralPath $BinaryPath -Destination $stagedBinary -Force
+
+    $packageName = if ($TargetOs -eq "windows") {
         "connector-core-$TargetOs-$TargetArch.zip"
     } else {
         "connector-core-$TargetOs-$TargetArch.tar.gz"
     }
-    $expectedPath = Join-Path $artifactRoot $expectedName
-    if (-not (Test-Path -LiteralPath $expectedPath)) {
-        throw "Connector-core artifact not found after build: $expectedPath"
+    $packagePath = Join-Path $tempRoot $packageName
+
+    if (Test-Path -LiteralPath $packagePath) {
+        Remove-Item -LiteralPath $packagePath -Force
     }
 
-    return (Resolve-Path -LiteralPath $expectedPath).Path
+    if ($TargetOs -eq "windows") {
+        Compress-Archive -Path (Join-Path $stageDir "*") -DestinationPath $packagePath -CompressionLevel Optimal -Force
+    } else {
+        & tar -czf $packagePath -C $stageDir .
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create tar.gz package for $TargetOs/$TargetArch (exit code $LASTEXITCODE)."
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $packagePath)) {
+        throw "Failed to create upload package: $packagePath"
+    }
+
+    return (Resolve-Path -LiteralPath $packagePath).Path
 }
 
 function Invoke-Upload {
@@ -141,22 +190,17 @@ else {
 }
 
 $uploadUrl = "$normalizedUploadBaseUrl/api/installer/upload-connector-core"
-$artifact = Resolve-ArtifactPath -RootPath $repoRoot -ProvidedPath $ArtifactPath -OutputDirectory $BuildOutputDirectory -TargetOs $Os -TargetArch $Arch
-if ([string]::IsNullOrWhiteSpace($artifact)) {
-    throw "Artifact path resolved to empty value."
+$resolvedInput = Resolve-ArtifactPath -RootPath $repoRoot -ProvidedPath $ArtifactPath -OutputDirectory $BuildOutputDirectory -TargetOs $Os -TargetArch $Arch
+if ([string]::IsNullOrWhiteSpace($resolvedInput)) {
+    throw "Resolved input path is empty."
 }
 
-if ($Os -eq "windows") {
-    if (-not $artifact.ToLowerInvariant().EndsWith(".zip")) {
-        throw "Windows artifact must be .zip: $artifact"
-    }
-}
-elseif (-not $artifact.ToLowerInvariant().EndsWith(".tar.gz")) {
-    throw "Linux artifact must be .tar.gz: $artifact"
-}
-
-if (-not (Test-Path -LiteralPath $artifact)) {
-    throw "Artifact file does not exist: $artifact"
+$lowerInput = $resolvedInput.ToLowerInvariant()
+$isArchive = $lowerInput.EndsWith(".zip") -or $lowerInput.EndsWith(".tar.gz")
+$artifact = if ($isArchive) {
+    $resolvedInput
+} else {
+    New-UploadPackageFromBinary -BinaryPath $resolvedInput -TargetOs $Os -TargetArch $Arch
 }
 
 $hash = (Get-FileHash -Path $artifact -Algorithm SHA256).Hash.ToLowerInvariant()

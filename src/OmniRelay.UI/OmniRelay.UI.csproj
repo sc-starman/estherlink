@@ -39,6 +39,9 @@
              Condition="Exists('scripts\\setup_omnirelay_gateway_tunnel_module.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_gateway_tunnel_module.sh" />
+    <Content Include="gateway_asset_channel.txt"
+             Condition="Exists('gateway_asset_channel.txt')"
+             CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\OmniRelay.Installer\Product.wxs"
              Condition="Exists('..\\OmniRelay.Installer\\Product.wxs')"
              CopyToOutputDirectory="PreserveNewest"

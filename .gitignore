@@ -8,6 +8,8 @@
 *.userosscache
 *.sln.docstates
 
+build
+connector-core.exe
 # Build results
 [Bb]in/
 [Oo]bj/

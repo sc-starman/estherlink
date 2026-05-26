@@ -12,6 +12,8 @@ public sealed class RelayBootstrapSocksEngine
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _acceptLoop;
+    private string? _lastTransientFailureSignature;
+    private DateTimeOffset _lastTransientFailureLoggedUtc = DateTimeOffset.MinValue;
 
     public RelayBootstrapSocksEngine(RelayConfig relay, FileLogWriter log)
     {
@@ -138,12 +140,56 @@ public sealed class RelayBootstrapSocksEngine
         }
         catch (Exception ex)
         {
-            _log.Warn($"Relay '{_relay.Name}' bootstrap SOCKS connection failed: {ex.Message}");
+            if (ShouldLogConnectionFailure(ex.Message, out var transient))
+            {
+                if (transient)
+                {
+                    _log.Info($"Relay '{_relay.Name}' bootstrap SOCKS transient failure: {ex.Message}");
+                }
+                else
+                {
+                    _log.Warn($"Relay '{_relay.Name}' bootstrap SOCKS connection failed: {ex.Message}");
+                }
+            }
             try { await RelaySocks5ProxyEngine.SendReplyAsync(stream, 0x01, IPAddress.Any, 0, CancellationToken.None); } catch { }
         }
         finally
         {
             client.Close();
         }
+    }
+
+    private bool ShouldLogConnectionFailure(string message, out bool transient)
+    {
+        transient = IsTransientFailure(message);
+        if (!transient)
+        {
+            return true;
+        }
+
+        var signature = (message ?? string.Empty).Trim();
+        var now = DateTimeOffset.UtcNow;
+        if (string.Equals(_lastTransientFailureSignature, signature, StringComparison.Ordinal) &&
+            now - _lastTransientFailureLoggedUtc < TimeSpan.FromSeconds(20))
+        {
+            return false;
+        }
+
+        _lastTransientFailureSignature = signature;
+        _lastTransientFailureLoggedUtc = now;
+        return true;
+    }
+
+    private static bool IsTransientFailure(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        return message.Contains("Unexpected EOF", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("forcibly closed", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("connection reset by peer", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("read EOF", StringComparison.OrdinalIgnoreCase);
     }
 }

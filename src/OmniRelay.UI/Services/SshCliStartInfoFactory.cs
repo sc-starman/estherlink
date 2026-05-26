@@ -23,7 +23,15 @@ internal static class SshCliStartInfoFactory
             return false;
         }
 
+        if (text.Contains("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         return text.Contains("REMOTE HOST IDENTIFICATION HAS CHANGED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("POSSIBLE DNS SPOOFING DETECTED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("has changed and you have requested strict checking", StringComparison.OrdinalIgnoreCase) ||
                text.Contains("Host key verification failed", StringComparison.OrdinalIgnoreCase) ||
                text.Contains("Offending", StringComparison.OrdinalIgnoreCase);
     }
@@ -118,6 +126,80 @@ internal static class SshCliStartInfoFactory
             "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=accept-new"
         };
+
+        return TryCreateSshStartInfo(
+            config,
+            preTargetArgs,
+            remoteCommand: null,
+            out startInfo,
+            out bindIp,
+            out error);
+    }
+
+    public static bool TryCreateBoundSshReverseForwardStartInfo(
+        ServiceConfig config,
+        int remotePort,
+        int localPort,
+        out ProcessStartInfo? startInfo,
+        out string bindIp,
+        out string? error)
+    {
+        return TryCreateBoundSshReverseForwardStartInfo(
+            config,
+            new[] { (RemotePort: remotePort, LocalPort: localPort) },
+            out startInfo,
+            out bindIp,
+            out error);
+    }
+
+    public static bool TryCreateBoundSshReverseForwardStartInfo(
+        ServiceConfig config,
+        IReadOnlyList<(int RemotePort, int LocalPort)> reverseForwards,
+        out ProcessStartInfo? startInfo,
+        out string bindIp,
+        out string? error)
+    {
+        startInfo = null;
+        bindIp = string.Empty;
+        error = null;
+
+        if (reverseForwards is null || reverseForwards.Count == 0)
+        {
+            error = "At least one reverse forward is required.";
+            return false;
+        }
+
+        var forwardArgs = new List<string>(reverseForwards.Count * 2);
+        foreach (var forward in reverseForwards)
+        {
+            if (forward.RemotePort <= 0 || forward.RemotePort > 65535)
+            {
+                error = "Bootstrap remote SOCKS port must be between 1 and 65535.";
+                return false;
+            }
+
+            if (forward.LocalPort <= 0 || forward.LocalPort > 65535)
+            {
+                error = "Bootstrap local SOCKS port must be between 1 and 65535.";
+                return false;
+            }
+
+            forwardArgs.Add("-R");
+            forwardArgs.Add($"127.0.0.1:{forward.RemotePort}:127.0.0.1:{forward.LocalPort}");
+        }
+
+        var preTargetArgs = new List<string>
+        {
+            "-N",
+            "-T",
+            "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveInterval=10",
+            "-o", "ServerAliveCountMax=2",
+            "-o", "TCPKeepAlive=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new"
+        };
+        preTargetArgs.AddRange(forwardArgs);
 
         return TryCreateSshStartInfo(
             config,

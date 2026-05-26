@@ -35,6 +35,17 @@ public partial class RelayEditDialog : Window
     private bool _isRelaySaved;
     private string? _selectedPolicyListId;
     private CancellationTokenSource? _toastCts;
+    private string _lastResolvedTunnelHostKey = string.Empty;
+
+    public sealed class FrpHostProfileResolution
+    {
+        public bool Found { get; init; }
+        public bool HasConflict { get; init; }
+        public int FrpServerPort { get; init; } = 7000;
+        public string AuthToken { get; init; } = string.Empty;
+        public int SuggestedTunnelRemotePort { get; init; } = 15000;
+        public string ConflictMessage { get; init; } = string.Empty;
+    }
 
     public RelayEditDialog(RelayConfig relay, ObservableCollection<AdapterChoiceModel> adapters, RelayStatus? status, bool isRelaySaved = false)
     {
@@ -45,6 +56,7 @@ public partial class RelayEditDialog : Window
         _isRelaySaved = isRelaySaved;
         _statusRefreshTimer.Tick += async (_, _) => await RefreshStatusFromSourceAsync();
         Closed += (_, _) => _statusRefreshTimer.Stop();
+        TunnelHostTextBox.TextChanged += TunnelHostTextBox_TextChanged;
 
         IncomingAdapterCombo.ItemsSource = adapters;
         OutgoingAdapterCombo.ItemsSource = adapters;
@@ -66,6 +78,7 @@ public partial class RelayEditDialog : Window
     public event Func<string, string, IReadOnlyList<string>, Task<PolicyCommitSummary>>? ReplacePolicyEntriesRequested;
     public event Func<string, string, Task<OperationResult>>? DeletePolicyListRequested;
     public event Func<string, Task<RelayStatus?>>? RefreshRelayStatusRequested;
+    public event Func<string, FrpHostProfileResolution?>? ResolveFrpProfileForHostRequested;
 
     private bool IsRemote => string.Equals(GatewayTypes.Normalize(Relay.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase);
 
@@ -82,11 +95,13 @@ public partial class RelayEditDialog : Window
             RefreshAdapterIdentityText();
 
             HostTab.Visibility = IsRemote ? Visibility.Visible : Visibility.Collapsed;
+            TunnelTab.Visibility = IsRemote ? Visibility.Visible : Visibility.Collapsed;
             DnsTab.Visibility = IsRemote ? Visibility.Visible : Visibility.Collapsed;
             AdminPanelTab.Visibility = Visibility.Visible;
             OperationsTab.Visibility = IsRemote ? Visibility.Visible : Visibility.Collapsed;
 
             LoadHost();
+            LoadTunnel();
             LoadDns();
             LoadProtocol();
             LoadStatus();
@@ -120,6 +135,84 @@ public partial class RelayEditDialog : Window
         RefreshKeyPassphraseState();
         TunnelPasswordBox.Password = Relay.RemoteGateway.TunnelPassword;
         SelectOption(TunnelAuthMethodCombo, TunnelAuthMethods.Normalize(Relay.RemoteGateway.TunnelAuthMethod));
+    }
+
+    private void LoadTunnel()
+    {
+        FrpServerPortTextBox.Text = (Relay.FrpProfilePortOverride is > 0 and <= 65535 ? Relay.FrpProfilePortOverride : 7000).ToString();
+        TunnelRemotePortTextBox.Text = (Relay.RemoteGateway.TunnelRemotePort is > 0 and <= 65535 ? Relay.RemoteGateway.TunnelRemotePort : 15000).ToString();
+
+        var token = (Relay.FrpProfileTokenOverride ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            token = GenerateFrpToken();
+        }
+
+        FrpAuthTokenTextBox.Text = token;
+        ResolveTunnelProfileFromHost(force: true);
+    }
+
+    private void TunnelHostTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loading || !IsRemote)
+        {
+            return;
+        }
+
+        ResolveTunnelProfileFromHost(force: false);
+    }
+
+    private void ResolveTunnelProfileFromHost(bool force)
+    {
+        var host = TunnelHostTextBox.Text.Trim();
+        var hostKey = host.ToLowerInvariant();
+        if (!force && string.Equals(hostKey, _lastResolvedTunnelHostKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastResolvedTunnelHostKey = hostKey;
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return;
+        }
+
+        var profile = ResolveFrpProfileForHostRequested?.Invoke(host);
+        if (profile?.Found == true)
+        {
+            FrpServerPortTextBox.Text = (profile.FrpServerPort is > 0 and <= 65535 ? profile.FrpServerPort : 7000).ToString();
+            FrpAuthTokenTextBox.Text = string.IsNullOrWhiteSpace(profile.AuthToken)
+                ? GenerateFrpToken()
+                : profile.AuthToken.Trim();
+            var currentTunnelRemotePort = ParsePort(TunnelRemotePortTextBox.Text, 15000);
+            var shouldApplySuggestedPort =
+                Relay.RemoteGateway.TunnelRemotePort <= 0 ||
+                currentTunnelRemotePort == 15000 ||
+                currentTunnelRemotePort == ParsePort(Relay.RemoteGateway.TunnelRemotePort.ToString(), 15000);
+            if (shouldApplySuggestedPort)
+            {
+                TunnelRemotePortTextBox.Text = (profile.SuggestedTunnelRemotePort is > 0 and <= 65535
+                    ? profile.SuggestedTunnelRemotePort
+                    : 15000).ToString();
+            }
+            if (profile.HasConflict)
+            {
+                FeedbackTextBlock.Text = string.IsNullOrWhiteSpace(profile.ConflictMessage)
+                    ? "FRP profile conflict detected for this host."
+                    : profile.ConflictMessage;
+            }
+            return;
+        }
+
+        if (!int.TryParse(FrpServerPortTextBox.Text, out var frpsPort) || frpsPort <= 0 || frpsPort > 65535)
+        {
+            FrpServerPortTextBox.Text = "7000";
+        }
+
+        if (string.IsNullOrWhiteSpace(FrpAuthTokenTextBox.Text))
+        {
+            FrpAuthTokenTextBox.Text = GenerateFrpToken();
+        }
     }
 
     private void LoadDns()
@@ -332,6 +425,7 @@ public partial class RelayEditDialog : Window
         {
             IsEnabled = false;
             FeedbackTextBlock.Text = closeOnSuccess ? "Saving..." : "Applying...";
+            var wasRelaySaved = _isRelaySaved;
             var success = await ApplyRequested(Relay);
             FeedbackTextBlock.Text = success ? "Applied." : "Apply failed. Check service status and logs.";
             if (success)
@@ -339,7 +433,23 @@ public partial class RelayEditDialog : Window
                 _isRelaySaved = true;
                 RefreshRelayScopedTabs();
                 await RefreshStatusFromSourceAsync();
-                if (closeOnSuccess)
+                var allowClose = closeOnSuccess;
+                if (IsRemote && !wasRelaySaved && GatewayOperationRequested is not null)
+                {
+                    OperationFeedbackText.Text = "Running initial gateway install...";
+                    var installResult = await GatewayOperationRequested(Relay, "install");
+                    OperationFeedbackText.Text = installResult.Message;
+                    ApplyGatewayOperationSummary("install", installResult);
+                    await RefreshStatusFromSourceAsync();
+
+                    if (!installResult.Success)
+                    {
+                        allowClose = false;
+                        FeedbackTextBlock.Text = $"Applied locally, but remote gateway install failed: {installResult.Message}";
+                    }
+                }
+
+                if (allowClose)
                 {
                     DialogResult = true;
                 }
@@ -440,10 +550,13 @@ public partial class RelayEditDialog : Window
                 return false;
             }
 
-            if (IsRemote)
-            {
+        if (IsRemote)
+        {
             Relay.RemoteGateway.TunnelHost = TunnelHostTextBox.Text.Trim();
             Relay.RemoteGateway.TunnelSshPort = ParsePort(TunnelSshPortTextBox.Text, 22);
+            Relay.FrpProfilePortOverride = ParsePort(FrpServerPortTextBox.Text, 7000);
+            Relay.RemoteGateway.TunnelRemotePort = ParsePort(TunnelRemotePortTextBox.Text, 15000);
+            Relay.FrpProfileTokenOverride = FrpAuthTokenTextBox.Text.Trim();
             Relay.RemoteGateway.TunnelUser = string.IsNullOrWhiteSpace(TunnelUserTextBox.Text) ? "OmniRelay" : TunnelUserTextBox.Text.Trim();
             Relay.RemoteGateway.TunnelAuthMethod = GetSelectedValue(TunnelAuthMethodCombo, TunnelAuthMethods.Password);
             Relay.RemoteGateway.TunnelPrivateKeyPath = TunnelKeyPathTextBox.Text.Trim();
@@ -474,6 +587,18 @@ public partial class RelayEditDialog : Window
             Relay.RemoteGateway.ShadowTlsCamouflageServer = ShadowTlsCamouflageTextBox.Text.Trim();
             Relay.RemoteGateway.ShadowTlsStrictMode = ShadowTlsStrictModeCheckBox.IsChecked == true;
             Relay.RemoteGateway.ShadowTlsWildcardSni = ShadowTlsWildcardSniTextBox.Text.Trim();
+
+            if (string.IsNullOrWhiteSpace(Relay.FrpProfileTokenOverride))
+            {
+                FeedbackTextBlock.Text = "FRP token is required.";
+                return false;
+            }
+
+            if (Relay.FrpProfilePortOverride == Relay.RemoteGateway.TunnelRemotePort)
+            {
+                FeedbackTextBlock.Text = "FRPS port and data tunnel remote port must be distinct.";
+                return false;
+            }
         }
         else
         {
@@ -757,21 +882,21 @@ public partial class RelayEditDialog : Window
 
         if (TestTunnelRequested is null)
         {
-            SetActionFeedback("Tunnel test handler is unavailable.");
-            ShowToast("Tunnel test handler is unavailable.", isError: true);
+            SetActionFeedback("Connection test handler is unavailable.");
+            ShowToast("Connection test handler is unavailable.", isError: true);
             return;
         }
 
         try
         {
-            SetActionFeedback("Testing tunnel...");
+            SetActionFeedback("Testing connection...");
             var result = await TestTunnelRequested(Relay);
             SetActionFeedback(result.Message);
             ShowToast(result.Message, isError: !result.Success);
         }
         catch (Exception ex)
         {
-            var message = $"Tunnel test failed: {ex.Message}";
+            var message = $"Connection test failed: {ex.Message}";
             SetActionFeedback(message);
             ShowToast(message, isError: true);
         }
@@ -858,6 +983,7 @@ public partial class RelayEditDialog : Window
         LoadOperationCenterSummary();
     }
 
+    private async void TestRuntimeTunnel_Click(object sender, RoutedEventArgs e) => await RunGatewayOperationAsync("test_tunnel");
     private async void BootstrapCheck_Click(object sender, RoutedEventArgs e) => await RunGatewayOperationAsync("bootstrap_check");
     private async void RefreshGateway_Click(object sender, RoutedEventArgs e) => await RunGatewayOperationAsync("refresh");
     private async void InstallGateway_Click(object sender, RoutedEventArgs e) => await RunGatewayOperationAsync("install");
@@ -975,6 +1101,7 @@ public partial class RelayEditDialog : Window
 
         switch (normalized)
         {
+            case "test_tunnel":
             case "bootstrap_check":
                 OperationBootstrapStateText.Text = result.Success ? "Passed" : $"Failed ({result.Message})";
                 break;
@@ -1431,6 +1558,11 @@ public partial class RelayEditDialog : Window
     private static int ParsePositiveInt(string value, int fallback)
     {
         return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private static string GenerateFrpToken()
+    {
+        return Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
     }
 
     private void CopyRelayIdSummary_Click(object sender, RoutedEventArgs e)
@@ -2055,3 +2187,6 @@ public partial class RelayEditDialog : Window
     private sealed record ImportParseResult(IReadOnlyList<string> Entries, int InvalidCount);
 
 }
+
+
+

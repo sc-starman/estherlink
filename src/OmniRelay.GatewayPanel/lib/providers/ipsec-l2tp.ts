@@ -23,10 +23,12 @@ import {
   type BundleDestination
 } from "@/lib/providers/backup";
 import {
+  normalizeUsedBytes,
   readRuntimeStatsByClientIds,
   listProtocolClientsFromDb,
   upsertProtocolClientToDb,
-  deleteProtocolClientFromDb
+  deleteProtocolClientFromDb,
+  upsertUsageTotalByClientId
 } from "@/lib/providers/singbox-shared";
 import { resolveProtocolConfigString } from "@/lib/protocol-config";
 
@@ -54,6 +56,7 @@ interface IpsecL2tpClientRecord extends GatewayClientRecord {
   password: string;
   totalGB: number;
   expiryTime: number;
+  usedBytes?: number;
 }
 
 interface IpsecL2tpAccountingSource {
@@ -298,7 +301,8 @@ function normalizeImportedIpsecClients(input: unknown[]): IpsecL2tpClientRecord[
       username,
       password,
       totalGB: normalizeTotalGB(record.totalGB),
-      expiryTime: normalizeExpiryTime(record.expiryTime)
+      expiryTime: normalizeExpiryTime(record.expiryTime),
+      usedBytes: normalizeUsedBytes(record.usedBytes)
     };
   });
 }
@@ -529,7 +533,12 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
     const tempDir = await fs.mkdtemp(join(tmpdir(), "omnirelay-ipsec-export-"));
     const tempClientsPath = join(tempDir, "clients.db.json");
     const clientsForBackup = await readClients();
-    await fs.writeFile(tempClientsPath, `${JSON.stringify(clientsForBackup, null, 2)}\n`, "utf8");
+    const usageByClientId = await this.accountingSource.getUsageByClientId(clientsForBackup.map((client) => client.id));
+    const clientsWithUsage = clientsForBackup.map((client) => ({
+      ...client,
+      usedBytes: usageByClientId.get(client.id) ?? 0
+    }));
+    await fs.writeFile(tempClientsPath, `${JSON.stringify(clientsWithUsage, null, 2)}\n`, "utf8");
 
     const sources = [
       { sourcePath: tempClientsPath, archivePath: "clients.db.json", required: true },
@@ -547,6 +556,10 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
     if (input.contentType.includes("json") || input.fileName.toLowerCase().endsWith(".json")) {
       const clients = normalizeImportedIpsecClients(readJsonClientBackup(input, this.protocolId));
       await writeClients(clients);
+      const dbCandidates = getAccountingDbCandidates();
+      for (const client of clients) {
+        await upsertUsageTotalByClientId(client.id, normalizeUsedBytes(client.usedBytes), dbCandidates);
+      }
       await syncIpsecL2tp();
       return;
     }
@@ -557,6 +570,10 @@ export class IpsecL2tpProvider implements GatewayProtocolProvider {
     }
     const clients = normalizeImportedIpsecClients(JSON.parse(clientsJson) as unknown[]);
     await writeClients(clients);
+    const dbCandidates = getAccountingDbCandidates();
+    for (const client of clients) {
+      await upsertUsageTotalByClientId(client.id, normalizeUsedBytes(client.usedBytes), dbCandidates);
+    }
     const tempDir = await fs.mkdtemp(join(tmpdir(), "omnirelay-ipsec-import-"));
     try {
       await importTarGzProtocolBackup(this.protocolId, input, [

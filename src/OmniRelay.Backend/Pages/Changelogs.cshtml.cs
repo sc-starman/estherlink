@@ -35,41 +35,43 @@ public sealed class ChangelogsModel : PageModel
     ];
 
     public ChangelogEntry CurrentChangesEntry =>
-        new("2.1.24", DateTime.UtcNow.Date, []);
+        new("2.2.10", DateTime.UtcNow.Date, []);
 
-    public string CurrentV2Title => _localizer["Changelog.Current.2.1.24.1"];
+    public string CurrentV2Title => _localizer["Changelog.Current.2.2.10.1"];
 
     public IReadOnlyList<string> CurrentV2Highlights =>
     [
-        _localizer["Changelog.Current.2.1.24.2"],
-        _localizer["Changelog.Current.2.1.24.3"],
-        _localizer["Changelog.Current.2.1.24.4"],
-        _localizer["Changelog.Current.2.1.24.5"],
-        _localizer["Changelog.Current.2.1.24.6"],
-        _localizer["Changelog.Current.2.1.24.12"],
-        _localizer["Changelog.Current.2.1.24.13"],
-        _localizer["Changelog.Current.2.1.24.20"],
-        _localizer["Changelog.Current.2.1.24.21"],
-        _localizer["Changelog.Current.2.1.24.22"]
+        _localizer["Changelog.Current.2.2.10.2"],
+        _localizer["Changelog.Current.2.2.10.3"],
+        _localizer["Changelog.Current.2.2.10.4"],
+        _localizer["Changelog.Current.2.2.10.5"],
+        _localizer["Changelog.Current.2.2.10.6"],
+        _localizer["Changelog.Current.2.2.10.7"],
+        _localizer["Changelog.Current.2.2.10.8"],
+        _localizer["Changelog.Current.2.2.10.9"],
+        _localizer["Changelog.Current.2.2.10.10"],
+        _localizer["Changelog.Current.2.2.10.11"]
     ];
 
     public IReadOnlyList<string> CurrentStealthProtocols =>
     [
-        _localizer["Changelog.Current.2.1.24.7"],
-        _localizer["Changelog.Current.2.1.24.8"],
-        _localizer["Changelog.Current.2.1.24.9"],
-        _localizer["Changelog.Current.2.1.24.10"],
-        _localizer["Changelog.Current.2.1.24.11"]
+        _localizer["Changelog.Current.2.2.10.12"],
+        _localizer["Changelog.Current.2.2.10.13"],
+        _localizer["Changelog.Current.2.2.10.14"],
+        _localizer["Changelog.Current.2.2.10.15"],
+        _localizer["Changelog.Current.2.2.10.16"]
     ];
 
     public IReadOnlyList<string> CurrentSpeedLimitProtocols =>
     [
-        _localizer["Changelog.Current.2.1.24.15"],
-        _localizer["Changelog.Current.2.1.24.16"],
-        _localizer["Changelog.Current.2.1.24.17"],
-        _localizer["Changelog.Current.2.1.24.18"],
-        _localizer["Changelog.Current.2.1.24.19"]
+        _localizer["Changelog.Current.2.2.10.17"],
+        _localizer["Changelog.Current.2.2.10.18"],
+        _localizer["Changelog.Current.2.2.10.19"],
+        _localizer["Changelog.Current.2.2.10.20"],
+        _localizer["Changelog.Current.2.2.10.21"]
     ];
+
+    public string CurrentSpeedLimitTitle => _localizer["Changelog.Current.2.2.10.22"];
 
     public string OmniPanelSectionTitle => _localizer["Changelog.Current.2.1.24.23"];
     public string OmniPanelFeaturesTitle => _localizer["Changelog.Current.2.1.24.24"];
