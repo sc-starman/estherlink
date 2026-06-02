@@ -326,6 +326,7 @@ public sealed class ConfigStore
                 TunnelUser = remote.TunnelUser,
                 TunnelAuthMethod = TunnelAuthMethods.Normalize(remote.TunnelAuthMethod),
                 TunnelPrivateKeyPath = remote.TunnelPrivateKeyPath,
+                TunnelProbeUrl = string.IsNullOrWhiteSpace(remote.TunnelProbeUrl) ? "https://1.1.1.1/cdn-cgi/trace" : remote.TunnelProbeUrl.Trim(),
                 BootstrapMode = string.IsNullOrWhiteSpace(remote.BootstrapMode) ? "tunnel" : remote.BootstrapMode.Trim(),
                 Protocol = remote.Protocol,
                 PublicPort = remote.PublicPort,

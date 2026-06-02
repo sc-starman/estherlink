@@ -156,6 +156,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Text="FRPS Port" Style="{StaticResource FormLabelStyle}"/>
                         <TextBox x:Name="FrpServerPortTextBox" Grid.Row="0" Grid.Column="1" Width="120" HorizontalAlignment="Left" Style="{StaticResource FormTextBoxStyle}"/>
@@ -163,6 +164,10 @@
                         <TextBox x:Name="FrpAuthTokenTextBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource FormTextBoxStyle}"/>
                         <TextBlock Grid.Row="2" Text="Data Tunnel Remote Port" Style="{StaticResource FormLabelStyle}"/>
                         <TextBox x:Name="TunnelRemotePortTextBox" Grid.Row="2" Grid.Column="1" Width="120" HorizontalAlignment="Left" Style="{StaticResource FormTextBoxStyle}"/>
+                        <TextBlock Grid.Row="3" Text="Tunnelctl Probe URL" Style="{StaticResource FormLabelStyle}"/>
+                        <TextBox x:Name="TunnelProbeUrlTextBox" Grid.Row="3" Grid.Column="1" Style="{StaticResource FormTextBoxStyle}"/>
+                        <TextBlock Grid.Row="4" Text="Bootstrap Mode" Style="{StaticResource FormLabelStyle}"/>
+                        <ComboBox x:Name="BootstrapModeCombo" Grid.Row="4" Grid.Column="1" Width="220" HorizontalAlignment="Left" Style="{StaticResource FormComboBoxStyle}"/>
                     </Grid>
                 </ScrollViewer>
             </TabItem>
@@ -393,14 +398,6 @@
                             <Button Content="Bootstrap Check" Width="140" Click="BootstrapCheck_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>
                             <Button Content="Clear Cached Sudo" Width="140" Click="ClearCachedSudo_Click" Style="{StaticResource SecondaryButtonStyle}"/>
                         </WrapPanel>
-                        <Grid Margin="0,0,0,10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="180"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Bootstrap Mode" Style="{StaticResource FormLabelStyle}"/>
-                            <ComboBox x:Name="BootstrapModeCombo" Grid.Column="1" Width="220" HorizontalAlignment="Left" Style="{StaticResource FormComboBoxStyle}"/>
-                        </Grid>
                         <WrapPanel Margin="0,0,0,10">
                             <Button Content="Install" Width="90" Click="InstallGateway_Click" Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0"/>
                             <Button Content="Start" Width="90" Click="StartGateway_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"/>

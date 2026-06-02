@@ -46,6 +46,7 @@ public sealed class RelayOmniPanelConfig
     public string TunnelPrivateKeyPath { get; set; } = string.Empty;
     public string TunnelPrivateKeyPassphrase { get; set; } = string.Empty;
     public string TunnelPassword { get; set; } = string.Empty;
+    public string TunnelProbeUrl { get; set; } = "https://1.1.1.1/cdn-cgi/trace";
     public string BootstrapMode { get; set; } = "tunnel";
     public string Protocol { get; set; } = "vless_tls_singbox";
     public int PublicPort { get; set; } = 443;

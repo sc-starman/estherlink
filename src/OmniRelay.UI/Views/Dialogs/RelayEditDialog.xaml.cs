@@ -141,6 +141,9 @@ public partial class RelayEditDialog : Window
     {
         FrpServerPortTextBox.Text = (Relay.FrpProfilePortOverride is > 0 and <= 65535 ? Relay.FrpProfilePortOverride : 7000).ToString();
         TunnelRemotePortTextBox.Text = (Relay.RemoteGateway.TunnelRemotePort is > 0 and <= 65535 ? Relay.RemoteGateway.TunnelRemotePort : 15000).ToString();
+        TunnelProbeUrlTextBox.Text = string.IsNullOrWhiteSpace(Relay.RemoteGateway.TunnelProbeUrl)
+            ? "https://1.1.1.1/cdn-cgi/trace"
+            : Relay.RemoteGateway.TunnelProbeUrl.Trim();
 
         var token = (Relay.FrpProfileTokenOverride ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(token))
@@ -556,6 +559,9 @@ public partial class RelayEditDialog : Window
             Relay.RemoteGateway.TunnelSshPort = ParsePort(TunnelSshPortTextBox.Text, 22);
             Relay.FrpProfilePortOverride = ParsePort(FrpServerPortTextBox.Text, 7000);
             Relay.RemoteGateway.TunnelRemotePort = ParsePort(TunnelRemotePortTextBox.Text, 15000);
+            Relay.RemoteGateway.TunnelProbeUrl = string.IsNullOrWhiteSpace(TunnelProbeUrlTextBox.Text)
+                ? "https://1.1.1.1/cdn-cgi/trace"
+                : TunnelProbeUrlTextBox.Text.Trim();
             Relay.FrpProfileTokenOverride = FrpAuthTokenTextBox.Text.Trim();
             Relay.RemoteGateway.TunnelUser = string.IsNullOrWhiteSpace(TunnelUserTextBox.Text) ? "OmniRelay" : TunnelUserTextBox.Text.Trim();
             Relay.RemoteGateway.TunnelAuthMethod = GetSelectedValue(TunnelAuthMethodCombo, TunnelAuthMethods.Password);
@@ -591,6 +597,13 @@ public partial class RelayEditDialog : Window
             if (string.IsNullOrWhiteSpace(Relay.FrpProfileTokenOverride))
             {
                 FeedbackTextBlock.Text = "FRP token is required.";
+                return false;
+            }
+
+            if (!Uri.TryCreate(Relay.RemoteGateway.TunnelProbeUrl, UriKind.Absolute, out var probeUri) ||
+                (probeUri.Scheme != Uri.UriSchemeHttps && probeUri.Scheme != Uri.UriSchemeHttp))
+            {
+                FeedbackTextBlock.Text = "Tunnelctl probe URL must be a valid absolute http/https URL.";
                 return false;
             }
 

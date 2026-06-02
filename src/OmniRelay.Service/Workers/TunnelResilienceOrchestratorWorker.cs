@@ -461,15 +461,15 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         try
         {
             // If only end-to-end probe is failing while local tunnel path is healthy,
-            // prefer preserving the local tunnel, but allow targeted restart for
-            // persistent remote-backend failures (for example backend protocol unknown).
+            // keep local transport intact and rely on remote tunnelctl remediation.
             if (!localPathFailure)
             {
-                var requiresLocalRestart = ShouldRestartLocalTunnelForRemoteFailure(_healthReasonCode);
+                RecordEvent("warn", "remote-only failure detected; preserving local FRP transport");
+                _fileLog.Warn("Remote-only failure detected; preserving local FRP transport.");
                 switch (tier)
                 {
                     case 1:
-                        if (requiresLocalRestart && _remoteProbeModuleAvailable && _tunnelConnected)
+                        if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
                             RecordEvent("warn", "recovery tier1: remote backend unhealthy; running remote soft remediation");
                             _fileLog.Warn(
@@ -477,38 +477,16 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                             await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
                             attemptedRecovery = true;
                         }
-
-                        RecordEvent("warn", "recovery tier1: end-to-end probe failed; keeping local tunnel intact");
-                        _fileLog.Warn("Recovery tier1: end-to-end probe failed; keeping local tunnel intact.");
-                        _tunnelState = "Degraded";
-                        _recoveryAction = null;
-                        _currentRecoveryTier = 0;
                         break;
                     case 2:
-                        if (requiresLocalRestart)
+                        if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
-                            if (_remoteProbeModuleAvailable && _tunnelConnected)
-                            {
-                                RecordEvent("warn", "recovery tier2: remote backend unhealthy; running remote soft remediation");
-                                _fileLog.Warn(
-                                    $"Recovery tier2: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); running remote soft remediation.");
-                                await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
-                            }
-
-                            RecordEvent("warn", "recovery tier2: remote backend unhealthy; restarting local tunnel");
+                            RecordEvent("warn", "recovery tier2: remote backend unhealthy; running remote soft remediation");
                             _fileLog.Warn(
-                                $"Recovery tier2: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); restarting local tunnel.");
-                            _runtime.RequestTunnelRestart("tier2_remote_backend_recovery");
-                            await StopTunnelProcessAsync();
+                                $"Recovery tier2: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); running remote soft remediation.");
+                            await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
                             attemptedRecovery = true;
-                            break;
                         }
-
-                        RecordEvent("warn", "recovery tier2: end-to-end probe failed; keeping local tunnel intact");
-                        _fileLog.Warn("Recovery tier2: end-to-end probe failed; keeping local tunnel intact.");
-                        _tunnelState = "Degraded";
-                        _recoveryAction = null;
-                        _currentRecoveryTier = 0;
                         break;
                     default:
                         if (_remoteProbeModuleAvailable && _tunnelConnected)
@@ -522,17 +500,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                         {
                             RecordEvent("warn", "recovery tier3: remote remediation skipped (module missing or ssh session not established)");
                             _fileLog.Warn("Recovery tier3: remote remediation skipped (module missing or ssh session not established).");
-                        }
-
-                        if (requiresLocalRestart)
-                        {
-                            RecordEvent("warn", "recovery tier3: remote backend remains unhealthy; restarting local tunnel");
-                            _fileLog.Warn(
-                                $"Recovery tier3: remote backend remains unhealthy ({_healthReasonCode ?? "unknown"}); restarting local tunnel.");
-                            _runtime.RequestTunnelRestart("tier3_remote_backend_recovery");
-                            await StopTunnelProcessAsync();
-                            await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
-                            attemptedRecovery = true;
                         }
                         break;
                 }
@@ -1384,21 +1351,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
     private static string EscapeForSingleQuotedShell(string value)
     {
         return (value ?? string.Empty).Replace("'", "'\\''", StringComparison.Ordinal);
-    }
-
-    private static bool ShouldRestartLocalTunnelForRemoteFailure(string? reasonCode)
-    {
-        if (string.IsNullOrWhiteSpace(reasonCode))
-        {
-            return false;
-        }
-
-        return reasonCode.Equals("backend_protocol_not_socks5", StringComparison.OrdinalIgnoreCase) ||
-               reasonCode.Equals("backend_protocol_unknown", StringComparison.OrdinalIgnoreCase) ||
-               reasonCode.Equals("backend_unreachable", StringComparison.OrdinalIgnoreCase) ||
-               reasonCode.Equals("backend_listener_down", StringComparison.OrdinalIgnoreCase) ||
-               reasonCode.Equals("backend_endpoint_unresponsive", StringComparison.OrdinalIgnoreCase) ||
-               reasonCode.Equals("remote_probe_timeout", StringComparison.OrdinalIgnoreCase);
     }
 
     private void LogProbeFailure(string phase, string reasonCode, string detail)

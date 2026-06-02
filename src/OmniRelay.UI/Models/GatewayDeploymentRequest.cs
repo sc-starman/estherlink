@@ -7,6 +7,7 @@ public sealed class GatewayDeploymentRequest
     public string RelayId { get; init; } = string.Empty;
     public required ServiceConfig Config { get; init; }
     public string BootstrapMode { get; init; } = GatewayBootstrapModes.Tunnel;
+    public string TunnelProbeUrl { get; init; } = "https://1.1.1.1/cdn-cgi/trace";
     public string SelectedGatewayProtocol { get; init; } = GatewayProtocols.VlessTlsSingbox;
     public int GatewayPublicPort { get; init; }
     public int GatewayPanelPort { get; init; }

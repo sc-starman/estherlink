@@ -1527,7 +1527,9 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
         await UploadTunnelModuleScriptAsync(request, progress, cancellationToken);
 
-        const string probeUrl = "https://1.1.1.1/cdn-cgi/trace";
+        var probeUrl = string.IsNullOrWhiteSpace(request.TunnelProbeUrl)
+            ? "https://1.1.1.1/cdn-cgi/trace"
+            : request.TunnelProbeUrl.Trim();
         var tunnelCtlPath = GetTunnelCtlPath(request);
         var tunnelCtlConfigDir = GetTunnelCtlConfigDir(request);
         var relayId = NormalizeRelayId(request.RelayId);
@@ -2500,6 +2502,12 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         if (string.IsNullOrWhiteSpace(request.GatewayDohEndpoints))
         {
             throw new InvalidOperationException("Gateway DoH endpoints are required.");
+        }
+
+        if (!Uri.TryCreate(request.TunnelProbeUrl, UriKind.Absolute, out var probeUri) ||
+            (probeUri.Scheme != Uri.UriSchemeHttps && probeUri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new InvalidOperationException("Tunnelctl probe URL must be a valid absolute http/https URL.");
         }
     }
 

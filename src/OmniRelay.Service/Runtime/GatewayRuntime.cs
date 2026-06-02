@@ -1574,6 +1574,7 @@ public sealed class GatewayRuntime
                 TunnelPrivateKeyPath = relay.RemoteGateway?.TunnelPrivateKeyPath ?? string.Empty,
                 TunnelPrivateKeyPassphrase = relay.RemoteGateway?.TunnelPrivateKeyPassphrase ?? string.Empty,
                 TunnelPassword = relay.RemoteGateway?.TunnelPassword ?? string.Empty,
+                TunnelProbeUrl = string.IsNullOrWhiteSpace(relay.RemoteGateway?.TunnelProbeUrl) ? "https://1.1.1.1/cdn-cgi/trace" : relay.RemoteGateway.TunnelProbeUrl.Trim(),
                 BootstrapMode = string.IsNullOrWhiteSpace(relay.RemoteGateway?.BootstrapMode) ? "tunnel" : relay.RemoteGateway.BootstrapMode.Trim(),
                 Protocol = string.IsNullOrWhiteSpace(relay.RemoteGateway?.Protocol) ? "vless_tls_singbox" : relay.RemoteGateway.Protocol.Trim(),
                 PublicPort = relay.RemoteGateway?.PublicPort is > 0 and <= 65535 ? relay.RemoteGateway.PublicPort : 443,

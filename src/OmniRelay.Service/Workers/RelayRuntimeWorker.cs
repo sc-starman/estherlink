@@ -575,10 +575,10 @@ public sealed class RelayRuntimeWorker : BackgroundService
             {
                 if (!localPathFailure)
                 {
-                    var requiresLocalRestart = ShouldRestartLocalTunnelForRemoteFailure(_healthReasonCode);
+                    RecordEvent("warn", $"relay '{_relay.Name}' remote-only failure detected; preserving local FRP transport");
                     if (tier == 1)
                     {
-                        if (requiresLocalRestart && _remoteProbeModuleAvailable && _tunnelConnected)
+                        if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
                             RecordEvent("warn", $"relay '{_relay.Name}' recovery tier1: remote soft remediation");
                             await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
@@ -591,21 +591,10 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     }
                     else if (tier == 2)
                     {
-                        if (requiresLocalRestart)
+                        if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
-                            if (_remoteProbeModuleAvailable && _tunnelConnected)
-                            {
-                                await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
-                            }
-
-                            await StopTunnelProcessAsync();
+                            await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
                             attemptedRecovery = true;
-                        }
-                        else
-                        {
-                            _tunnelState = "Degraded";
-                            _recoveryAction = null;
-                            _currentRecoveryTier = 0;
                         }
                     }
                     else
@@ -613,12 +602,6 @@ public sealed class RelayRuntimeWorker : BackgroundService
                         if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
                             await RunRemoteWatchdogRemediationAsync(config, "hard", cancellationToken);
-                            attemptedRecovery = true;
-                        }
-
-                        if (requiresLocalRestart)
-                        {
-                            await StopTunnelProcessAsync();
                             attemptedRecovery = true;
                         }
                     }
@@ -3032,21 +3015,6 @@ exit /b %ERRORLEVEL%
             return int.TryParse(match.Groups[1].Value, out port);
         }
 
-        private static bool ShouldRestartLocalTunnelForRemoteFailure(string? reasonCode)
-        {
-            if (string.IsNullOrWhiteSpace(reasonCode))
-            {
-                return false;
-            }
-
-            return reasonCode.Equals("backend_protocol_not_socks5", StringComparison.OrdinalIgnoreCase) ||
-                   reasonCode.Equals("backend_protocol_unknown", StringComparison.OrdinalIgnoreCase) ||
-                   reasonCode.Equals("backend_unreachable", StringComparison.OrdinalIgnoreCase) ||
-                   reasonCode.Equals("backend_listener_down", StringComparison.OrdinalIgnoreCase) ||
-                   reasonCode.Equals("backend_endpoint_unresponsive", StringComparison.OrdinalIgnoreCase) ||
-                   reasonCode.Equals("remote_probe_timeout", StringComparison.OrdinalIgnoreCase);
-        }
-
         private static string? FirstNonEmpty(params string?[] values)
         {
             foreach (var value in values)
@@ -3270,6 +3238,7 @@ exit /b %ERRORLEVEL%
                     TunnelPrivateKeyPath = relay.RemoteGateway?.TunnelPrivateKeyPath ?? string.Empty,
                     TunnelPrivateKeyPassphrase = relay.RemoteGateway?.TunnelPrivateKeyPassphrase ?? string.Empty,
                     TunnelPassword = relay.RemoteGateway?.TunnelPassword ?? string.Empty,
+                    TunnelProbeUrl = relay.RemoteGateway?.TunnelProbeUrl ?? "https://1.1.1.1/cdn-cgi/trace",
                     BootstrapMode = relay.RemoteGateway?.BootstrapMode ?? "tunnel",
                     Protocol = relay.RemoteGateway?.Protocol ?? "vless_tls_singbox",
                     PublicPort = relay.RemoteGateway?.PublicPort ?? 443,
