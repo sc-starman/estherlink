@@ -102,7 +102,7 @@ public class ViewModelBehaviorTests
     {
         var method = typeof(GatewayDeploymentService).GetMethod("BuildCommonArgs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert.NotNull(method);
-        return (string)method!.Invoke(null, [request, false])!;
+        return (string)method!.Invoke(null, [request, false, null])!;
     }
 
     private static void InvokeValidateRequest(GatewayDeploymentRequest request)

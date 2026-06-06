@@ -9,6 +9,9 @@ param(
     [switch]$InsecureSkipTlsVerify,
     [string]$ArtifactPath,
     [string]$BuildOutputDirectory = "build\connector-core",
+    [string]$Version,
+    [string]$SigningPrivateKeyPath,
+    [string]$ExportPublicKeyPath,
     [ValidateSet("stable", "beta")]
     [string]$Channel = "stable",
 
@@ -21,6 +24,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Net.Http
+$repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "connector_core_release_helpers.ps1")
 
 function Normalize-BaseUrl {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -43,7 +48,8 @@ function Resolve-ArtifactPath {
         [string]$ProvidedPath,
         [Parameter(Mandatory = $true)][string]$OutputDirectory,
         [Parameter(Mandatory = $true)][string]$TargetOs,
-        [Parameter(Mandatory = $true)][string]$TargetArch
+        [Parameter(Mandatory = $true)][string]$TargetArch,
+        [Parameter(Mandatory = $true)][string]$ReleaseVersion
     )
 
     $candidate = if ($null -eq $ProvidedPath) { "" } else { $ProvidedPath.Trim() }
@@ -65,11 +71,15 @@ function Resolve-ArtifactPath {
     }
 
     Write-Host "No -ArtifactPath provided. Building connector-core binary first..." -ForegroundColor Yellow
-    & $buildScript -OutputDirectory $OutputDirectory -OperatingSystems @($TargetOs) -Architectures @($TargetArch) 2>&1 | ForEach-Object {
+    & $buildScript -OutputDirectory $OutputDirectory -OperatingSystems @($TargetOs) -Architectures @($TargetArch) -Version $ReleaseVersion 2>&1 | ForEach-Object {
         Write-Host $_
     }
 
-    $binaryRoot = Join-Path $RootPath $OutputDirectory
+    $binaryRoot = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
+        $OutputDirectory
+    } else {
+        Join-Path $RootPath $OutputDirectory
+    }
     $binaryName = if ($TargetOs -eq "windows") { "connector-core.exe" } else { "connector-core" }
     $directPath = Join-Path $binaryRoot $binaryName
     if (Test-Path -LiteralPath $directPath) {
@@ -137,6 +147,8 @@ function Invoke-Upload {
         [Parameter(Mandatory = $true)][string]$Endpoint,
         [Parameter(Mandatory = $true)][string]$ApiKey,
         [Parameter(Mandatory = $true)][string]$PackagePath,
+        [Parameter(Mandatory = $true)][string]$ManifestPath,
+        [Parameter(Mandatory = $true)][string]$SignaturePath,
         [Parameter(Mandatory = $true)][string]$TargetOs,
         [Parameter(Mandatory = $true)][string]$TargetArch,
         [Parameter(Mandatory = $true)][string]$ReleaseChannel,
@@ -155,9 +167,17 @@ function Invoke-Upload {
     $multipart = New-Object System.Net.Http.MultipartFormDataContent
     $fileStream = [System.IO.File]::OpenRead($PackagePath)
     $fileContent = New-Object System.Net.Http.StreamContent($fileStream)
+    $manifestStream = [System.IO.File]::OpenRead($ManifestPath)
+    $manifestContent = New-Object System.Net.Http.StreamContent($manifestStream)
+    $signatureStream = [System.IO.File]::OpenRead($SignaturePath)
+    $signatureContent = New-Object System.Net.Http.StreamContent($signatureStream)
     $contentType = if ($TargetOs -eq "windows") { "application/zip" } else { "application/gzip" }
     $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($contentType)
+    $manifestContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/json")
+    $signatureContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/octet-stream")
     $multipart.Add($fileContent, "artifact", [System.IO.Path]::GetFileName($PackagePath))
+    $multipart.Add($manifestContent, "manifest", [System.IO.Path]::GetFileName($ManifestPath))
+    $multipart.Add($signatureContent, "signature", [System.IO.Path]::GetFileName($SignaturePath))
     $multipart.Add((New-Object System.Net.Http.StringContent($TargetOs)), "os")
     $multipart.Add((New-Object System.Net.Http.StringContent($TargetArch)), "arch")
     $multipart.Add((New-Object System.Net.Http.StringContent($ReleaseChannel)), "channel")
@@ -173,6 +193,8 @@ function Invoke-Upload {
         return ($payload | ConvertFrom-Json)
     }
     finally {
+        $signatureStream.Dispose()
+        $manifestStream.Dispose()
         $fileStream.Dispose()
         $multipart.Dispose()
         $client.Dispose()
@@ -180,7 +202,17 @@ function Invoke-Upload {
     }
 }
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+$releaseSigningPaths = Ensure-ConnectorCoreSigningKeys -RepoRootPath $repoRoot
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = Get-OmniRelayInstallerVersion -RepoRootPath $repoRoot
+}
+$usingDefaultPrivateKey = [string]::IsNullOrWhiteSpace($SigningPrivateKeyPath)
+if ([string]::IsNullOrWhiteSpace($SigningPrivateKeyPath)) {
+    $SigningPrivateKeyPath = $releaseSigningPaths.PrivateKeyPath
+}
+if ([string]::IsNullOrWhiteSpace($ExportPublicKeyPath)) {
+    $ExportPublicKeyPath = $releaseSigningPaths.PublicKeyPath
+}
 $normalizedBaseUrl = Normalize-BaseUrl -Value $BaseUrl
 $normalizedUploadBaseUrl = if ([string]::IsNullOrWhiteSpace($UploadBaseUrl)) {
     $normalizedBaseUrl
@@ -190,9 +222,93 @@ else {
 }
 
 $uploadUrl = "$normalizedUploadBaseUrl/api/installer/upload-connector-core"
-$resolvedInput = Resolve-ArtifactPath -RootPath $repoRoot -ProvidedPath $ArtifactPath -OutputDirectory $BuildOutputDirectory -TargetOs $Os -TargetArch $Arch
+$resolvedInput = Resolve-ArtifactPath -RootPath $repoRoot -ProvidedPath $ArtifactPath -OutputDirectory $BuildOutputDirectory -TargetOs $Os -TargetArch $Arch -ReleaseVersion $Version
 if ([string]::IsNullOrWhiteSpace($resolvedInput)) {
     throw "Resolved input path is empty."
+}
+
+if (-not (Test-Path -LiteralPath $SigningPrivateKeyPath)) {
+    throw "Connector-core signing private key not found: $SigningPrivateKeyPath"
+}
+if ($usingDefaultPrivateKey) {
+    Ensure-ConnectorCoreSigningKeys -RepoRootPath $repoRoot | Out-Null
+} else {
+    Export-ConnectorCorePublicKey -PrivateKeyPath $SigningPrivateKeyPath -PublicKeyPath $ExportPublicKeyPath
+}
+Write-Host "Connector-core release public key: $ExportPublicKeyPath" -ForegroundColor Yellow
+
+function New-SignedReleaseManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$PackagePath,
+        [Parameter(Mandatory = $true)][string]$ReleaseVersion,
+        [Parameter(Mandatory = $true)][string]$ReleaseChannel,
+        [Parameter(Mandatory = $true)][string]$TargetOs,
+        [Parameter(Mandatory = $true)][string]$TargetArch,
+        [Parameter(Mandatory = $true)][string]$PrivateKeyPath
+    )
+
+    $safeVersion = $ReleaseVersion.Trim()
+    if ([string]::IsNullOrWhiteSpace($safeVersion)) {
+        throw "Version must not be empty."
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "omnirelay-connector-release"
+    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+    $releaseRoot = Join-Path $tempRoot ([Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
+    $manifestPath = Join-Path $releaseRoot "manifest.json"
+    $signaturePath = Join-Path $releaseRoot "manifest.sig"
+
+    $artifactName = if ($TargetOs -eq "windows") {
+        "connector-core-$TargetOs-$TargetArch.zip"
+    } else {
+        "connector-core-$TargetOs-$TargetArch.tar.gz"
+    }
+    $hash = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $size = (Get-Item -LiteralPath $PackagePath).Length
+    $manifest = [ordered]@{
+        schemaVersion = 1
+        version = $safeVersion
+        channel = $ReleaseChannel
+        os = $TargetOs
+        arch = $TargetArch
+        artifact = $artifactName
+        sha256 = $hash
+        sizeBytes = $size
+        publishedAtUtc = [DateTimeOffset]::UtcNow.ToString("o")
+    }
+
+    $json = $manifest | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText(
+        $manifestPath,
+        $json,
+        [System.Text.UTF8Encoding]::new($false))
+
+    Sign-ConnectorCoreManifest -PrivateKeyPath $PrivateKeyPath -ManifestPath $manifestPath -SignaturePath $signaturePath
+
+    return @{
+        ManifestPath = $manifestPath
+        SignaturePath = $signaturePath
+        Sha256 = $hash
+        SizeBytes = $size
+    }
+}
+
+function Assert-PublicReleaseFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30
+        if ($response.StatusCode -lt 200 -or $response.StatusCode -gt 299) {
+            throw "$Description endpoint returned HTTP $($response.StatusCode): $Url"
+        }
+    }
+    catch {
+        throw "$Description endpoint is not publicly available after upload: $Url. $($_.Exception.Message)"
+    }
 }
 
 $lowerInput = $resolvedInput.ToLowerInvariant()
@@ -203,18 +319,35 @@ $artifact = if ($isArchive) {
     New-UploadPackageFromBinary -BinaryPath $resolvedInput -TargetOs $Os -TargetArch $Arch
 }
 
-$hash = (Get-FileHash -Path $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
-$fileSize = (Get-Item -LiteralPath $artifact).Length
+$signedRelease = New-SignedReleaseManifest `
+    -PackagePath $artifact `
+    -ReleaseVersion $Version `
+    -ReleaseChannel $Channel `
+    -TargetOs $Os `
+    -TargetArch $Arch `
+    -PrivateKeyPath $SigningPrivateKeyPath
+$hash = $signedRelease.Sha256
+$fileSize = $signedRelease.SizeBytes
 
 Write-Host "Uploading connector-core artifact..." -ForegroundColor Cyan
 Write-Host "  File: $artifact"
 Write-Host "  Size: $fileSize bytes"
 Write-Host "  SHA-256: $hash"
 Write-Host "  Channel: $Channel"
+Write-Host "  Version: $Version"
 Write-Host "  OS/Arch: $Os/$Arch"
 Write-Host "  Upload Endpoint: $uploadUrl"
 
-$response = Invoke-Upload -Endpoint $uploadUrl -ApiKey $AdminApiKey -PackagePath $artifact -TargetOs $Os -TargetArch $Arch -ReleaseChannel $Channel -SkipTlsValidation:$InsecureSkipTlsVerify
+$response = Invoke-Upload `
+    -Endpoint $uploadUrl `
+    -ApiKey $AdminApiKey `
+    -PackagePath $artifact `
+    -ManifestPath $signedRelease.ManifestPath `
+    -SignaturePath $signedRelease.SignaturePath `
+    -TargetOs $Os `
+    -TargetArch $Arch `
+    -ReleaseChannel $Channel `
+    -SkipTlsValidation:$InsecureSkipTlsVerify
 
 $downloadPath = if ($Channel -eq "beta") {
     "/download/connector-core/beta/$Os/$Arch"
@@ -223,10 +356,14 @@ else {
     "/download/connector-core/$Os/$Arch"
 }
 
+$publicDownloadUrl = "$normalizedBaseUrl$downloadPath"
+Assert-PublicReleaseFile -Url "$publicDownloadUrl/manifest" -Description "Connector-core release manifest"
+Assert-PublicReleaseFile -Url "$publicDownloadUrl/signature" -Description "Connector-core release signature"
+
 Write-Host ""
 Write-Host "Upload complete." -ForegroundColor Green
 Write-Host "  Server SHA-256: $($response.sha256)"
-Write-Host "  Download URL: $normalizedBaseUrl$downloadPath"
+Write-Host "  Download URL: $publicDownloadUrl"
 
 if ($response.sha256 -ne $hash) {
     Write-Warning "Local and server SHA-256 differ. Verify upload path and file consistency."

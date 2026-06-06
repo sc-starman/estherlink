@@ -224,6 +224,7 @@ FakesAssemblies/
 
 .env
 .env.local
+certs/
 
 xray.exe
 

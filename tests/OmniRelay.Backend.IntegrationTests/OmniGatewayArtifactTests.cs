@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using OmniRelay.Backend.Services.Installers;
 
@@ -70,6 +71,14 @@ public sealed class OmniGatewayArtifactTests : IClassFixture<IntegrationTestWebA
 
         var downloadedBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
         Assert.Equal(gzipBytes, downloadedBytes);
+
+        var manifestResponse = await client.GetAsync("/download/omni-gateway/manifest");
+        manifestResponse.EnsureSuccessStatusCode();
+        using var manifest = JsonDocument.Parse(await manifestResponse.Content.ReadAsStringAsync());
+        Assert.Equal("stable", manifest.RootElement.GetProperty("channel").GetString());
+        Assert.Equal("omni-gateway.tar.gz", manifest.RootElement.GetProperty("artifact").GetString());
+        Assert.Equal(gzipBytes.Length, manifest.RootElement.GetProperty("sizeBytes").GetInt64());
+        Assert.Equal(64, manifest.RootElement.GetProperty("sha256").GetString()?.Length);
     }
 
     [Fact]
@@ -141,15 +150,15 @@ public sealed class OmniGatewayArtifactTests : IClassFixture<IntegrationTestWebA
         var storage = scope.ServiceProvider.GetRequiredService<IInstallerStorageService>();
         var stablePath = storage.GetOmniGatewayArtifactPath("stable");
         var betaPath = storage.GetOmniGatewayArtifactPath("beta");
+        var stableManifestPath = storage.GetOmniGatewayManifestPath("stable");
+        var betaManifestPath = storage.GetOmniGatewayManifestPath("beta");
 
-        if (File.Exists(stablePath))
+        foreach (var path in new[] { stablePath, betaPath, stableManifestPath, betaManifestPath })
         {
-            File.Delete(stablePath);
-        }
-
-        if (File.Exists(betaPath))
-        {
-            File.Delete(betaPath);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
         }
     }
 }

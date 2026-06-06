@@ -378,12 +378,10 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             _lastConnectedAtUtc = DateTimeOffset.UtcNow;
         }
         else if (_processStartedAtUtc.HasValue &&
-                 DateTimeOffset.UtcNow - _processStartedAtUtc.Value >= UnestablishedGracePeriod &&
-                 DateTimeOffset.UtcNow >= _nextRecoveryAllowedAtUtc)
+                 DateTimeOffset.UtcNow - _processStartedAtUtc.Value >= UnestablishedGracePeriod)
         {
-            _lastTunnelError = "SSH session not established within grace period.";
+            _lastTunnelError = "Tunnel session not established; monitoring transport reconnect.";
             RecordEvent("warn", _lastTunnelError);
-            await StopTunnelProcessAsync();
         }
 
         var backendProbe = await ProbeBackendEndpointAsync(config.LocalProxyListenPort, cancellationToken);
@@ -453,8 +451,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
 
         var tier = ResolveRecoveryTier(_consecutiveFailures);
         _currentRecoveryTier = tier;
-        _tunnelState = $"RecoveringTier{tier}";
-        _recoveryAction = $"tier{tier}";
         var localPathFailure = !_localProbeOk || !_tunnelConnected;
         var attemptedRecovery = false;
 
@@ -464,8 +460,10 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
             // keep local transport intact and rely on remote tunnelctl remediation.
             if (!localPathFailure)
             {
-                RecordEvent("warn", "remote-only failure detected; preserving local FRP transport");
-                _fileLog.Warn("Remote-only failure detected; preserving local FRP transport.");
+                RecordEvent("warn", "remote-only failure detected; preserving local tunnel transport");
+                _fileLog.Warn("Remote-only failure detected; preserving local tunnel transport.");
+                _tunnelState = "Degraded";
+                _recoveryAction = "remote_tunnelctl_unavailable";
                 switch (tier)
                 {
                     case 1:
@@ -474,6 +472,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                             RecordEvent("warn", "recovery tier1: remote backend unhealthy; running remote soft remediation");
                             _fileLog.Warn(
                                 $"Recovery tier1: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); running remote soft remediation.");
+                            _recoveryAction = "remote_tunnelctl_soft";
                             await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
                             attemptedRecovery = true;
                         }
@@ -484,6 +483,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                             RecordEvent("warn", "recovery tier2: remote backend unhealthy; running remote soft remediation");
                             _fileLog.Warn(
                                 $"Recovery tier2: remote backend unhealthy ({_healthReasonCode ?? "unknown"}); running remote soft remediation.");
+                            _recoveryAction = "remote_tunnelctl_soft";
                             await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
                             attemptedRecovery = true;
                         }
@@ -493,6 +493,7 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                         {
                             RecordEvent("warn", "recovery tier3: end-to-end probe failed; running remote remediation only");
                             _fileLog.Warn("Recovery tier3: end-to-end probe failed; running remote remediation only.");
+                            _recoveryAction = "remote_tunnelctl_hard";
                             await RunRemoteWatchdogRemediationAsync(config, "hard", cancellationToken);
                             attemptedRecovery = true;
                         }
@@ -508,50 +509,13 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
                 return;
             }
 
-            switch (tier)
-            {
-                case 1:
-                    RecordEvent("warn", "recovery tier1: restarting bootstrap SOCKS and tunnel");
-                    _fileLog.Warn("Recovery tier1: restarting bootstrap SOCKS and tunnel.");
-                    await _socksEngine.RestartAsync(config.BootstrapSocksLocalPort, cancellationToken);
-                    _runtime.RequestTunnelRestart("tier1_recovery");
-                    await StopTunnelProcessAsync();
-                    attemptedRecovery = true;
-                    break;
-                case 2:
-                    RecordEvent("warn", "recovery tier2: hard local cleanup");
-                    _fileLog.Warn("Recovery tier2: hard local cleanup.");
-                    await _proxyEngine.StopAsync(cancellationToken);
-                    await _socksEngine.StopAsync(cancellationToken);
-                    await StopTunnelProcessAsync();
-                    await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
-                    _ = await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, cancellationToken);
-                    await _socksEngine.EnsureRunningAsync(config.BootstrapSocksLocalPort, cancellationToken);
-                    attemptedRecovery = true;
-                    break;
-                default:
-                    RecordEvent("warn", "recovery tier3: hard local cleanup");
-                    _fileLog.Warn("Recovery tier3: hard local cleanup.");
-                    if (_remoteProbeModuleAvailable && _tunnelConnected)
-                    {
-                        RecordEvent("warn", "recovery tier3: running remote remediation before local cleanup");
-                        _fileLog.Warn("Recovery tier3: running remote remediation before local cleanup.");
-                        await RunRemoteWatchdogRemediationAsync(config, "hard", cancellationToken);
-                    }
-                    else
-                    {
-                        RecordEvent("warn", "recovery tier3: skipping remote remediation (module missing or ssh session not established)");
-                        _fileLog.Warn("Recovery tier3: skipping remote remediation (module missing or ssh session not established).");
-                    }
-                    await _proxyEngine.StopAsync(cancellationToken);
-                    await _socksEngine.StopAsync(cancellationToken);
-                    await StopTunnelProcessAsync();
-                    await CleanupOrphanTunnelProcessesAsync(config, cancellationToken);
-                    _ = await _proxyEngine.EnsureRunningAsync(config.LocalProxyListenPort, cancellationToken);
-                    await _socksEngine.EnsureRunningAsync(config.BootstrapSocksLocalPort, cancellationToken);
-                    attemptedRecovery = true;
-                    break;
-            }
+            _healthState = "Degraded";
+            _tunnelState = string.Equals(_healthReasonCode, "ssh_session_not_established", StringComparison.OrdinalIgnoreCase)
+                ? "Reconnecting"
+                : "Degraded";
+            _recoveryAction = "monitoring_transport";
+            RecordEvent("warn", $"local transport unhealthy at diagnostic tier {tier}; monitoring only");
+            _fileLog.Warn($"Local transport unhealthy at diagnostic tier {tier}; monitoring only.");
         }
         catch (Exception ex)
         {
@@ -564,8 +528,6 @@ public sealed class TunnelResilienceOrchestratorWorker : BackgroundService
         if (attemptedRecovery && !string.Equals(_healthState, "Healthy", StringComparison.Ordinal))
         {
             _tunnelState = "Degraded";
-            _recoveryAction = null;
-            _currentRecoveryTier = 0;
         }
 
         _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(GetRecoveryCooldown(tier));

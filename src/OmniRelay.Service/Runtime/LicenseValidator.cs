@@ -66,6 +66,15 @@ public sealed class LicenseValidator
             var certificateCache = await ReadCertificateCacheAsync(cancellationToken);
             var fingerprintPayload = BuildDeviceFingerprintPayload();
             var fingerprintHash = HashFingerprintPayload(fingerprintPayload);
+            LicenseValidationResult BuildFallback(string error) => BuildCacheFallback(
+                cache,
+                publicKeys,
+                certificateCache,
+                licenseKeyHash,
+                fingerprintHash,
+                now,
+                error,
+                allowCertificateFallback: !transferRequested);
 
             if (!forceOnline &&
                 certificateCache is not null &&
@@ -109,7 +118,7 @@ public sealed class LicenseValidator
 
             if (string.IsNullOrWhiteSpace(config.LicenseKey))
             {
-                return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, "License key is missing.");
+                return BuildFallback("License key is missing.");
             }
 
             try
@@ -133,30 +142,26 @@ public sealed class LicenseValidator
                 var verifyAttempt = await SendVerifyWithFallbackAsync(config, verifyUrl, verifyRequestJson, cancellationToken);
                 if (!verifyAttempt.Success)
                 {
-                    return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, verifyAttempt.Error ?? "License verification failed.");
+                    return BuildFallback(verifyAttempt.Error ?? "License verification failed.");
                 }
 
                 var response = verifyAttempt.Response!;
                 var responseBody = verifyAttempt.ResponseBody ?? string.Empty;
                 if (!response.IsSuccessStatusCode)
                 {
-                    return BuildCacheFallback(
-                        cache,
-                        publicKeys,
-                        licenseKeyHash,
-                        now,
+                    return BuildFallback(
                         $"License server HTTP {(int)response.StatusCode}: {response.ReasonPhrase}");
                 }
 
                 var parsed = JsonSerializer.Deserialize<LicenseVerifyResponse>(responseBody, JsonOptions);
                 if (parsed is null)
                 {
-                    return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, "License server returned invalid JSON.");
+                    return BuildFallback("License server returned invalid JSON.");
                 }
 
                 if (!string.Equals(parsed.SignatureAlg, "Ed25519", StringComparison.Ordinal))
                 {
-                    return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, "Unsupported license signature algorithm.");
+                    return BuildFallback("Unsupported license signature algorithm.");
                 }
 
                 var keysResponse = await FetchPublicKeysWithFallbackAsync(config, verifyUrl, cancellationToken);
@@ -168,7 +173,7 @@ public sealed class LicenseValidator
 
                 if (!VerifyResponseSignature(parsed, nonce, publicKeys))
                 {
-                    return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, "License signature verification failed.");
+                    return BuildFallback("License signature verification failed.");
                 }
 
                 var cacheExpiresAt = parsed.CacheExpiresAt.ToUniversalTime();
@@ -253,7 +258,7 @@ public sealed class LicenseValidator
             {
                 _logger.LogWarning(ex, "License verification call failed.");
                 _fileLog.Warn($"License online verification failed: {ex.Message}");
-                return BuildCacheFallback(cache, publicKeys, licenseKeyHash, now, ex.Message);
+                return BuildFallback(ex.Message);
             }
         }
         finally
@@ -265,10 +270,27 @@ public sealed class LicenseValidator
     private static LicenseValidationResult BuildCacheFallback(
         LicenseCacheEntry? cache,
         LicensePublicKeysResponse? keys,
+        LicenseCertificateCacheEntry? certificateCache,
         string licenseKeyHash,
+        string fingerprintHash,
         DateTimeOffset now,
-        string error)
+        string error,
+        bool allowCertificateFallback)
     {
+        if (allowCertificateFallback &&
+            certificateCache is not null &&
+            certificateCache.LicenseKeyHash == licenseKeyHash &&
+            VerifyOfflineCertificate(certificateCache.Certificate, fingerprintHash))
+        {
+            return new LicenseValidationResult(
+                true,
+                false,
+                now,
+                null,
+                null,
+                Source: "certificate");
+        }
+
         if (cache is not null &&
             cache.IsValid &&
             cache.LicenseKeyHash == licenseKeyHash &&

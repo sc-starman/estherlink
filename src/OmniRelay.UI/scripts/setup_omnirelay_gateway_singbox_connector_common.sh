@@ -745,6 +745,14 @@ EOF
 }
 
 connector_write_accounting_sync_env(){
+  local sync_cmd
+  sync_cmd="${GATEWAYCTL_PATH} sync-clients"
+  if [[ -n "${RELAY_ID:-}" ]]; then
+    sync_cmd="${sync_cmd} --relay-id ${RELAY_ID}"
+  fi
+  if [[ -n "${PROTOCOL_ID:-}" ]]; then
+    sync_cmd="${sync_cmd} --protocol ${PROTOCOL_ID}"
+  fi
   {
     printf 'OMNIRELAY_ACCOUNTING_DB=%q\n' "$CONNECTOR_ACCOUNTING_DB"
     printf 'OMNIRELAY_ACCOUNTING_METADATA_FILE=%q\n' "$GATEWAY_METADATA_FILE"
@@ -754,11 +762,7 @@ connector_write_accounting_sync_env(){
     printf 'OMNIRELAY_ACCOUNTING_PANEL_GROUP=%q\n' "$PANEL_USER_ACCOUNT"
     printf 'OMNIRELAY_ACCOUNTING_RELAY_ID=%q\n' "${RELAY_ID:-}"
     # Keep the command shell-quoted so the value survives env-file parsing and preserves argv separation.
-    if [[ -n "${RELAY_ID:-}" ]]; then
-      printf "OMNIRELAY_ACCOUNTING_SYNC_COMMAND='%s'\n" "${GATEWAYCTL_PATH} sync-clients --relay-id ${RELAY_ID}"
-    else
-      printf "OMNIRELAY_ACCOUNTING_SYNC_COMMAND='%s'\n" "${GATEWAYCTL_PATH} sync-clients"
-    fi
+    printf "OMNIRELAY_ACCOUNTING_SYNC_COMMAND='%s'\n" "$sync_cmd"
   } > "$ACCOUNTING_SYNC_ENV_FILE"
   chmod 0600 "$ACCOUNTING_SYNC_ENV_FILE" || true
 }
@@ -806,10 +810,16 @@ RELAY_ID="${OMNIRELAY_ACCOUNTING_RELAY_ID:-}"
 SYNC_COMMAND="${OMNIRELAY_ACCOUNTING_SYNC_COMMAND:-}"
 
 normalize_sync_command(){
-  local cmd="$1" relay_id="${RELAY_ID:-}"
+  local cmd="$1" relay_id="${RELAY_ID:-}" protocol_id=""
   [[ -n "$cmd" ]] || { echo ""; return 0; }
   if [[ "$cmd" != *"--relay-id"* && -n "$relay_id" ]]; then
     cmd="${cmd} --relay-id ${relay_id}"
+  fi
+  if [[ "$cmd" != *"--protocol"* && -f "$METADATA_FILE" ]]; then
+    protocol_id="$(jq -r '.activeProtocol // empty' "$METADATA_FILE" 2>/dev/null || true)"
+    if [[ -n "$protocol_id" ]]; then
+      cmd="${cmd} --protocol ${protocol_id}"
+    fi
   fi
   echo "$cmd"
 }
@@ -1490,6 +1500,9 @@ connector_write_service_unit(){
   if [[ -n "${RELAY_ID:-}" ]]; then
     sync_cmd="${sync_cmd} --relay-id ${RELAY_ID}"
   fi
+  if [[ -n "${PROTOCOL_ID:-}" ]]; then
+    sync_cmd="${sync_cmd} --protocol ${PROTOCOL_ID}"
+  fi
   cat > "/etc/systemd/system/${CONNECTOR_SERVICE}.service" <<EOF
 [Unit]
 Description=OmniRelay sing-box connector
@@ -1721,9 +1734,24 @@ connector_render_apply(){
   connector_validate_dns_profile "$DOH_ENDPOINTS"
   config_json="$(connector_apply_dns_to_config_json "$config_json")"
   jq -e 'type=="object"' >/dev/null 2>&1 <<<"$config_json" || die "Invalid connector JSON payload after DNS injection"
-  printf '%s\n' "$config_json" > "$CONNECTOR_CONFIG_FILE"
-  "$CONNECTOR_BIN" check --config "$CONNECTOR_CONFIG_FILE" >/tmp/omnirelay-singbox-check.log 2>&1 || { sed -n '1,120p' /tmp/omnirelay-singbox-check.log >&2 || true; die "connector-core config validation failed"; }
+  local candidate_file config_changed=true
+  candidate_file="$(mktemp "${CONNECTOR_CONFIG_FILE}.candidate.XXXXXX")"
+  printf '%s\n' "$config_json" > "$candidate_file"
+  "$CONNECTOR_BIN" check --config "$candidate_file" >/tmp/omnirelay-singbox-check.log 2>&1 || {
+    rm -f "$candidate_file"
+    sed -n '1,120p' /tmp/omnirelay-singbox-check.log >&2 || true
+    die "connector-core config validation failed"
+  }
+  if [[ -f "$CONNECTOR_CONFIG_FILE" ]] && cmp -s "$candidate_file" "$CONNECTOR_CONFIG_FILE"; then
+    config_changed=false
+    rm -f "$candidate_file"
+  else
+    mv -f "$candidate_file" "$CONNECTOR_CONFIG_FILE"
+  fi
   jq -n --arg mode "$mode" '{mode:$mode,updatedAtUtc:(now|todate)}' > "$CONNECTOR_STATE_FILE"
+  if [[ "$config_changed" != "true" ]] && systemctl is-active --quiet "$CONNECTOR_SERVICE"; then
+    return 0
+  fi
   systemctl reset-failed "$CONNECTOR_SERVICE" >/dev/null 2>&1 || true
   if ! systemctl kill -s HUP "$CONNECTOR_SERVICE" >/dev/null 2>&1; then
     systemctl restart "$CONNECTOR_SERVICE"

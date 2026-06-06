@@ -524,6 +524,11 @@ public partial class RelayEditDialog : Window
 
             Relay.RemoteGateway.OpenVpnNetwork = string.IsNullOrWhiteSpace(OpenVpnNetworkTextBox.Text) ? "10.29.0.0/24" : OpenVpnNetworkTextBox.Text.Trim();
             Relay.RemoteGateway.IpsecL2tpNetwork = string.IsNullOrWhiteSpace(IpsecL2tpNetworkTextBox.Text) ? "10.39.0.0/24" : IpsecL2tpNetworkTextBox.Text.Trim();
+            if (selectedRemoteProtocol == GatewayProtocols.IpsecL2tpSingbox &&
+                string.IsNullOrWhiteSpace(Relay.RemoteGateway.IpsecL2tpPreSharedKey))
+            {
+                Relay.RemoteGateway.IpsecL2tpPreSharedKey = GenerateFrpToken();
+            }
             Relay.RemoteGateway.OpenVpnSharedCaCertPath = OpenVpnSharedCaCertPathTextBox.Text.Trim();
             Relay.RemoteGateway.OpenVpnSharedClientCertPath = OpenVpnSharedClientCertPathTextBox.Text.Trim();
             Relay.RemoteGateway.OpenVpnSharedClientKeyPath = OpenVpnSharedClientKeyPathTextBox.Text.Trim();

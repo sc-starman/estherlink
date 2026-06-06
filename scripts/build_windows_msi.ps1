@@ -3,20 +3,31 @@ param(
     [string]$Configuration = "Release",
     [ValidateSet("stable", "beta")]
     [string]$Channel = "stable",
+    [string]$ConnectorCoreReleasePublicKeyPath,
+    [switch]$IncludeLegacyGatewayScripts,
     [switch]$RebuildOmniPanel
 )
 
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "connector_core_release_helpers.ps1")
 $installerProject = Join-Path $root "src\OmniRelay.Installer\OmniRelay.Installer.wixproj"
 $productWxsPath = Join-Path $root "src\OmniRelay.Installer\Product.wxs"
 $prepareOmniPanelAssetsScript = Join-Path $root "scripts\prepare_service_omnipanel_assets.ps1"
 $gatewayAssetChannelMarkerPath = Join-Path $root "src\OmniRelay.UI\gateway_asset_channel.txt"
+$connectorCorePublicKeyDestination = Join-Path $root "src\OmniRelay.UI\connector_core_release_public_key.pem"
 $connectorCoreServiceDir = Join-Path $root "src\OmniRelay.Service\connector-core"
 $connectorCoreProjectDir = Join-Path $root "src\OmniRelay.ConnectorCore"
 $uiProject = Join-Path $root "src\OmniRelay.UI\OmniRelay.UI.csproj"
 $serviceProject = Join-Path $root "src\OmniRelay.Service\OmniRelay.Service.csproj"
+
+if ($Configuration -eq "Release" -and $IncludeLegacyGatewayScripts) {
+    throw "Release MSI builds cannot include legacy gateway management scripts."
+}
+if ([string]::IsNullOrWhiteSpace($ConnectorCoreReleasePublicKeyPath)) {
+    $ConnectorCoreReleasePublicKeyPath = (Ensure-ConnectorCoreSigningKeys -RepoRootPath $root).PublicKeyPath
+}
 
 function Clean-ProjectArtifacts {
     param([Parameter(Mandatory = $true)][string]$ProjectPath)
@@ -110,6 +121,49 @@ function Write-GatewayAssetChannelMarker {
     Write-Host "Gateway asset channel marker set to: $normalized" -ForegroundColor Yellow
 }
 
+function Install-ConnectorCoreReleasePublicKey {
+    param([string]$SourcePath)
+
+    if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+        if (Test-Path -LiteralPath $connectorCorePublicKeyDestination) {
+            Remove-Item -LiteralPath $connectorCorePublicKeyDestination -Force
+        }
+        return
+    }
+    if (-not (Test-Path -LiteralPath $SourcePath)) {
+        throw "Connector-core release public key not found: $SourcePath"
+    }
+    $content = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $SourcePath).Path)
+    if (-not $content.Contains("-----BEGIN PUBLIC KEY-----")) {
+        throw "Connector-core release public key must be a PEM public key."
+    }
+    [System.IO.File]::WriteAllText(
+        $connectorCorePublicKeyDestination,
+        $content.Replace("`r`n", "`n").Replace("`r", "`n"),
+        [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Connector-core release public key embedded in UI payload." -ForegroundColor Yellow
+}
+
+function Assert-ConnectorCoreOnlyReleasePayload {
+    param([Parameter(Mandatory = $true)][string]$RepoRootPath)
+
+    $uiPayload = Join-Path $RepoRootPath "src\OmniRelay.Installer\payload\Release\ui"
+    $gatewayScripts = Join-Path $uiPayload "GatewayScripts"
+    $bootstrap = Join-Path $gatewayScripts "bootstrap_omnirelay_connector_core.sh"
+    $publicKey = Join-Path $uiPayload "connector_core_release_public_key.pem"
+    if (-not (Test-Path -LiteralPath $bootstrap)) {
+        throw "Release MSI payload is missing connector-core bootstrap: $bootstrap"
+    }
+    if (-not (Test-Path -LiteralPath $publicKey)) {
+        throw "Release MSI payload is missing connector-core trusted public key: $publicKey"
+    }
+    $unexpected = Get-ChildItem -LiteralPath $gatewayScripts -File |
+        Where-Object { $_.Name -ne "bootstrap_omnirelay_connector_core.sh" }
+    if ($unexpected) {
+        throw "Release MSI payload contains legacy gateway scripts: $($unexpected.Name -join ', ')"
+    }
+}
+
 function Increment-InstallerPatchVersion {
     param([Parameter(Mandatory = $true)][string]$FilePath)
 
@@ -142,6 +196,7 @@ function Increment-InstallerPatchVersion {
 
 Increment-InstallerPatchVersion -FilePath $productWxsPath
 Write-GatewayAssetChannelMarker -ChannelValue $Channel
+Install-ConnectorCoreReleasePublicKey -SourcePath $ConnectorCoreReleasePublicKeyPath
 Ensure-ConnectorCoreWindowsRuntime
 Stop-LockingNodeProcesses -RepoRootPath $root
 if (-not (Test-Path -LiteralPath $prepareOmniPanelAssetsScript)) {
@@ -163,9 +218,15 @@ Clean-ProjectArtifacts -ProjectPath $uiProject
 Clean-ProjectArtifacts -ProjectPath $serviceProject
 
 Write-Host "Building OmniRelay MSI ($Configuration)..." -ForegroundColor Cyan
-dotnet build $installerProject -c $Configuration
+$includeLegacyGatewayScripts =
+    $Configuration -ne "Release" -and
+    ([bool]$IncludeLegacyGatewayScripts -or [string]::IsNullOrWhiteSpace($ConnectorCoreReleasePublicKeyPath))
+dotnet build $installerProject -c $Configuration -p:IncludeLegacyGatewayScripts=$($includeLegacyGatewayScripts.ToString().ToLowerInvariant())
 if ($LASTEXITCODE -ne 0) {
     throw "MSI build failed with exit code $LASTEXITCODE."
+}
+if ($Configuration -eq "Release") {
+    Assert-ConnectorCoreOnlyReleasePayload -RepoRootPath $root
 }
 
 $msiCandidates = Get-ChildItem -Path (Join-Path $root "src\OmniRelay.Installer\bin\$Configuration") -Filter *.msi -File -ErrorAction SilentlyContinue

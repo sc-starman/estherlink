@@ -8,6 +8,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "connector_core_release_helpers.ps1")
 
 function Resolve-ReleaseVersion {
     param(
@@ -19,17 +21,7 @@ function Resolve-ReleaseVersion {
         return $ProvidedVersion.Trim()
     }
 
-    try {
-        $tag = git -C $RootPath describe --tags --always --dirty 2>$null
-        if (-not [string]::IsNullOrWhiteSpace($tag)) {
-            return $tag.Trim()
-        }
-    }
-    catch {
-        # fall back
-    }
-
-    return "dev"
+    return Get-OmniRelayInstallerVersion -RepoRootPath $RootPath
 }
 
 function Test-SupportedArch {
@@ -37,7 +29,6 @@ function Test-SupportedArch {
     return $Arch -in @("amd64", "arm64")
 }
 
-$root = Split-Path -Parent $PSScriptRoot
 $projectFullPath = Join-Path $root $ProjectPath
 if (-not (Test-Path -LiteralPath $projectFullPath)) {
     throw "Connector core project not found: $projectFullPath"
@@ -51,7 +42,11 @@ if ($null -eq $goBin) {
 $resolvedVersion = Resolve-ReleaseVersion -RootPath $root -ProvidedVersion $Version
 Write-Host "Connector-core version: $resolvedVersion" -ForegroundColor Yellow
 
-$outDir = Join-Path $root $OutputDirectory
+$outDir = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
+    $OutputDirectory
+} else {
+    Join-Path $root $OutputDirectory
+}
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 
 $originalGoos = $env:GOOS
@@ -89,7 +84,7 @@ try {
             $env:CGO_ENABLED = "0"
             $env:GOOS = $targetOs
             $env:GOARCH = $arch
-            & go build -trimpath -ldflags "-s -w" -o $binaryPath ./cmd/connector-core
+            & go build -trimpath -ldflags "-s -w -X main.version=$resolvedVersion" -o $binaryPath ./cmd/connector-core
             if ($LASTEXITCODE -ne 0) {
                 throw "go build failed for $targetOs/$arch with exit code $LASTEXITCODE."
             }

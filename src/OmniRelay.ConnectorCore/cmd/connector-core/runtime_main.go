@@ -1,5 +1,3 @@
-//go:build linux
-
 package main
 
 import (
@@ -13,9 +11,7 @@ import (
 	"math"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -24,6 +20,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/omnirelay/connector-core/internal/accounting"
+	"github.com/omnirelay/connector-core/internal/clients"
+	"github.com/omnirelay/connector-core/internal/protocol"
 	"github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/include"
@@ -37,37 +36,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const (
-	defaultConfigPath      = "/etc/omnirelay/gateway/connector/config.json"
-	defaultMetadataPath    = "/etc/omnirelay/gateway/metadata.json"
-	defaultAccountingDB    = "/etc/omnirelay/gateway/connector/accounting.db"
-	defaultStatePath       = "/etc/omnirelay/gateway/connector/connector_core_state.json"
-	defaultLockPath        = "/run/omnirelay-accounting-sync.lock"
-	defaultSyncCommand     = ""
-	defaultPanelGroup      = "omnigateway"
-	defaultCycleInterval   = 30
-	defaultSyncTimeoutSecs = 90
-)
-
-var fullTunnelProtocols = map[string]struct{}{
-	"shadowsocks_singbox":              {},
-	"vless_tls_singbox":                {},
-	"mixed_singbox":                    {},
-	"socks_singbox":                    {},
-	"http_singbox":                     {},
-	"hysteria2_singbox":                {},
-	"trojan_singbox":                   {},
-	"naive_singbox":                    {},
-	"shadowtls_v3_shadowsocks_singbox": {},
-}
-
-var perClientProtocols = map[string]struct{}{
-	"vless_tls_singbox":                {},
-	"shadowsocks_singbox":              {},
-	"shadowtls_v3_shadowsocks_singbox": {},
-	"trojan_singbox":                   {},
-}
-
 type runOptions struct {
 	configPath      string
 	metadataPath    string
@@ -75,7 +43,6 @@ type runOptions struct {
 	statePath       string
 	lockPath        string
 	panelGroup      string
-	syncCommand     string
 	intervalSeconds int
 }
 
@@ -664,15 +631,12 @@ func (l *speedLimiter) RoutedPacketConnection(_ context.Context, conn N.PacketCo
 }
 
 type runtimeDaemon struct {
-	opts         runOptions
-	limiter      *speedLimiter
-	stats        *statsTracker
-	conns        *connTracker
-	boxMu        sync.Mutex
-	box          *box.Box
-	syncMu       sync.Mutex
-	syncInFlight bool
-	asyncErr     string
+	opts    runOptions
+	limiter *speedLimiter
+	stats   *statsTracker
+	conns   *connTracker
+	boxMu   sync.Mutex
+	box     *box.Box
 }
 
 func newRuntimeDaemon(opts runOptions) *runtimeDaemon {
@@ -682,18 +646,6 @@ func newRuntimeDaemon(opts runOptions) *runtimeDaemon {
 		stats:   newStatsTracker(),
 		conns:   newConnTracker(),
 	}
-}
-
-func (d *runtimeDaemon) setAsyncErr(message string) {
-	d.syncMu.Lock()
-	defer d.syncMu.Unlock()
-	d.asyncErr = message
-}
-
-func (d *runtimeDaemon) getAsyncErr() string {
-	d.syncMu.Lock()
-	defer d.syncMu.Unlock()
-	return d.asyncErr
 }
 
 func (d *runtimeDaemon) createBox() (*box.Box, error) {
@@ -756,51 +708,6 @@ func (d *runtimeDaemon) closeBox() {
 	d.stats.Reset()
 }
 
-func (d *runtimeDaemon) triggerSyncCommand(protocolID string) {
-	base := strings.TrimSpace(d.opts.syncCommand)
-	if base == "" {
-		return
-	}
-	cmdText := base
-	if !strings.Contains(base, "--protocol") {
-		proto := strings.TrimSpace(protocolID)
-		if proto != "" {
-			cmdText = fmt.Sprintf("%s --protocol %s", base, proto)
-		}
-	}
-	d.syncMu.Lock()
-	if d.syncInFlight {
-		d.syncMu.Unlock()
-		return
-	}
-	d.syncInFlight = true
-	d.syncMu.Unlock()
-
-	go func() {
-		defer func() {
-			d.syncMu.Lock()
-			d.syncInFlight = false
-			d.syncMu.Unlock()
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), defaultSyncTimeoutSecs*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "/usr/bin/env", "bash", "-lc", cmdText)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			message := strings.TrimSpace(string(output))
-			if message == "" {
-				message = err.Error()
-			}
-			if len(message) > 280 {
-				message = message[:280]
-			}
-			d.setAsyncErr("sync_command_failed:" + message)
-			return
-		}
-		d.setAsyncErr("")
-	}()
-}
-
 func (d *runtimeDaemon) runCycle() coreState {
 	now := time.Now().UTC()
 	state := coreState{
@@ -828,7 +735,6 @@ func (d *runtimeDaemon) runCycle() coreState {
 		state.LimiterActiveUsers = snapshot.limitedUsers
 		state.LimiterBypassCount = snapshot.bypassCount
 		state.LimiterLastError = snapshot.lastError
-		state.LastError = d.getAsyncErr()
 		return state
 	}
 
@@ -852,12 +758,43 @@ func (d *runtimeDaemon) runCycle() coreState {
 	state.LimiterActiveUsers = snapshot.limitedUsers
 	state.LimiterBypassCount = snapshot.bypassCount
 	state.LimiterLastError = snapshot.lastError
-	state.LastError = d.getAsyncErr()
-
 	if result.shouldSync {
-		d.triggerSyncCommand(metadata.ActiveProtocol)
+		var syncResult clients.SyncResult
+		err = withFileLock(d.opts.lockPath, func() error {
+			var syncErr error
+			syncResult, syncErr = d.syncClients(metadata.ActiveProtocol)
+			return syncErr
+		})
+		if err != nil {
+			state.OK = false
+			state.LastError = "client_sync_failed:" + err.Error()
+			return state
+		}
+		if syncResult.Changed {
+			if err := d.reloadBox(); err != nil {
+				state.OK = false
+				state.LastError = "client_sync_reload_failed:" + err.Error()
+			}
+		}
 	}
 	return state
+}
+
+func (d *runtimeDaemon) syncClients(protocolID string) (clients.SyncResult, error) {
+	db, err := sql.Open("sqlite", d.opts.accountingDB)
+	if err != nil {
+		return clients.SyncResult{}, err
+	}
+	defer db.Close()
+	if err := accounting.Migrate(db); err != nil {
+		return clients.SyncResult{}, err
+	}
+	return clients.Sync(clients.SyncOptions{
+		ConfigPath: d.opts.configPath,
+		Database:   db,
+		ProtocolID: protocolID,
+		Validate:   validateConfigContent,
+	})
 }
 
 func (d *runtimeDaemon) applyConnectorTrackerCycle(now time.Time, metadata metadataDocument, deltas map[string]int64, activeCounts map[string]int) (cycleResult, error) {
@@ -912,142 +849,18 @@ func (d *runtimeDaemon) applyConnectorTrackerCycle(now time.Time, metadata metad
 		activeByClient[clientID] += count
 	}
 
-	tx, err := db.BeginTx(context.Background(), nil)
+	accountingResult, err := accounting.Sync(accounting.SyncInput{
+		Database: db, ProtocolID: metadata.ActiveProtocol, Now: now,
+		UsageDeltas: deltaByClient, ActiveConnections: activeByClient,
+	})
 	if err != nil {
 		return result, err
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	for clientID, bytes := range deltaByClient {
-		if bytes <= 0 {
-			continue
-		}
-		_, err = tx.Exec(
-			`INSERT INTO usage_totals(client_id,used_bytes,updated_at)
-			 VALUES(?,?,?)
-			 ON CONFLICT(client_id) DO UPDATE SET
-			   used_bytes=usage_totals.used_bytes + excluded.used_bytes,
-			   updated_at=excluded.updated_at`,
-			clientID,
-			bytes,
-			now.Unix(),
-		)
-		if err != nil {
-			return result, err
-		}
-	}
-
-	for _, policy := range policies {
-		_, err = tx.Exec(
-			`INSERT OR REPLACE INTO connection_counters(client_id,active_connections,last_seen_at)
-			 VALUES(?,?,?)`,
-			policy.clientID,
-			activeByClient[policy.clientID],
-			now.Unix(),
-		)
-		if err != nil {
-			return result, err
-		}
-	}
-
-	rows, err := tx.Query(
-		`SELECT c.client_id, c.enabled, c.total_bytes_limit, c.expiry_unix_ms,
-		        COALESCE(u.used_bytes, 0) AS used_bytes, COALESCE(e.disabled_reason, '') AS disabled_reason
-		   FROM clients c
-		   LEFT JOIN usage_totals u ON u.client_id = c.client_id
-		   LEFT JOIN enforcement_state e ON e.client_id = c.client_id
-		  WHERE c.protocol_id = ?`,
-		metadata.ActiveProtocol,
-	)
-	if err != nil {
-		return result, err
-	}
-	defer rows.Close()
-
-	enableChanges := make(map[string]bool)
+	result.updatedClients = accountingResult.UpdatedClients
+	enableChanges := accountingResult.EnableChanges
 	disableUsers := make(map[string]struct{})
-	nowMS := now.UnixMilli()
-
-	for rows.Next() {
-		var (
-			clientID       string
-			enabled        int
-			totalBytes     int64
-			expiryUnixMS   int64
-			usedBytes      int64
-			disabledReason string
-		)
-		if err := rows.Scan(&clientID, &enabled, &totalBytes, &expiryUnixMS, &usedBytes, &disabledReason); err != nil {
-			return result, err
-		}
-
-		reason := ""
-		if expiryUnixMS > 0 && nowMS >= expiryUnixMS {
-			reason = "expired"
-		} else if totalBytes > 0 && usedBytes >= totalBytes {
-			reason = "quota_exceeded"
-		}
-
-		if reason != "" {
-			shouldCloseNow := false
-			if enabled != 0 {
-				_, err = tx.Exec(`UPDATE clients SET enabled=0, updated_at=? WHERE client_id=?`, now.Unix(), clientID)
-				if err != nil {
-					return result, err
-				}
-				enableChanges[clientID] = false
-				result.updatedClients++
-				shouldCloseNow = true
-			} else if disabledReason != reason {
-				// Disabled reason changed while already disabled; close once to
-				// ensure existing sessions are evicted exactly at transition time.
-				shouldCloseNow = true
-			}
-			_, err = tx.Exec(
-				`INSERT OR REPLACE INTO enforcement_state(client_id,disabled_reason,disabled_at,updated_at)
-				 VALUES(?,?,?,?)`,
-				clientID,
-				reason,
-				now.Unix(),
-				now.Unix(),
-			)
-			if err != nil {
-				return result, err
-			}
-			if shouldCloseNow {
-				disableUsers[clientID] = struct{}{}
-			}
-			continue
-		}
-
-		if enabled == 0 && (disabledReason == "expired" || disabledReason == "quota_exceeded") {
-			_, err = tx.Exec(`UPDATE clients SET enabled=1, updated_at=? WHERE client_id=?`, now.Unix(), clientID)
-			if err != nil {
-				return result, err
-			}
-			enableChanges[clientID] = true
-			result.updatedClients++
-		}
-		_, err = tx.Exec(
-			`INSERT OR REPLACE INTO enforcement_state(client_id,disabled_reason,disabled_at,updated_at)
-			 VALUES(?,?,?,?)`,
-			clientID,
-			"",
-			0,
-			now.Unix(),
-		)
-		if err != nil {
-			return result, err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return result, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return result, err
+	for _, clientID := range accountingResult.DisableClients {
+		disableUsers[clientID] = struct{}{}
 	}
 
 	if len(enableChanges) > 0 && strings.TrimSpace(metadata.Accounting.ClientsFile) != "" {
@@ -1059,8 +872,8 @@ func (d *runtimeDaemon) applyConnectorTrackerCycle(now time.Time, metadata metad
 			result.shouldSync = true
 		}
 	}
-	if result.updatedClients > 0 {
-		if _, ok := perClientProtocols[strings.TrimSpace(metadata.ActiveProtocol)]; ok {
+	if len(enableChanges) > 0 {
+		if definition, ok := protocol.Lookup(strings.TrimSpace(metadata.ActiveProtocol)); ok && definition.PerClient {
 			result.shouldSync = true
 		}
 	}
@@ -1162,22 +975,22 @@ func loadOptions(ctx context.Context, path string) (option.Options, error) {
 	return sbjson.UnmarshalExtendedContext[option.Options](ctx, content)
 }
 
-func withFileLock(lockPath string, fn func() error) error {
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		return err
-	}
-	handle, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o640)
+func validateConfigContent(content []byte) error {
+	ctx := box.Context(
+		context.Background(),
+		include.InboundRegistry(),
+		include.OutboundRegistry(),
+		include.EndpointRegistry(),
+	)
+	options, err := sbjson.UnmarshalExtendedContext[option.Options](ctx, content)
 	if err != nil {
 		return err
 	}
-	defer handle.Close()
-	if err := syscall.Flock(int(handle.Fd()), syscall.LOCK_EX); err != nil {
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = syscall.Flock(int(handle.Fd()), syscall.LOCK_UN)
-	}()
-	return fn()
+	return instance.Close()
 }
 
 func readMetadata(path string) (metadataDocument, error) {
@@ -1193,110 +1006,12 @@ func readMetadata(path string) (metadataDocument, error) {
 }
 
 func isFullTunnelProtocol(protocolID string) bool {
-	_, ok := fullTunnelProtocols[strings.TrimSpace(protocolID)]
-	return ok
+	definition, ok := protocol.Lookup(strings.TrimSpace(protocolID))
+	return ok && definition.Runtime == "singbox"
 }
 
 func ensureAccountingSchema(db *sql.DB) error {
-	_, err := db.Exec(`
-PRAGMA busy_timeout=5000;
-PRAGMA journal_mode=WAL;
-PRAGMA synchronous=NORMAL;
-CREATE TABLE IF NOT EXISTS clients (
-  client_id TEXT PRIMARY KEY,
-  protocol_id TEXT NOT NULL,
-  username TEXT NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1,
-  total_bytes_limit INTEGER NOT NULL DEFAULT 0,
-  speed_limit_kbps INTEGER NOT NULL DEFAULT 0,
-  expiry_unix_ms INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS usage_totals (
-  client_id TEXT PRIMARY KEY,
-  used_bytes INTEGER NOT NULL DEFAULT 0,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS connection_counters (
-  client_id TEXT PRIMARY KEY,
-  active_connections INTEGER NOT NULL DEFAULT 0,
-  last_seen_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS enforcement_state (
-  client_id TEXT PRIMARY KEY,
-  disabled_reason TEXT NOT NULL DEFAULT '',
-  disabled_at INTEGER NOT NULL DEFAULT 0,
-  updated_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS sampler_state (
-  source TEXT NOT NULL,
-  state_key TEXT NOT NULL,
-  last_value INTEGER NOT NULL DEFAULT 0,
-  updated_at INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (source, state_key)
-);
-CREATE TABLE IF NOT EXISTS sampler_sessions (
-  source TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  client_id TEXT NOT NULL DEFAULT '',
-  upload_bytes INTEGER NOT NULL DEFAULT 0,
-  download_bytes INTEGER NOT NULL DEFAULT 0,
-  last_seen_at INTEGER NOT NULL DEFAULT 0,
-  closed_at INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (source, session_key)
-);
-`)
-	if err != nil {
-		return err
-	}
-	_, err = db.Exec(`ALTER TABLE clients ADD COLUMN speed_limit_kbps INTEGER NOT NULL DEFAULT 0;`)
-	if err != nil {
-		errText := strings.ToLower(strings.TrimSpace(err.Error()))
-		if strings.Contains(errText, "duplicate column name") || strings.Contains(errText, "already exists") {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func panelGroupGID(group string) (int, error) {
-	info, err := user.LookupGroup(group)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.Atoi(info.Gid)
-}
-
-func repairAccountingPermissions(dbPath string, panelGroup string) error {
-	gid, err := panelGroupGID(panelGroup)
-	if err != nil {
-		return nil
-	}
-	dbDir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dbDir, 0o2770); err != nil {
-		return err
-	}
-	if err := os.Chown(dbDir, 0, gid); err != nil {
-		return err
-	}
-	if err := os.Chmod(dbDir, 0o2770); err != nil {
-		return err
-	}
-
-	for _, target := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
-		if _, err := os.Stat(target); err != nil {
-			continue
-		}
-		if err := os.Chown(target, 0, gid); err != nil {
-			return err
-		}
-		if err := os.Chmod(target, 0o660); err != nil {
-			return err
-		}
-	}
-	return nil
+	return accounting.Migrate(db)
 }
 
 func writeState(path string, accountingDB string, panelGroup string, state coreState) error {
@@ -1328,7 +1043,7 @@ func runCommand(args []string) error {
 	flags.StringVar(&opts.statePath, "state-file", defaultStatePath, "connector runtime state json path")
 	flags.StringVar(&opts.lockPath, "lock-file", defaultLockPath, "shared accounting lock file path")
 	flags.IntVar(&opts.intervalSeconds, "interval-sec", defaultCycleInterval, "sampling and enforcement interval in seconds")
-	flags.StringVar(&opts.syncCommand, "sync-command", defaultSyncCommand, "command executed when enforcement updates clients file")
+	_ = flags.String("sync-command", "", "deprecated; client synchronization is handled internally")
 	flags.StringVar(&opts.panelGroup, "panel-group", defaultPanelGroup, "panel group for DB permissions")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -1412,6 +1127,7 @@ func checkCommand(args []string) error {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
+	modernUsage()
 	fmt.Fprintln(os.Stderr, "  connector-core run [--config path] [--metadata path] [--accounting-db path] [--state-file path]")
 	fmt.Fprintln(os.Stderr, "  connector-core check [--config path]")
 	fmt.Fprintln(os.Stderr, "  connector-core tunnel run --config <path> --state-file <path> [--strict-config]")
@@ -1424,6 +1140,15 @@ func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
+	}
+	if handled, err := runModernCommand(os.Args[1:]); handled {
+		if err != nil {
+			message := strings.TrimSpace(err.Error())
+			message = regexp.MustCompile(`\s+`).ReplaceAllString(message, " ")
+			fmt.Fprintln(os.Stderr, "ERROR:", message)
+			os.Exit(exitCodeForError(err))
+		}
+		return
 	}
 	var err error
 	switch os.Args[1] {

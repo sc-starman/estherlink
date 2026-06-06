@@ -426,12 +426,62 @@ app.MapGet("/download/connector-core/{os}/{arch}", (
     })
     .RequireRateLimiting("public");
 
+app.MapGet("/download/omni-gateway/manifest", (
+        IInstallerStorageService installerStorageService) =>
+    {
+        return DownloadOmniGatewayManifestByChannel("stable", installerStorageService);
+    })
+    .RequireRateLimiting("public");
+
+app.MapGet("/download/omni-gateway/beta/manifest", (
+        IInstallerStorageService installerStorageService) =>
+    {
+        return DownloadOmniGatewayManifestByChannel("beta", installerStorageService);
+    })
+    .RequireRateLimiting("public");
+
+app.MapGet("/download/connector-core/{os}/{arch}/manifest", (
+        string os,
+        string arch,
+        IInstallerStorageService installerStorageService) =>
+    {
+        return DownloadConnectorCoreReleaseFileByChannel("stable", os, arch, "manifest", installerStorageService);
+    })
+    .RequireRateLimiting("public");
+
+app.MapGet("/download/connector-core/{os}/{arch}/signature", (
+        string os,
+        string arch,
+        IInstallerStorageService installerStorageService) =>
+    {
+        return DownloadConnectorCoreReleaseFileByChannel("stable", os, arch, "signature", installerStorageService);
+    })
+    .RequireRateLimiting("public");
+
 app.MapGet("/download/connector-core/beta/{os}/{arch}", (
         string os,
         string arch,
         IInstallerStorageService installerStorageService) =>
     {
         return DownloadConnectorCoreByChannel("beta", os, arch, installerStorageService);
+    })
+    .RequireRateLimiting("public");
+
+app.MapGet("/download/connector-core/beta/{os}/{arch}/manifest", (
+        string os,
+        string arch,
+        IInstallerStorageService installerStorageService) =>
+    {
+        return DownloadConnectorCoreReleaseFileByChannel("beta", os, arch, "manifest", installerStorageService);
+    })
+    .RequireRateLimiting("public");
+
+app.MapGet("/download/connector-core/beta/{os}/{arch}/signature", (
+        string os,
+        string arch,
+        IInstallerStorageService installerStorageService) =>
+    {
+        return DownloadConnectorCoreReleaseFileByChannel("beta", os, arch, "signature", installerStorageService);
     })
     .RequireRateLimiting("public");
 
@@ -881,6 +931,8 @@ installerApi.MapPost("/upload-connector-core", async (
 
         var form = await request.ReadFormAsync(cancellationToken);
         var artifact = form.Files.GetFile("artifact");
+        var manifest = form.Files.GetFile("manifest");
+        var signature = form.Files.GetFile("signature");
         if (artifact is null)
         {
             return Results.ValidationProblem(new Dictionary<string, string[]>
@@ -894,6 +946,22 @@ installerApi.MapPost("/upload-connector-core", async (
             return Results.ValidationProblem(new Dictionary<string, string[]>
             {
                 ["artifact"] = ["artifact file must not be empty."]
+            });
+        }
+
+        if (manifest is null || manifest.Length <= 0 || manifest.Length > 64 * 1024)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["manifest"] = ["A non-empty manifest.json file up to 64 KiB is required."]
+            });
+        }
+
+        if (signature is null || signature.Length <= 0 || signature.Length > 64 * 1024)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["signature"] = ["A non-empty detached manifest signature up to 64 KiB is required."]
             });
         }
 
@@ -943,7 +1011,10 @@ installerApi.MapPost("/upload-connector-core", async (
             });
         }
 
-        var tempPath = Path.Combine(Path.GetTempPath(), $"omnirelay-connector-core-{channel}-{os}-{arch}-{Guid.NewGuid():N}.tar.gz");
+        var tempPrefix = Path.Combine(Path.GetTempPath(), $"omnirelay-connector-core-{channel}-{os}-{arch}-{Guid.NewGuid():N}");
+        var tempPath = $"{tempPrefix}.tar.gz";
+        var tempManifestPath = $"{tempPrefix}.manifest.json";
+        var tempSignaturePath = $"{tempPrefix}.manifest.sig";
         try
         {
             await using (var tempStream = new FileStream(
@@ -957,6 +1028,28 @@ installerApi.MapPost("/upload-connector-core", async (
                 await artifact.CopyToAsync(tempStream, cancellationToken);
             }
 
+            await using (var tempStream = new FileStream(
+                             tempManifestPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             64 * 1024,
+                             FileOptions.Asynchronous))
+            {
+                await manifest.CopyToAsync(tempStream, cancellationToken);
+            }
+
+            await using (var tempStream = new FileStream(
+                             tempSignaturePath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             64 * 1024,
+                             FileOptions.Asynchronous))
+            {
+                await signature.CopyToAsync(tempStream, cancellationToken);
+            }
+
             if (!IsGzipFile(tempPath))
             {
                 return Results.ValidationProblem(new Dictionary<string, string[]>
@@ -965,32 +1058,80 @@ installerApi.MapPost("/upload-connector-core", async (
                 });
             }
 
-            var saveResult = await installerStorageService.SaveConnectorCoreArtifactAsync(tempPath, channel, os, arch, cancellationToken);
+            ConnectorCoreReleaseManifest? releaseManifest;
+            try
+            {
+                await using var manifestStream = File.OpenRead(tempManifestPath);
+                releaseManifest = await JsonSerializer.DeserializeAsync<ConnectorCoreReleaseManifest>(
+                    manifestStream,
+                    cancellationToken: cancellationToken);
+            }
+            catch (JsonException)
+            {
+                releaseManifest = null;
+            }
+
+            await using var artifactStream = File.OpenRead(tempPath);
+            var artifactSha256 = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(
+                artifactStream,
+                cancellationToken)).ToLowerInvariant();
+            var artifactSize = new FileInfo(tempPath).Length;
+            var expectedArtifactName = installerStorageService.GetConnectorCoreDownloadFileName(os, arch);
+            var manifestError = ValidateConnectorCoreReleaseManifest(
+                releaseManifest,
+                channel,
+                os,
+                arch,
+                expectedArtifactName,
+                artifactSha256,
+                artifactSize);
+            if (manifestError is not null)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["manifest"] = [manifestError]
+                });
+            }
+
+            var saveResult = await installerStorageService.SaveConnectorCoreReleaseAsync(
+                tempPath,
+                tempManifestPath,
+                tempSignaturePath,
+                channel,
+                os,
+                arch,
+                cancellationToken);
             var downloadUrl = channel == "beta"
                 ? $"/download/connector-core/beta/{os}/{arch}"
                 : $"/download/connector-core/{os}/{arch}";
             return Results.Ok(new
             {
                 channel,
-                message = "Connector-core artifact uploaded successfully.",
+                message = "Signed connector-core release uploaded successfully.",
                 os,
                 arch,
-                sha256 = saveResult.Sha256,
-                fileSizeBytes = saveResult.FileSizeBytes,
-                downloadUrl
+                version = releaseManifest!.Version,
+                sha256 = saveResult.Artifact.Sha256,
+                fileSizeBytes = saveResult.Artifact.FileSizeBytes,
+                downloadUrl,
+                manifestUrl = $"{downloadUrl}/manifest",
+                signatureUrl = $"{downloadUrl}/signature"
             });
         }
         finally
         {
-            if (File.Exists(tempPath))
+            foreach (var path in new[] { tempPath, tempManifestPath, tempSignaturePath })
             {
-                try
+                if (File.Exists(path))
                 {
-                    File.Delete(tempPath);
-                }
-                catch
-                {
-                    // Best-effort temp cleanup.
+                    try
+                    {
+                        File.Delete(path);
+                    }
+                    catch
+                    {
+                        // Best-effort temp cleanup.
+                    }
                 }
             }
         }
@@ -1298,7 +1439,8 @@ static IResult DownloadOmniGatewayByChannel(string channel, IInstallerStorageSer
 {
     var normalizedChannel = NormalizeReleaseChannel(channel) ?? "stable";
     var artifactPath = installerStorageService.GetOmniGatewayArtifactPath(normalizedChannel);
-    if (!File.Exists(artifactPath))
+    var manifestPath = installerStorageService.GetOmniGatewayManifestPath(normalizedChannel);
+    if (!File.Exists(artifactPath) || !File.Exists(manifestPath))
     {
         return Results.NotFound(new { message = $"Gateway panel artifact for channel '{normalizedChannel}' is not available yet." });
     }
@@ -1307,6 +1449,22 @@ static IResult DownloadOmniGatewayByChannel(string channel, IInstallerStorageSer
         artifactPath,
         "application/gzip",
         installerStorageService.GetOmniGatewayDownloadFileName());
+}
+
+static IResult DownloadOmniGatewayManifestByChannel(string channel, IInstallerStorageService installerStorageService)
+{
+    var normalizedChannel = NormalizeReleaseChannel(channel) ?? "stable";
+    var artifactPath = installerStorageService.GetOmniGatewayArtifactPath(normalizedChannel);
+    var manifestPath = installerStorageService.GetOmniGatewayManifestPath(normalizedChannel);
+    if (!File.Exists(artifactPath) || !File.Exists(manifestPath))
+    {
+        return Results.NotFound(new { message = $"Gateway panel manifest for channel '{normalizedChannel}' is not available yet." });
+    }
+
+    return Results.File(
+        manifestPath,
+        "application/json",
+        installerStorageService.GetOmniGatewayManifestDownloadFileName());
 }
 
 static IResult DownloadConnectorCoreByChannel(
@@ -1336,7 +1494,9 @@ static IResult DownloadConnectorCoreByChannel(
     }
 
     var artifactPath = installerStorageService.GetConnectorCoreArtifactPath(normalizedChannel, normalizedOs, normalizedArch);
-    if (!File.Exists(artifactPath))
+    var manifestPath = installerStorageService.GetConnectorCoreManifestPath(normalizedChannel, normalizedOs, normalizedArch);
+    var signaturePath = installerStorageService.GetConnectorCoreSignaturePath(normalizedChannel, normalizedOs, normalizedArch);
+    if (!File.Exists(artifactPath) || !File.Exists(manifestPath) || !File.Exists(signaturePath))
     {
         return Results.NotFound(new
         {
@@ -1351,6 +1511,73 @@ static IResult DownloadConnectorCoreByChannel(
         artifactPath,
         "application/gzip",
         installerStorageService.GetConnectorCoreDownloadFileName(normalizedOs, normalizedArch));
+}
+
+static IResult DownloadConnectorCoreReleaseFileByChannel(
+    string channel,
+    string os,
+    string arch,
+    string kind,
+    IInstallerStorageService installerStorageService)
+{
+    var normalizedChannel = NormalizeReleaseChannel(channel) ?? "stable";
+    var normalizedOs = (os ?? string.Empty).Trim().ToLowerInvariant();
+    var normalizedArch = (arch ?? string.Empty).Trim().ToLowerInvariant();
+    if (normalizedOs != "linux" || normalizedArch is not ("amd64" or "arm64"))
+    {
+        return Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["platform"] = ["Only linux amd64 and linux arm64 connector-core releases are available."]
+        });
+    }
+
+    var path = kind == "manifest"
+        ? installerStorageService.GetConnectorCoreManifestPath(normalizedChannel, normalizedOs, normalizedArch)
+        : installerStorageService.GetConnectorCoreSignaturePath(normalizedChannel, normalizedOs, normalizedArch);
+    if (!File.Exists(path))
+    {
+        return Results.NotFound(new
+        {
+            message = $"Connector-core {kind} for channel '{normalizedChannel}' is not available yet.",
+            channel = normalizedChannel,
+            os = normalizedOs,
+            arch = normalizedArch
+        });
+    }
+
+    return kind == "manifest"
+        ? Results.File(path, "application/json", installerStorageService.GetConnectorCoreManifestDownloadFileName(normalizedOs, normalizedArch))
+        : Results.File(path, "application/octet-stream", installerStorageService.GetConnectorCoreSignatureDownloadFileName(normalizedOs, normalizedArch));
+}
+
+static string? ValidateConnectorCoreReleaseManifest(
+    ConnectorCoreReleaseManifest? manifest,
+    string channel,
+    string os,
+    string arch,
+    string artifactName,
+    string artifactSha256,
+    long artifactSize)
+{
+    if (manifest is null)
+    {
+        return "manifest must be valid JSON.";
+    }
+
+    if (manifest.SchemaVersion != 1 ||
+        string.IsNullOrWhiteSpace(manifest.Version) ||
+        manifest.Channel != channel ||
+        manifest.Os != os ||
+        manifest.Arch != arch ||
+        manifest.Artifact != artifactName ||
+        !string.Equals(manifest.Sha256, artifactSha256, StringComparison.OrdinalIgnoreCase) ||
+        manifest.SizeBytes != artifactSize ||
+        manifest.PublishedAtUtc == default)
+    {
+        return "manifest metadata, artifact SHA256, or artifact size does not match the uploaded release.";
+    }
+
+    return null;
 }
 
 static AdminLicenseResponse ToAdminResponse(LicenseEntity entity, int activationCount)

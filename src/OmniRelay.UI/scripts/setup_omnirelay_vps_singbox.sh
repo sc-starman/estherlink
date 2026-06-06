@@ -340,7 +340,7 @@ EOF
   chmod 0600 "$PROTOCOL_ENV_FILE" || true
 }
 
-protocol_sync_clients() {
+protocol_sync_clients_locked() {
   local config_json
   protocol_remove_legacy_clients_files
   protocol_seed_clients
@@ -350,6 +350,10 @@ protocol_sync_clients() {
   connector_render_apply "$CONNECTOR_MODE" "$config_json"
   connector_clear_internal_redirect "tun0"
   connector_clear_internal_redirect "ppp+"
+}
+
+protocol_sync_clients() {
+  connector_with_accounting_lock 30 protocol_sync_clients_locked
 }
 
 protocol_status_json() {

@@ -393,7 +393,7 @@ public sealed class IpcCommandHandler
         verifyCts.CancelAfter(TimeSpan.FromMinutes(2));
         var result = await _licenseValidator.ValidateAsync(
             config,
-            forceOnline: true,
+            forceOnline: transferRequested,
             transferRequested: transferRequested,
             cancellationToken: verifyCts.Token);
         _runtime.SetLicenseStatus(result);

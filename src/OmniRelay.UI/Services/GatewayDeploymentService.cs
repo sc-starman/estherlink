@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 
 namespace OmniRelay.UI.Services;
@@ -27,6 +28,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
     private const string RemoteOpenVpnSharedClientCertPath = "/tmp/omnirelay-openvpn-shared-client.crt";
     private const string RemoteOpenVpnSharedClientKeyPath = "/tmp/omnirelay-openvpn-shared-client.key";
     private const string RemoteOpenVpnSharedTlsCryptKeyPath = "/tmp/omnirelay-openvpn-shared-ta.key";
+    private const string ConnectorCorePath = "/usr/local/bin/connector-core";
+    private static readonly HttpClient ReleaseHttpClient = new()
+    {
+        Timeout = TimeSpan.FromSeconds(45)
+    };
 
     public GatewayDeploymentService() { }
 
@@ -312,6 +318,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            return await InstallGatewayWithConnectorCoreAsync(request, sudoPassword, progress, cancellationToken);
+        }
+
         Process? bootstrapTunnelProcess = null;
         int? bootstrapSocksRemotePortOverride = null;
         try
@@ -519,12 +530,349 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         }
     }
 
+    private async Task<GatewayOperationResult> InstallGatewayWithConnectorCoreAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        Process? bootstrapTunnelProcess = null;
+        string? localSpecPath = null;
+        var migrationApplied = false;
+        var migrationFinalized = false;
+        var rollbackAttempted = false;
+        var remoteCleanupPaths = new List<string>();
+        try
+        {
+            ValidateRequest(request);
+            EnsureSudoPassword(sudoPassword);
+
+            var releaseChannel = ResolveGatewayAssetReleaseChannel();
+            var releaseBaseUrl = ResolveConnectorCoreReleaseBaseUrl();
+            var publicKeyPath = ResolveConnectorCoreReleasePublicKeyPath();
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 1,
+                Message = $"Resolving signed connector-core and OmniPanel release metadata ({releaseChannel})"
+            });
+            var release = await ConnectorCoreReleaseMetadataResolver.ResolveAsync(
+                ReleaseHttpClient,
+                releaseBaseUrl,
+                releaseChannel,
+                cancellationToken);
+
+            int? bootstrapSocksPort = null;
+            if (IsTunnelBootstrapMode(request))
+            {
+                var bootstrapSession = await StartTemporaryBootstrapTunnelAsync(request, progress, cancellationToken);
+                if (!bootstrapSession.Success || bootstrapSession.Process is null || bootstrapSession.RemotePort <= 0)
+                {
+                    return new GatewayOperationResult(false, bootstrapSession.Message);
+                }
+                bootstrapTunnelProcess = bootstrapSession.Process;
+                bootstrapSocksPort = bootstrapSession.RemotePort;
+            }
+
+            var bootstrapCheck = await CheckGatewayBootstrapInternalAsync(
+                request,
+                sudoPassword,
+                progress,
+                cancellationToken,
+                bootstrapTunnelAlreadyEstablished: true,
+                bootstrapSocksRemotePortOverride: bootstrapSocksPort);
+            if (!bootstrapCheck.Success)
+            {
+                return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrapCheck.Message}");
+            }
+
+            var relayId = NormalizeRelayId(request.RelayId).ToLowerInvariant();
+            var remoteBootstrapPath = $"/tmp/omnirelay-connector-bootstrap-{relayId}.sh";
+            var remoteSpecPath = $"/tmp/omnirelay-gateway-spec-{relayId}.json";
+            var remotePublicKeyPath = $"/tmp/omnirelay-connector-release-{relayId}.pem";
+            remoteCleanupPaths.AddRange([remoteBootstrapPath, remoteSpecPath, remotePublicKeyPath]);
+            var panelCertRemotePath = string.Empty;
+            var panelKeyRemotePath = string.Empty;
+            var openVpnCaRemotePath = string.Empty;
+            var openVpnClientCertRemotePath = string.Empty;
+            var openVpnClientKeyRemotePath = string.Empty;
+            var openVpnTlsCryptRemotePath = string.Empty;
+
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayInstall,
+                Percent = 5,
+                Message = "Uploading signed connector-core bootstrap inputs"
+            });
+            await UploadFileAsync(request, ResolveConnectorCoreBootstrapScriptPath(), remoteBootstrapPath, progress, cancellationToken);
+            await UploadFileAsync(request, publicKeyPath, remotePublicKeyPath, progress, cancellationToken);
+
+            if (request.GatewayPanelSslEnabled &&
+                string.Equals(request.GatewayPanelSslMode, "uploaded", StringComparison.OrdinalIgnoreCase))
+            {
+                panelCertRemotePath = $"/tmp/omnirelay-panel-{relayId}.crt";
+                panelKeyRemotePath = $"/tmp/omnirelay-panel-{relayId}.key";
+                remoteCleanupPaths.AddRange([panelCertRemotePath, panelKeyRemotePath]);
+                await UploadFileAsync(request, request.GatewayPanelCertLocalPath, panelCertRemotePath, progress, cancellationToken);
+                await UploadFileAsync(request, request.GatewayPanelKeyLocalPath, panelKeyRemotePath, progress, cancellationToken);
+            }
+
+            if (GatewayProtocols.Normalize(request.SelectedGatewayProtocol) == GatewayProtocols.OpenVpnTcpSingbox)
+            {
+                openVpnCaRemotePath = $"/tmp/omnirelay-openvpn-{relayId}-ca.crt";
+                openVpnClientCertRemotePath = $"/tmp/omnirelay-openvpn-{relayId}-client.crt";
+                openVpnClientKeyRemotePath = $"/tmp/omnirelay-openvpn-{relayId}-client.key";
+                openVpnTlsCryptRemotePath = $"/tmp/omnirelay-openvpn-{relayId}-tls-crypt.key";
+                remoteCleanupPaths.AddRange([openVpnCaRemotePath, openVpnClientCertRemotePath, openVpnClientKeyRemotePath, openVpnTlsCryptRemotePath]);
+                await UploadFileAsync(request, request.OpenVpnSharedCaCertLocalPath, openVpnCaRemotePath, progress, cancellationToken);
+                await UploadFileAsync(request, request.OpenVpnSharedClientCertLocalPath, openVpnClientCertRemotePath, progress, cancellationToken);
+                await UploadFileAsync(request, request.OpenVpnSharedClientKeyLocalPath, openVpnClientKeyRemotePath, progress, cancellationToken);
+                await UploadFileAsync(request, request.OpenVpnSharedTlsCryptKeyLocalPath, openVpnTlsCryptRemotePath, progress, cancellationToken);
+            }
+
+            var panelUser = string.IsNullOrWhiteSpace(request.GatewayPanelUser)
+                ? $"omniadmin_{RandomAlphaNum(6)}"
+                : request.GatewayPanelUser.Trim();
+            var panelPassword = string.IsNullOrWhiteSpace(request.GatewayPanelPassword)
+                ? RandomAlphaNum(24)
+                : request.GatewayPanelPassword.Trim();
+            var specJson = ConnectorCoreGatewaySpecBuilder.BuildJson(request, new ConnectorCoreGatewaySpecOptions
+            {
+                ConnectorCoreVersion = release.Version,
+                ReleaseChannel = release.Channel,
+                PanelPublicHost = FirstNonEmpty(request.GatewayPanelDomain, request.Config.TunnelHost) ?? string.Empty,
+                PanelCertRemotePath = panelCertRemotePath,
+                PanelKeyRemotePath = panelKeyRemotePath,
+                PanelArtifactUrl = release.PanelArtifactUrl,
+                PanelArtifactSha256 = release.PanelArtifactSha256,
+                PanelUsername = panelUser,
+                PanelPassword = panelPassword,
+                OpenVpnSharedCaCertRemotePath = openVpnCaRemotePath,
+                OpenVpnSharedClientCertRemotePath = openVpnClientCertRemotePath,
+                OpenVpnSharedClientKeyRemotePath = openVpnClientKeyRemotePath,
+                OpenVpnSharedTlsCryptKeyRemotePath = openVpnTlsCryptRemotePath
+            });
+            localSpecPath = Path.Combine(Path.GetTempPath(), $"omnirelay-gateway-spec-{relayId}-{Guid.NewGuid():N}.json");
+            File.WriteAllText(localSpecPath, specJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            await UploadFileAsync(request, localSpecPath, remoteSpecPath, progress, cancellationToken);
+            var sensitiveRemotePaths = remoteCleanupPaths
+                .Where(path => !string.Equals(path, remoteBootstrapPath, StringComparison.Ordinal) &&
+                               !string.Equals(path, remotePublicKeyPath, StringComparison.Ordinal))
+                .Select(ShellQuote);
+            var secureUploadCommand =
+                $"chmod 0600 {string.Join(" ", sensitiveRemotePaths)}; " +
+                $"chmod 0644 {ShellQuote(remotePublicKeyPath)}; " +
+                $"chmod 0700 {ShellQuote(remoteBootstrapPath)}";
+            var secureUploadResult = await ExecuteCommandAsync(
+                request.Config,
+                secureUploadCommand,
+                sudoPassword,
+                null,
+                cancellationToken);
+            if (!secureUploadResult.Success)
+            {
+                return new GatewayOperationResult(false, $"Failed to secure uploaded connector-core bootstrap inputs: {secureUploadResult.ErrorMessage}");
+            }
+
+            var bootstrapMode = NormalizeBootstrapMode(request.BootstrapMode);
+            var effectiveSocksPort = bootstrapSocksPort ?? request.Config.TunnelRemotePort;
+            var bootstrapCommand =
+                "set -euo pipefail; " +
+                $"chmod 0700 {ShellQuote(remoteBootstrapPath)}; " +
+                $"sed -i 's/\\r$//' {ShellQuote(remoteBootstrapPath)}; " +
+                $"bash {ShellQuote(remoteBootstrapPath)} " +
+                $"--base-url {ShellQuote(releaseBaseUrl)} " +
+                $"--spec {ShellQuote(remoteSpecPath)} " +
+                $"--channel {ShellQuote(release.Channel)} " +
+                "--operation migrate " +
+                $"--bootstrap-mode {ShellQuote(bootstrapMode)} " +
+                $"--socks-port {effectiveSocksPort} " +
+                $"--public-key-file {ShellQuote(remotePublicKeyPath)}";
+
+            using var installTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            installTimeoutCts.CancelAfter(TimeSpan.FromMinutes(30));
+            var bootstrapResult = await ExecuteConnectorCoreCommandAsync(
+                request,
+                sudoPassword,
+                bootstrapCommand,
+                DeploymentPhases.GatewayInstall,
+                progress,
+                installTimeoutCts.Token);
+            if (!bootstrapResult.Success)
+            {
+                return new GatewayOperationResult(false, bootstrapResult.ErrorMessage);
+            }
+            migrationApplied = true;
+
+            var start = await RunConnectorCoreGatewayCommandAsync(
+                request,
+                sudoPassword,
+                "gateway start",
+                DeploymentPhases.GatewayInstall,
+                progress,
+                cancellationToken);
+            if (!start.Success)
+            {
+                return start;
+            }
+            if (GatewayTypes.Normalize(request.Config.GatewayType) == GatewayTypes.Remote)
+            {
+                await WaitForFrpBackendListenerAfterInstallAsync(request, sudoPassword, progress, cancellationToken);
+            }
+            var panel = await RunConnectorCoreGatewayCommandAsync(
+                request,
+                sudoPassword,
+                "panel activate",
+                DeploymentPhases.GatewayInstall,
+                progress,
+                cancellationToken);
+            if (!panel.Success)
+            {
+                return panel;
+            }
+            var acceptance = await WaitForConnectorCoreAcceptanceAsync(
+                request,
+                sudoPassword,
+                progress,
+                cancellationToken);
+            if (!acceptance.Success)
+            {
+                var rollback = await RunConnectorCoreGatewayCommandAsync(
+                    request,
+                    sudoPassword,
+                    "gateway rollback-migration",
+                    DeploymentPhases.GatewayInstall,
+                    progress,
+                    cancellationToken);
+                rollbackAttempted = true;
+                var rollbackDetail = rollback.Success ? "Legacy gateway state was restored." : $"Legacy rollback failed: {rollback.Message}";
+                return new GatewayOperationResult(false, $"{acceptance.Message} {rollbackDetail}");
+            }
+            var finalize = await RunConnectorCoreGatewayCommandAsync(
+                request,
+                sudoPassword,
+                "gateway finalize-migration",
+                DeploymentPhases.GatewayInstall,
+                progress,
+                cancellationToken);
+            if (!finalize.Success)
+            {
+                return new GatewayOperationResult(false, $"Connector-core acceptance passed, but legacy migration finalization failed: {finalize.Message}");
+            }
+            migrationFinalized = true;
+
+            var panelHost = FirstNonEmpty(request.GatewayPanelDomain, request.Config.TunnelHost) ?? request.Config.TunnelHost;
+            var panelScheme = request.GatewayPanelSslEnabled ? "https" : "http";
+            var panelUrl = $"{panelScheme}://{panelHost}:{request.GatewayPanelPort}/";
+            return new GatewayOperationResult(
+                true,
+                $"Gateway install completed through connector-core. Panel URL: {panelUrl} | Username: {panelUser} | Password: {panelPassword}",
+                panelUrl,
+                panelUser,
+                panelPassword);
+        }
+        catch (Exception ex)
+        {
+            return new GatewayOperationResult(false, $"Connector-core gateway install failed: {ex.Message}");
+        }
+        finally
+        {
+            if (migrationApplied && !migrationFinalized && !rollbackAttempted)
+            {
+                try
+                {
+                    using var rollbackCts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                    await RunConnectorCoreGatewayCommandAsync(
+                        request,
+                        sudoPassword,
+                        "gateway rollback-migration",
+                        DeploymentPhases.GatewayInstall,
+                        progress,
+                        rollbackCts.Token);
+                }
+                catch
+                {
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(localSpecPath))
+            {
+                try
+                {
+                    File.Delete(localSpecPath);
+                }
+                catch
+                {
+                }
+            }
+            if (remoteCleanupPaths.Count > 0)
+            {
+                try
+                {
+                    using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+                    await ExecuteCommandAsync(
+                        request.Config,
+                        "rm -f -- " + string.Join(" ", remoteCleanupPaths.Distinct(StringComparer.Ordinal).Select(ShellQuote)),
+                        sudoPassword,
+                        null,
+                        cleanupCts.Token);
+                }
+                catch
+                {
+                }
+            }
+            await StopTemporaryBootstrapTunnelAsync(bootstrapTunnelProcess, progress);
+        }
+    }
+
+    private async Task<GatewayOperationResult> WaitForConnectorCoreAcceptanceAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        string lastReason = "gateway health probe did not return a result";
+        for (var attempt = 1; attempt <= 8; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (status, _, healthy) = await GetConnectorCoreStatusWithRawAsync(
+                request,
+                sudoPassword,
+                health: true,
+                progress: progress,
+                cancellationToken: cancellationToken);
+            if (healthy)
+            {
+                progress?.Report(new DeploymentProgressSnapshot
+                {
+                    Phase = DeploymentPhases.GatewayHealth,
+                    Percent = 100,
+                    Message = "Connector-core migration acceptance probes passed"
+                });
+                return new GatewayOperationResult(true, "Connector-core migration acceptance probes passed.");
+            }
+
+            lastReason = FirstNonEmpty(status.TunnelReason, "gateway is not healthy") ?? "gateway is not healthy";
+            progress?.Report(new DeploymentProgressSnapshot
+            {
+                Phase = DeploymentPhases.GatewayHealth,
+                Percent = Math.Clamp(attempt * 10, 10, 90),
+                Message = $"Waiting for connector-core migration acceptance ({attempt}/8): {lastReason}"
+            });
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+        }
+        return new GatewayOperationResult(false, $"Connector-core migration acceptance failed: {lastReason}");
+    }
+
     public Task<GatewayOperationResult> StartGatewayAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            return RunConnectorCoreGatewayCommandAsync(request, sudoPassword, "gateway start", DeploymentPhases.GatewayCommand, progress, cancellationToken);
+        }
         return RunSimpleGatewayCommandAsync(request, sudoPassword, "start", DeploymentPhases.GatewayCommand, progress, cancellationToken);
     }
 
@@ -534,6 +882,10 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            return RunConnectorCoreGatewayCommandAsync(request, sudoPassword, "gateway stop", DeploymentPhases.GatewayCommand, progress, cancellationToken);
+        }
         return RunSimpleGatewayCommandAsync(request, sudoPassword, "stop", DeploymentPhases.GatewayCommand, progress, cancellationToken);
     }
 
@@ -543,6 +895,10 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            return RunConnectorCoreGatewayCommandAsync(request, sudoPassword, "gateway uninstall", DeploymentPhases.GatewayCommand, progress, cancellationToken);
+        }
         return RunSimpleGatewayCommandAsync(request, sudoPassword, "uninstall", DeploymentPhases.GatewayCommand, progress, cancellationToken);
     }
 
@@ -552,6 +908,10 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            return RunConnectorCoreGatewayCommandAsync(request, sudoPassword, "dns apply", DeploymentPhases.GatewayCommand, progress, cancellationToken);
+        }
         return RunSimpleGatewayCommandAsync(request, sudoPassword, "dns-apply", DeploymentPhases.GatewayCommand, progress, cancellationToken);
     }
 
@@ -561,6 +921,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            return await CheckConnectorCoreGatewayDnsAsync(request, sudoPassword, progress, cancellationToken);
+        }
+
         try
         {
             ValidateRequest(request);
@@ -623,6 +988,10 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            return RunConnectorCoreGatewayCommandAsync(request, sudoPassword, "gateway repair --level safe", DeploymentPhases.GatewayCommand, progress, cancellationToken);
+        }
         return RunSimpleGatewayCommandAsync(request, sudoPassword, "dns-repair", DeploymentPhases.GatewayCommand, progress, cancellationToken);
     }
 
@@ -631,6 +1000,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         string sudoPassword,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            return await GetConnectorCoreStatusAsync(request, sudoPassword, health: false, cancellationToken);
+        }
+
         ValidateRequest(request);
 
         var gatewayCtlPath = GetGatewayCtlPath(request);
@@ -661,6 +1035,12 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (IsConnectorCoreGatewayCutoverEnabled())
+        {
+            var (status, rawJson, healthy) = await GetConnectorCoreStatusWithRawAsync(request, sudoPassword, health: true, progress, cancellationToken);
+            return ToConnectorCoreHealthReport(status, rawJson, healthy);
+        }
+
         ValidateRequest(request);
 
         var gatewayCtlPath = GetGatewayCtlPath(request);
@@ -1785,6 +2165,25 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return path;
     }
 
+    private static string ResolveConnectorCoreBootstrapScriptPath()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        const string scriptFileName = "bootstrap_omnirelay_connector_core.sh";
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
+            Path.Combine(baseDir, scriptFileName),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
+        };
+
+        var path = candidates.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException($"Connector-core bootstrap script not found. Expected {scriptFileName} in app GatewayScripts content.");
+        }
+        return path;
+    }
+
     private static string GetGatewayCtlPath(GatewayDeploymentRequest request)
     {
         var relayId = NormalizeRelayId(request.RelayId);
@@ -1903,6 +2302,242 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         {
             return new GatewayOperationResult(false, $"Gateway {operation} failed: {ex.Message}");
         }
+    }
+
+    private async Task<GatewayOperationResult> RunConnectorCoreGatewayCommandAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        string operation,
+        string phase,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            ValidateRequest(request);
+            EnsureSudoPassword(sudoPassword);
+            var relayId = NormalizeRelayId(request.RelayId).ToLowerInvariant();
+            var command =
+                "set -euo pipefail; " +
+                $"[ -x {ShellQuote(ConnectorCorePath)} ] || {{ echo 'connector-core is not installed. Run Install Gateway first.'; exit 31; }}; " +
+                $"{ShellQuote(ConnectorCorePath)} {operation} --relay-id {ShellQuote(relayId)} --json";
+            var result = await ExecuteConnectorCoreCommandAsync(request, sudoPassword, command, phase, progress, cancellationToken);
+            return result.Success
+                ? new GatewayOperationResult(true, $"Connector-core {operation} completed.")
+                : new GatewayOperationResult(false, result.ErrorMessage);
+        }
+        catch (Exception ex)
+        {
+            return new GatewayOperationResult(false, $"Connector-core {operation} failed: {ex.Message}");
+        }
+    }
+
+    private async Task<GatewayOperationResult> CheckConnectorCoreGatewayDnsAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            ValidateRequest(request);
+            EnsureSudoPassword(sudoPassword);
+            var relayId = NormalizeRelayId(request.RelayId).ToLowerInvariant();
+            var command =
+                "set -euo pipefail; " +
+                $"[ -x {ShellQuote(ConnectorCorePath)} ] || {{ echo 'connector-core is not installed. Run Install Gateway first.'; exit 31; }}; " +
+                $"{ShellQuote(ConnectorCorePath)} dns status --relay-id {ShellQuote(relayId)} --json";
+            var result = await ExecuteConnectorCoreCommandAsync(
+                request,
+                sudoPassword,
+                command,
+                DeploymentPhases.GatewayHealth,
+                progress,
+                cancellationToken);
+            var json = ExtractLastJsonLine(result.Output);
+            var envelope = DeserializeConnectorCoreEnvelope<ConnectorCoreDnsStatusDto>(json);
+            var healthy = envelope?.Data?.Healthy == true;
+            return new GatewayOperationResult(
+                healthy,
+                healthy ? "Gateway DNS path check passed." : $"Gateway DNS path check failed: {envelope?.Data?.ReasonCode ?? result.ErrorMessage}");
+        }
+        catch (Exception ex)
+        {
+            return new GatewayOperationResult(false, $"Gateway DNS check failed: {ex.Message}");
+        }
+    }
+
+    private async Task<GatewayServiceStatus> GetConnectorCoreStatusAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        bool health,
+        CancellationToken cancellationToken)
+    {
+        var (status, _, _) = await GetConnectorCoreStatusWithRawAsync(
+            request,
+            sudoPassword,
+            health,
+            progress: null,
+            cancellationToken: cancellationToken);
+        return status;
+    }
+
+    private async Task<(GatewayServiceStatus Status, string RawJson, bool Healthy)> GetConnectorCoreStatusWithRawAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        bool health,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequest(request);
+        EnsureSudoPassword(sudoPassword);
+        var relayId = NormalizeRelayId(request.RelayId).ToLowerInvariant();
+        var operation = health ? "health" : "status";
+        var command =
+            "set -euo pipefail; " +
+            $"[ -x {ShellQuote(ConnectorCorePath)} ] || {{ echo 'connector-core is not installed. Run Install Gateway first.'; exit 31; }}; " +
+            $"{ShellQuote(ConnectorCorePath)} gateway {operation} --relay-id {ShellQuote(relayId)} --json";
+        var result = await ExecuteConnectorCoreCommandAsync(
+            request,
+            sudoPassword,
+            command,
+            DeploymentPhases.GatewayHealth,
+            progress,
+            cancellationToken);
+        var rawJson = ExtractLastJsonLine(result.Output) ?? "{}";
+        var envelope = DeserializeConnectorCoreEnvelope<ConnectorCoreGatewayStatusDto>(rawJson);
+        if (envelope?.Data is null)
+        {
+            return (new GatewayServiceStatus
+            {
+                SshState = result.Success ? "unknown" : "error",
+                SingBoxState = result.Success ? "unknown" : "error",
+                TunnelReason = result.ErrorMessage
+            }, rawJson, false);
+        }
+        return (MapConnectorCoreStatus(request, envelope.Data), rawJson, envelope.Data.Healthy);
+    }
+
+    private async Task<CommandExecutionResult> ExecuteConnectorCoreCommandAsync(
+        GatewayDeploymentRequest request,
+        string sudoPassword,
+        string command,
+        string phase,
+        IProgress<DeploymentProgressSnapshot>? progress,
+        CancellationToken cancellationToken)
+    {
+        return await ExecuteCommandAsync(
+            request.Config,
+            command,
+            sudoPassword,
+            line =>
+            {
+                var clean = SanitizeTerminalLine(line);
+                if (TryParseConnectorCoreProgressLine(clean, out var pct, out var message))
+                {
+                    progress?.Report(new DeploymentProgressSnapshot
+                    {
+                        Phase = phase,
+                        Percent = pct,
+                        Message = message
+                    });
+                }
+                else if (!string.IsNullOrWhiteSpace(clean))
+                {
+                    progress?.Report(new DeploymentProgressSnapshot
+                    {
+                        Phase = phase,
+                        Percent = 0,
+                        Message = $"[vps] {clean}"
+                    });
+                }
+            },
+            cancellationToken);
+    }
+
+    private static GatewayServiceStatus MapConnectorCoreStatus(
+        GatewayDeploymentRequest request,
+        ConnectorCoreGatewayStatusDto data)
+    {
+        var backend = data.Backend;
+        var dns = data.Dns;
+        var targetActive = string.Equals(data.TargetState, "active", StringComparison.OrdinalIgnoreCase);
+        return new GatewayServiceStatus
+        {
+            ActiveProtocol = string.IsNullOrWhiteSpace(data.Protocol) ? GatewayProtocols.Normalize(request.SelectedGatewayProtocol) : data.Protocol,
+            SshState = "active",
+            SingBoxState = data.ConnectorState,
+            OpenVpnState = data.OpenVpnState,
+            IpsecState = data.IpsecState,
+            Xl2tpdState = data.Xl2tpdState,
+            OmniPanelState = data.PanelState,
+            NginxState = data.NginxState,
+            Fail2BanState = "disabled",
+            BackendPort = backend?.BackendPort ?? request.Config.TunnelRemotePort,
+            PublicPort = request.GatewayPublicPort,
+            PanelPort = request.GatewayPanelPort,
+            BackendListener = backend?.BackendListener ?? targetActive,
+            PublicListener = targetActive,
+            PanelListener = string.Equals(data.PanelState, "active", StringComparison.OrdinalIgnoreCase),
+            DnsConfigPresent = dns is not null,
+            DnsRuleActive = dns?.Healthy == true,
+            DohReachableViaTunnel = backend?.EgressReachable == true,
+            DnsPathHealthy = dns?.Healthy == true,
+            DohEndpoints = request.GatewayDohEndpoints,
+            TunnelHealthy = backend?.Healthy ?? targetActive,
+            TunnelReason = backend?.ReasonCode ?? data.ReasonCode,
+            TunnelBackendProtocol = backend?.BackendProtocol ?? "unknown",
+            TunnelEgressReachable = backend?.EgressReachable == true
+        };
+    }
+
+    private static GatewayHealthReport ToConnectorCoreHealthReport(
+        GatewayServiceStatus status,
+        string rawJson,
+        bool healthy)
+    {
+        return new GatewayHealthReport
+        {
+            Healthy = healthy,
+            RawJson = rawJson,
+            CheckedAtUtc = DateTimeOffset.UtcNow,
+            ActiveProtocol = status.ActiveProtocol,
+            SshState = status.SshState,
+            SingBoxState = status.SingBoxState,
+            OpenVpnState = status.OpenVpnState,
+            IpsecState = status.IpsecState,
+            Xl2tpdState = status.Xl2tpdState,
+            OmniPanelState = status.OmniPanelState,
+            NginxState = status.NginxState,
+            Fail2BanState = status.Fail2BanState,
+            BackendPort = status.BackendPort,
+            PublicPort = status.PublicPort,
+            PanelPort = status.PanelPort,
+            OmniPanelInternalPort = status.OmniPanelInternalPort,
+            BackendListener = status.BackendListener,
+            PublicListener = status.PublicListener,
+            PanelListener = status.PanelListener,
+            OmniPanelInternalListener = status.OmniPanelInternalListener,
+            DnsConfigPresent = status.DnsConfigPresent,
+            DnsRuleActive = status.DnsRuleActive,
+            DohReachableViaTunnel = status.DohReachableViaTunnel,
+            DnsPathHealthy = status.DnsPathHealthy,
+            InboundId = status.InboundId,
+            DohEndpoints = status.DohEndpoints,
+            TunnelHealthy = status.TunnelHealthy,
+            TunnelReason = status.TunnelReason,
+            TunnelBackendProtocol = status.TunnelBackendProtocol,
+            TunnelEgressReachable = status.TunnelEgressReachable
+        };
+    }
+
+    private static ConnectorCoreEnvelope<T>? DeserializeConnectorCoreEnvelope<T>(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+        return JsonSerializer.Deserialize<ConnectorCoreEnvelope<T>>(json, JsonOptions);
     }
 
     private async Task<CommandExecutionResult> ExecuteCommandAsync(
@@ -2167,6 +2802,53 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return normalized == "beta" ? "beta" : "stable";
     }
 
+    private static bool IsConnectorCoreGatewayCutoverEnabled()
+    {
+        var value = (Environment.GetEnvironmentVariable("OMNIRELAY_CONNECTOR_CORE_GATEWAY_CUTOVER") ?? string.Empty).Trim();
+        if (string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "false", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        if (string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        return File.Exists(Path.Combine(AppContext.BaseDirectory, "connector_core_release_public_key.pem"));
+    }
+
+    private static string ResolveConnectorCoreReleaseBaseUrl()
+    {
+        var value = (Environment.GetEnvironmentVariable("OMNIRELAY_RELEASE_BASE_URL") ?? "https://omnirelay.net").Trim().TrimEnd('/');
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttps && !uri.IsLoopback))
+        {
+            throw new InvalidOperationException("OMNIRELAY_RELEASE_BASE_URL must be an absolute HTTPS URL.");
+        }
+        return value;
+    }
+
+    private static string ResolveConnectorCoreReleasePublicKeyPath()
+    {
+        var path = (Environment.GetEnvironmentVariable("OMNIRELAY_CONNECTOR_CORE_RELEASE_PUBLIC_KEY_FILE") ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            path = Path.Combine(AppContext.BaseDirectory, "connector_core_release_public_key.pem");
+        }
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            throw new InvalidOperationException(
+                "OMNIRELAY_CONNECTOR_CORE_RELEASE_PUBLIC_KEY_FILE must reference the trusted connector-core release public key before enabling cutover.");
+        }
+        var content = File.ReadAllText(path);
+        if (!content.Contains("-----BEGIN PUBLIC KEY-----", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Connector-core release public key file is not a PEM public key.");
+        }
+        return path;
+    }
+
     private static string BuildProtocolArgs(GatewayDeploymentRequest request)
     {
         var selectedProtocol = GatewayProtocols.Normalize(request.SelectedGatewayProtocol);
@@ -2390,12 +3072,14 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             throw new InvalidOperationException("Tunnel remote port is invalid.");
         }
 
-        if (request.Config.FrpServerPort <= 0 || request.Config.FrpServerPort > 65535)
+        if (GatewayTypes.Normalize(request.Config.GatewayType) == GatewayTypes.Remote &&
+            (request.Config.FrpServerPort <= 0 || request.Config.FrpServerPort > 65535))
         {
             throw new InvalidOperationException("FRP server port is invalid.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.Config.FrpRuntimeToken))
+        if (GatewayTypes.Normalize(request.Config.GatewayType) == GatewayTypes.Remote &&
+            string.IsNullOrWhiteSpace(request.Config.FrpRuntimeToken))
         {
             throw new InvalidOperationException("FRP auth token is missing for the selected VPS profile.");
         }
@@ -2458,6 +3142,11 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
                  && !IsValidIpv4Cidr(request.IpsecL2tpNetwork))
         {
             throw new InvalidOperationException("IPSec/L2TP tunnel network must be a valid IPv4 CIDR.");
+        }
+        else if (string.Equals(selectedProtocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase)
+                 && request.IpsecL2tpPreSharedKey.Trim().Length < 16)
+        {
+            throw new InvalidOperationException("IPSec/L2TP pre-shared key must contain at least 16 characters.");
         }
         else if (string.Equals(selectedProtocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
         {
@@ -2605,6 +3294,37 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return true;
     }
 
+    private static bool TryParseConnectorCoreProgressLine(string line, out int percent, out string message)
+    {
+        percent = 0;
+        message = string.Empty;
+        if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("{", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("type", out var type) ||
+                !string.Equals(type.GetString(), "progress", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            percent = root.TryGetProperty("percent", out var percentElement) && percentElement.TryGetInt32(out var value)
+                ? Math.Clamp(value, 0, 100)
+                : 0;
+            message = root.TryGetProperty("message", out var messageElement)
+                ? messageElement.GetString() ?? string.Empty
+                : string.Empty;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static string? ExtractLastJsonLine(string output)
     {
         if (string.IsNullOrWhiteSpace(output))
@@ -2686,6 +3406,49 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 
     private sealed record CommandExecutionResult(bool Success, string Output, string ErrorMessage);
     private sealed record CliExecutionResult(int ExitCode, string Output);
+
+    private sealed class ConnectorCoreEnvelope<T>
+    {
+        public bool Ok { get; set; }
+        public string Command { get; set; } = string.Empty;
+        public string Message { get; set; } = string.Empty;
+        public T? Data { get; set; }
+    }
+
+    private sealed class ConnectorCoreGatewayStatusDto
+    {
+        public string RelayId { get; set; } = string.Empty;
+        public string Protocol { get; set; } = string.Empty;
+        public bool Healthy { get; set; }
+        public string ReasonCode { get; set; } = string.Empty;
+        public string TargetState { get; set; } = "unknown";
+        public string ConnectorState { get; set; } = "unknown";
+        public string OpenVpnState { get; set; } = "unknown";
+        public string IpsecState { get; set; } = "unknown";
+        public string Xl2tpdState { get; set; } = "unknown";
+        public string PanelState { get; set; } = "unknown";
+        public string NginxState { get; set; } = "unknown";
+        public ConnectorCoreBackendStatusDto? Backend { get; set; }
+        public ConnectorCoreDnsStatusDto? Dns { get; set; }
+    }
+
+    private sealed class ConnectorCoreBackendStatusDto
+    {
+        public bool Healthy { get; set; }
+        public string ReasonCode { get; set; } = string.Empty;
+        public int BackendPort { get; set; }
+        public bool BackendListener { get; set; }
+        public string BackendProtocol { get; set; } = string.Empty;
+        public bool EgressReachable { get; set; }
+    }
+
+    private sealed class ConnectorCoreDnsStatusDto
+    {
+        public bool Healthy { get; set; }
+        public string ReasonCode { get; set; } = string.Empty;
+        public string ListenAddress { get; set; } = string.Empty;
+        public int ListenPort { get; set; }
+    }
 
     private class GatewayStatusDto
     {

@@ -481,12 +481,10 @@ public sealed class RelayRuntimeWorker : BackgroundService
                 _lastConnectedAtUtc = DateTimeOffset.UtcNow;
             }
             else if (_processStartedAtUtc.HasValue &&
-                     DateTimeOffset.UtcNow - _processStartedAtUtc.Value >= UnestablishedGracePeriod &&
-                     DateTimeOffset.UtcNow >= _nextRecoveryAllowedAtUtc)
+                     DateTimeOffset.UtcNow - _processStartedAtUtc.Value >= UnestablishedGracePeriod)
             {
-                _lastTunnelError = "FRP session not established within grace period.";
+                _lastTunnelError = "FRP session not established; waiting for FRP reconnect.";
                 RecordEvent("warn", _lastTunnelError);
-                await StopTunnelProcessAsync();
             }
 
             var backendProbe = await ProbeBackendEndpointAsync(config.LocalProxyListenPort, cancellationToken);
@@ -494,9 +492,14 @@ public sealed class RelayRuntimeWorker : BackgroundService
 
             if (!_localProbeOk)
             {
-                _healthReasonCode = !_tunnelConnected ? "frp_session_not_established" : backendProbe.ReasonCode;
+                var fatalFrpReason = !_tunnelConnected && IsFatalFrpReason(_healthReasonCode);
+                _healthReasonCode = !_tunnelConnected
+                    ? (fatalFrpReason ? _healthReasonCode : "frp_session_not_established")
+                    : backendProbe.ReasonCode;
                 _lastTunnelError = !_tunnelConnected
-                    ? "FRP tunnel session is not established."
+                    ? (fatalFrpReason && !string.IsNullOrWhiteSpace(_lastTunnelError)
+                        ? _lastTunnelError
+                        : "FRP tunnel session is not established.")
                     : $"Local backend probe failed: {backendProbe.ReasonCode}";
                 _lastBootstrapError = $"local_probe_failed:{_healthReasonCode}";
                 LogProbeFailure("local_probe", _healthReasonCode ?? "unknown", _lastTunnelError ?? "Local probe failed.");
@@ -551,48 +554,31 @@ public sealed class RelayRuntimeWorker : BackgroundService
 
             var tier = ResolveRecoveryTier(_consecutiveFailures);
             _currentRecoveryTier = tier;
-            _tunnelState = $"RecoveringTier{tier}";
-            _recoveryAction = $"tier{tier}";
             var localPathFailure = !_localProbeOk || !_tunnelConnected;
             var attemptedRecovery = false;
-            if (localPathFailure &&
-                string.Equals(_healthReasonCode, "frp_remote_port_in_use", StringComparison.OrdinalIgnoreCase))
-            {
-                var cooldown = GetForwardConflictCooldown(Math.Max(_forwardConflictCount, 1));
-                var candidateNext = DateTimeOffset.UtcNow.Add(cooldown);
-                if (candidateNext > _nextRecoveryAllowedAtUtc)
-                {
-                    _nextRecoveryAllowedAtUtc = candidateNext;
-                }
-
-                _tunnelState = "Degraded";
-                _recoveryAction = "waiting_remote_port_release";
-                _currentRecoveryTier = 0;
-                return;
-            }
 
             try
             {
                 if (!localPathFailure)
                 {
                     RecordEvent("warn", $"relay '{_relay.Name}' remote-only failure detected; preserving local FRP transport");
+                    _tunnelState = "Degraded";
+                    _recoveryAction = "remote_tunnelctl_unavailable";
                     if (tier == 1)
                     {
                         if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
                             RecordEvent("warn", $"relay '{_relay.Name}' recovery tier1: remote soft remediation");
+                            _recoveryAction = "remote_tunnelctl_soft";
                             await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
                             attemptedRecovery = true;
                         }
-
-                        _tunnelState = "Degraded";
-                        _recoveryAction = null;
-                        _currentRecoveryTier = 0;
                     }
                     else if (tier == 2)
                     {
                         if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
+                            _recoveryAction = "remote_tunnelctl_soft";
                             await RunRemoteWatchdogRemediationAsync(config, "soft", cancellationToken);
                             attemptedRecovery = true;
                         }
@@ -601,6 +587,7 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     {
                         if (_remoteProbeModuleAvailable && _tunnelConnected)
                         {
+                            _recoveryAction = "remote_tunnelctl_hard";
                             await RunRemoteWatchdogRemediationAsync(config, "hard", cancellationToken);
                             attemptedRecovery = true;
                         }
@@ -610,31 +597,7 @@ public sealed class RelayRuntimeWorker : BackgroundService
                     return;
                 }
 
-                if (tier == 1)
-                {
-                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier1: restarting tunnel only");
-                    await StopTunnelProcessAsync();
-                    attemptedRecovery = true;
-                }
-                else if (tier == 2)
-                {
-                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier2: tunnel recycle");
-                    await StopTunnelProcessAsync();
-                    attemptedRecovery = true;
-                }
-                else
-                {
-                    RecordEvent("warn", $"relay '{_relay.Name}' recovery tier3: hard local cleanup");
-                    if (_remoteProbeModuleAvailable && _tunnelConnected)
-                    {
-                        await RunRemoteWatchdogRemediationAsync(config, "hard", cancellationToken);
-                    }
-
-                    await _dataPlane.StopAsync();
-                    await StopTunnelProcessAsync();
-                    await _dataPlane.StartAsync(cancellationToken);
-                    attemptedRecovery = true;
-                }
+                ApplyPassiveFrpRecoveryState(tier);
             }
             catch (Exception ex)
             {
@@ -647,11 +610,38 @@ public sealed class RelayRuntimeWorker : BackgroundService
             if (attemptedRecovery && !string.Equals(_healthState, "Healthy", StringComparison.Ordinal))
             {
                 _tunnelState = "Degraded";
-                _recoveryAction = null;
-                _currentRecoveryTier = 0;
             }
 
             _nextRecoveryAllowedAtUtc = DateTimeOffset.UtcNow.Add(GetRecoveryCooldown(tier));
+        }
+
+        private void ApplyPassiveFrpRecoveryState(int tier)
+        {
+            if (string.Equals(_healthReasonCode, "frp_remote_port_in_use", StringComparison.OrdinalIgnoreCase))
+            {
+                _healthState = "Unhealthy";
+                _tunnelState = "Degraded";
+                _recoveryAction = "waiting_remote_port_release";
+                _lastTunnelError ??= "FRP remote port is already in use; operator action is required.";
+                RecordEvent("warn", $"relay '{_relay.Name}' FRP remote port conflict; transport restart suppressed");
+                return;
+            }
+
+            if (IsFatalFrpReason(_healthReasonCode))
+            {
+                _healthState = "Unhealthy";
+                _tunnelState = "Degraded";
+                _recoveryAction = "operator_action_required";
+                RecordEvent("warn", $"relay '{_relay.Name}' fatal FRP state '{_healthReasonCode}'; transport restart suppressed");
+                return;
+            }
+
+            _healthState = "Degraded";
+            _tunnelState = string.Equals(_healthReasonCode, "frp_session_not_established", StringComparison.OrdinalIgnoreCase)
+                ? "Reconnecting"
+                : "Degraded";
+            _recoveryAction = "monitoring_frp_transport";
+            RecordEvent("warn", $"relay '{_relay.Name}' FRP transport unhealthy at diagnostic tier {tier}; monitoring only");
         }
 
         private async Task StartTunnelProcessAsync(ServiceConfig config, CancellationToken cancellationToken)
@@ -2980,6 +2970,14 @@ exit /b %ERRORLEVEL%
                 3 => TimeSpan.FromSeconds(60 + Random.Shared.Next(3, 12)),
                 _ => TimeSpan.FromSeconds(120 + Random.Shared.Next(5, 20))
             };
+        }
+
+        private static bool IsFatalFrpReason(string? reasonCode)
+        {
+            return reasonCode is not null &&
+                   (reasonCode.Equals("frp_auth_failed", StringComparison.OrdinalIgnoreCase) ||
+                    reasonCode.Equals("frp_server_token_mismatch", StringComparison.OrdinalIgnoreCase) ||
+                    reasonCode.Equals("frp_remote_port_in_use", StringComparison.OrdinalIgnoreCase));
         }
 
         private static bool HasFrpPortConflict(string? error, out int port)

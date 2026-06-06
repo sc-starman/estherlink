@@ -152,6 +152,9 @@ public partial class GatewayStateStore : ObservableObject
     private string ipsecL2tpNetwork = "10.39.0.0/24";
 
     [ObservableProperty]
+    private string ipsecL2tpPreSharedKey = string.Empty;
+
+    [ObservableProperty]
     private string localGatewayProtocol = LocalGatewayProtocols.VlessTcpPlain;
 
     [ObservableProperty]

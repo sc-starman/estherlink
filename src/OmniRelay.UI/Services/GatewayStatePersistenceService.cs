@@ -182,6 +182,7 @@ public sealed class GatewayStatePersistenceService : IGatewayStatePersistenceSer
             ShadowTlsWildcardSni = state.ShadowTlsWildcardSni,
             OpenVpnNetwork = state.OpenVpnNetwork,
             IpsecL2tpNetwork = state.IpsecL2tpNetwork,
+            EncryptedIpsecL2tpPreSharedKey = state.EncryptedIpsecL2tpPreSharedKey,
             GatewayDohEndpointsText = state.GatewayDohEndpointsText,
             TunnelUser = state.TunnelUser,
             TunnelAuthMethod = state.TunnelAuthMethod,

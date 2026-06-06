@@ -115,6 +115,23 @@ function Invoke-Upload {
     }
 }
 
+function Assert-PublicReleaseFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30
+        if ($response.StatusCode -lt 200 -or $response.StatusCode -gt 299) {
+            throw "$Description endpoint returned HTTP $($response.StatusCode): $Url"
+        }
+    }
+    catch {
+        throw "$Description endpoint is not publicly available after upload: $Url. $($_.Exception.Message)"
+    }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $normalizedBaseUrl = Normalize-BaseUrl -Value $BaseUrl
 $normalizedUploadBaseUrl = if ([string]::IsNullOrWhiteSpace($UploadBaseUrl)) {
@@ -151,11 +168,13 @@ Write-Host "  Upload Endpoint: $uploadUrl"
 $response = Invoke-Upload -Endpoint $uploadUrl -ApiKey $AdminApiKey -PackagePath $artifact -ReleaseChannel $Channel -SkipTlsValidation:$InsecureSkipTlsVerify
 
 $downloadPath = if ($Channel -eq "beta") { "/download/omni-gateway/beta" } else { "/download/omni-gateway" }
+$publicDownloadUrl = "$normalizedBaseUrl$downloadPath"
+Assert-PublicReleaseFile -Url "$publicDownloadUrl/manifest" -Description "OmniPanel release manifest"
 
 Write-Host ""
 Write-Host "Upload complete." -ForegroundColor Green
 Write-Host "  Server SHA-256: $($response.sha256)"
-Write-Host "  Download URL: $normalizedBaseUrl$downloadPath"
+Write-Host "  Download URL: $publicDownloadUrl"
 
 if ($response.sha256 -ne $hash) {
     Write-Warning "Local and server SHA-256 differ. Verify upload path and file consistency."

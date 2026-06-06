@@ -5,6 +5,7 @@
     <InstallerPlatform>x64</InstallerPlatform>
     <PayloadRoot>$(MSBuildThisFileDirectory)payload\$(Configuration)</PayloadRoot>
     <DefineConstants>$(DefineConstants);PayloadDir=$(PayloadRoot)</DefineConstants>
+    <IncludeLegacyGatewayScripts Condition="'$(IncludeLegacyGatewayScripts)' == ''">true</IncludeLegacyGatewayScripts>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,7 +23,7 @@
     <MakeDir Directories="$(PayloadRoot)\ui" />
     <MakeDir Directories="$(PayloadRoot)\service" />
 
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\OmniRelay.UI\OmniRelay.UI.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -o &quot;$(PayloadRoot)\ui&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\OmniRelay.UI\OmniRelay.UI.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -p:IncludeLegacyGatewayScripts=$(IncludeLegacyGatewayScripts) -o &quot;$(PayloadRoot)\ui&quot;" />
     <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\OmniRelay.Service\OmniRelay.Service.csproj&quot; -c $(Configuration) -r win-x64 --self-contained true -o &quot;$(PayloadRoot)\service&quot;" />
   </Target>
 </Project>

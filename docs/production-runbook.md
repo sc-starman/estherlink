@@ -1,5 +1,7 @@
 # OmniRelay Production Runbook
 
+For signed connector-core gateway releases, use [connector-core-gateway-runbook.md](connector-core-gateway-runbook.md). The legacy gatewayctl instructions below apply only to pre-cutover installations.
+
 ## Scope
 - Backend API (`src/OmniRelay.Backend`) in single-region production.
 - Windows Service/UI data plane.

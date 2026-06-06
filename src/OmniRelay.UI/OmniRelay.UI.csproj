@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <IncludeLegacyGatewayScripts Condition="'$(IncludeLegacyGatewayScripts)' == ''">true</IncludeLegacyGatewayScripts>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\OmniRelay.Core\OmniRelay.Core.csproj" />
     <ProjectReference Include="..\OmniRelay.Ipc\OmniRelay.Ipc.csproj" />
@@ -12,35 +16,42 @@
 
   <ItemGroup>
     <Content Include="scripts\setup_omnirelay_vps_singbox.sh"
-             Condition="Exists('scripts\\setup_omnirelay_vps_singbox.sh')"
+             Condition="'$(IncludeLegacyGatewayScripts)' != 'false' And Exists('scripts\\setup_omnirelay_vps_singbox.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_vps_singbox.sh" />
     <Content Include="scripts\setup_omnirelay_vps_openvpn_singbox.sh"
-             Condition="Exists('scripts\\setup_omnirelay_vps_openvpn_singbox.sh')"
+             Condition="'$(IncludeLegacyGatewayScripts)' != 'false' And Exists('scripts\\setup_omnirelay_vps_openvpn_singbox.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_vps_openvpn_singbox.sh" />
     <Content Include="scripts\setup_omnirelay_vps_ipsec_l2tp_singbox.sh"
-             Condition="Exists('scripts\\setup_omnirelay_vps_ipsec_l2tp_singbox.sh')"
+             Condition="'$(IncludeLegacyGatewayScripts)' != 'false' And Exists('scripts\\setup_omnirelay_vps_ipsec_l2tp_singbox.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_vps_ipsec_l2tp_singbox.sh" />
     <Content Include="scripts\setup_omnirelay_gateway_singbox_connector_common.sh"
-             Condition="Exists('scripts\\setup_omnirelay_gateway_singbox_connector_common.sh')"
+             Condition="'$(IncludeLegacyGatewayScripts)' != 'false' And Exists('scripts\\setup_omnirelay_gateway_singbox_connector_common.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_gateway_singbox_connector_common.sh" />
     <Content Include="scripts\setup_omnirelay_omnipanel_common.sh"
-             Condition="Exists('scripts\\setup_omnirelay_omnipanel_common.sh')"
+             Condition="'$(IncludeLegacyGatewayScripts)' != 'false' And Exists('scripts\\setup_omnirelay_omnipanel_common.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_omnipanel_common.sh" />
     <Content Include="scripts\setup_omnirelay_gateway_bootstrap_common.sh"
-             Condition="Exists('scripts\\setup_omnirelay_gateway_bootstrap_common.sh')"
+             Condition="'$(IncludeLegacyGatewayScripts)' != 'false' And Exists('scripts\\setup_omnirelay_gateway_bootstrap_common.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_gateway_bootstrap_common.sh" />
     <Content Include="scripts\setup_omnirelay_gateway_tunnel_module.sh"
-             Condition="Exists('scripts\\setup_omnirelay_gateway_tunnel_module.sh')"
+             Condition="'$(IncludeLegacyGatewayScripts)' != 'false' And Exists('scripts\\setup_omnirelay_gateway_tunnel_module.sh')"
              CopyToOutputDirectory="PreserveNewest"
              Link="GatewayScripts\\setup_omnirelay_gateway_tunnel_module.sh" />
+    <Content Include="scripts\bootstrap_omnirelay_connector_core.sh"
+             Condition="Exists('scripts\\bootstrap_omnirelay_connector_core.sh')"
+             CopyToOutputDirectory="PreserveNewest"
+             Link="GatewayScripts\\bootstrap_omnirelay_connector_core.sh" />
     <Content Include="gateway_asset_channel.txt"
              Condition="Exists('gateway_asset_channel.txt')"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="connector_core_release_public_key.pem"
+             Condition="Exists('connector_core_release_public_key.pem')"
              CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\OmniRelay.Installer\Product.wxs"
              Condition="Exists('..\\OmniRelay.Installer\\Product.wxs')"

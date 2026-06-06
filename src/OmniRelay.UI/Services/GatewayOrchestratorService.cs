@@ -120,6 +120,7 @@ public sealed class GatewayOrchestratorService
             _state.ShadowTlsWildcardSni = NormalizeOrDefault(remoteProfile.ShadowTlsWildcardSni, string.Empty);
             _state.OpenVpnNetwork = NormalizeOrDefault(remoteProfile.OpenVpnNetwork, "10.29.0.0/24");
             _state.IpsecL2tpNetwork = NormalizeOrDefault(remoteProfile.IpsecL2tpNetwork, "10.39.0.0/24");
+            _state.IpsecL2tpPreSharedKey = GatewayStatePersistenceService.Unprotect(remoteProfile.EncryptedIpsecL2tpPreSharedKey);
             _state.GatewayDohEndpointsText = NormalizeOrDefault(remoteProfile.GatewayDohEndpointsText, "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query");
             // Install result credentials are one-time only and never reloaded from persisted UI state.
             _state.GatewayPanelUrl = string.Empty;
@@ -1382,6 +1383,7 @@ public sealed class GatewayOrchestratorService
             ShadowTlsWildcardSni = _state.ShadowTlsWildcardSni,
             OpenVpnNetwork = _state.OpenVpnNetwork,
             IpsecL2tpNetwork = _state.IpsecL2tpNetwork,
+            EncryptedIpsecL2tpPreSharedKey = GatewayStatePersistenceService.Protect(_state.IpsecL2tpPreSharedKey),
             GatewayDohEndpointsText = _state.GatewayDohEndpointsText,
             TunnelUser = _state.TunnelUser,
             TunnelAuthMethod = _state.TunnelAuthMethod,
@@ -1450,6 +1452,7 @@ public sealed class GatewayOrchestratorService
             ShadowTlsWildcardSni = _state.ShadowTlsWildcardSni,
             OpenVpnNetwork = _state.OpenVpnNetwork,
             IpsecL2tpNetwork = _state.IpsecL2tpNetwork,
+            EncryptedIpsecL2tpPreSharedKey = GatewayStatePersistenceService.Protect(_state.IpsecL2tpPreSharedKey),
             GatewayDohEndpointsText = _state.GatewayDohEndpointsText,
             // Install result credentials are intentionally not persisted.
             GatewayPanelUrl = string.Empty,
@@ -1518,6 +1521,7 @@ public sealed class GatewayOrchestratorService
             ShadowTlsWildcardSni = state.ShadowTlsWildcardSni,
             OpenVpnNetwork = state.OpenVpnNetwork,
             IpsecL2tpNetwork = state.IpsecL2tpNetwork,
+            EncryptedIpsecL2tpPreSharedKey = state.EncryptedIpsecL2tpPreSharedKey,
             GatewayDohEndpointsText = state.GatewayDohEndpointsText,
             TunnelUser = state.TunnelUser,
             TunnelAuthMethod = state.TunnelAuthMethod,
