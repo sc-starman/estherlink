@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,6 +21,20 @@ func TestBuildPlanIsDeterministic(t *testing.T) {
 	}
 	if first.Runtime != "openvpn" {
 		t.Fatalf("unexpected runtime: %s", first.Runtime)
+	}
+}
+
+func TestBuildPlanIncludesPanelRuntimePackages(t *testing.T) {
+	gatewaySpec := spec.GatewaySpec{
+		RelayID: "e4ccc282a1004b62ad2cda5770d6e32d",
+		Gateway: spec.Gateway{Protocol: "vless_tls_singbox"},
+		Panel:   spec.PanelSpec{Port: 3054},
+	}
+	packages := BuildPlan(gatewaySpec).RequiredPackages
+	for _, expected := range []string{"nginx", "nodejs", "sqlite3", "sudo"} {
+		if !slices.Contains(packages, expected) {
+			t.Fatalf("panel package %q missing from plan: %+v", expected, packages)
+		}
 	}
 }
 

@@ -27,6 +27,10 @@ func repairAccountingPermissions(dbPath string, _ string) error {
 	return os.MkdirAll(filepath.Dir(dbPath), 0o755)
 }
 
+func repairPanelAppPermissions(appRoot string, _ string, _ string) error {
+	return os.MkdirAll(appRoot, 0o755)
+}
+
 func setSystemClock(time.Time) error {
 	return fmt.Errorf("setting the system clock is supported only on Linux gateways")
 }

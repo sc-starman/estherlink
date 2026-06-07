@@ -70,6 +70,66 @@ func repairAccountingPermissions(dbPath string, panelGroup string) error {
 	return nil
 }
 
+func repairPanelAppPermissions(appRoot string, panelUser string, panelGroup string) error {
+	userInfo, err := user.Lookup(panelUser)
+	if err != nil {
+		return nil
+	}
+	groupInfo, err := user.LookupGroup(panelGroup)
+	if err != nil {
+		return nil
+	}
+	uid, err := strconv.Atoi(userInfo.Uid)
+	if err != nil {
+		return err
+	}
+	gid, err := strconv.Atoi(groupInfo.Gid)
+	if err != nil {
+		return err
+	}
+	for _, dir := range panelAncestorDirs(appRoot) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return filepath.WalkDir(appRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := os.Lchown(path, uid, gid); err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, 0o755)
+		}
+		mode := os.FileMode(0o644)
+		if info.Mode().Perm()&0o111 != 0 {
+			mode = 0o755
+		}
+		return os.Chmod(path, mode)
+	})
+}
+
+func panelAncestorDirs(appRoot string) []string {
+	clean := filepath.Clean(appRoot)
+	return []string{
+		filepath.Dir(filepath.Dir(filepath.Dir(clean))),
+		filepath.Dir(filepath.Dir(clean)),
+		filepath.Dir(clean),
+		clean,
+	}
+}
+
 func setSystemClock(value time.Time) error {
 	timeval := syscall.NsecToTimeval(value.UnixNano())
 	return syscall.Settimeofday(&timeval)

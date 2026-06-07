@@ -106,13 +106,13 @@ func RollbackMigration(relayID string, options MigrateOptions) (MigrationLifecyc
 		switch {
 		case baseName == relayID:
 			destination = relayRoot
+		case strings.HasSuffix(baseName, ".service"), strings.HasSuffix(baseName, ".timer"), strings.HasSuffix(baseName, ".target"):
+			destination = filepath.Join(options.SystemdRoot, baseName)
 		case strings.HasPrefix(baseName, "omnirelay-gatewayctl-"),
 			strings.HasPrefix(baseName, "omnirelay-tunnelctl-"),
 			strings.HasPrefix(baseName, "omnirelay-clock-sync-"),
 			strings.HasPrefix(baseName, "omnirelay-accounting-sync-"):
 			destination = filepath.Join(options.LegacyBinaryRoot, baseName)
-		case strings.HasSuffix(baseName, ".service"), strings.HasSuffix(baseName, ".timer"), strings.HasSuffix(baseName, ".target"):
-			destination = filepath.Join(options.SystemdRoot, baseName)
 		case baseName == "ipsec.conf", baseName == "ipsec.secrets":
 			destination = filepath.Join(options.GlobalRoot, baseName)
 		case baseName == "xl2tpd.conf":

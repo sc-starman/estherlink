@@ -4,6 +4,7 @@ using OmniRelay.Ipc;
 using OmniRelay.UI.Models;
 using OmniRelay.UI.Services;
 using OmniRelay.UI.ViewModels;
+using OmniRelay.UI.Views.Dialogs;
 
 namespace OmniRelay.UI.Tests;
 
@@ -79,6 +80,46 @@ public class ViewModelBehaviorTests
         Assert.Equal("relay42", request.RelayId);
     }
 
+    [Fact]
+    public void RelaysViewModel_BuildFrpProfileResolutionForHost_ExcludesCurrentRelayWhenSuggestingPort()
+    {
+        var relays = new List<RelayConfig>
+        {
+            new()
+            {
+                Id = "current",
+                GatewayType = GatewayTypes.Remote,
+                FrpProfilePortOverride = 7000,
+                FrpProfileTokenOverride = "shared-token",
+                RemoteGateway = new RemoteGatewayConfig
+                {
+                    TunnelHost = "vps.example.com",
+                    TunnelRemotePort = 15010
+                }
+            },
+            new()
+            {
+                Id = "other",
+                GatewayType = GatewayTypes.Remote,
+                FrpProfilePortOverride = 7000,
+                FrpProfileTokenOverride = "shared-token",
+                RemoteGateway = new RemoteGatewayConfig
+                {
+                    TunnelHost = "vps.example.com",
+                    TunnelRemotePort = 15000
+                }
+            }
+        };
+
+        var result = InvokeBuildFrpProfileResolutionForHost(relays, " VPS.EXAMPLE.COM ", "current");
+
+        Assert.NotNull(result);
+        Assert.True(result!.Found);
+        Assert.Equal(7000, result.FrpServerPort);
+        Assert.Equal("shared-token", result.AuthToken);
+        Assert.Equal(15001, result.SuggestedTunnelRemotePort);
+    }
+
     private static GatewayDeploymentRequest BuildValidGatewayRequest()
     {
         return new GatewayDeploymentRequest
@@ -117,6 +158,16 @@ public class ViewModelBehaviorTests
         var method = typeof(RelaysViewModel).GetMethod("BuildGatewayDeploymentRequest", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert.NotNull(method);
         return (GatewayDeploymentRequest)method!.Invoke(null, [relay])!;
+    }
+
+    private static RelayEditDialog.FrpHostProfileResolution? InvokeBuildFrpProfileResolutionForHost(
+        IEnumerable<RelayConfig> relays,
+        string host,
+        string currentRelayId)
+    {
+        var method = typeof(RelaysViewModel).GetMethod("BuildFrpProfileResolutionForHost", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        return (RelayEditDialog.FrpHostProfileResolution?)method!.Invoke(null, [relays, host, currentRelayId]);
     }
 
     [Fact]

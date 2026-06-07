@@ -88,6 +88,9 @@ func pruneMigrationBackups(relayID string, transactionRoot string, now time.Time
 
 func snapshotLegacyState(gatewaySpec spec.GatewaySpec, options MigrateOptions, snapshotRoot string) (int, error) {
 	relayID := gatewaySpec.RelayID
+	if err := os.MkdirAll(snapshotRoot, 0o700); err != nil {
+		return 0, err
+	}
 	sources := []string{
 		filepath.Join(options.ConfigRoot, "relays", relayID),
 		filepath.Join(options.LegacyBinaryRoot, "omnirelay-gatewayctl-"+relayID),

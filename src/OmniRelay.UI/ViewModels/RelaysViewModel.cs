@@ -226,24 +226,24 @@ public partial class RelaysViewModel : ObservableObject
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]
-    private Task AddRelayAsync()
+    private async Task AddRelayAsync()
     {
         var typeDialog = new RelayTypeDialog();
         if (typeDialog.ShowDialog() != true)
         {
-            return Task.CompletedTask;
+            return;
         }
 
+        await _orchestrator.LoadRelaysAsync();
         RefreshAdapterCatalog();
         var relay = CreateDefaultRelay(typeDialog.SelectedGatewayType);
         var editDialog = new RelayEditDialog(relay, Adapters, null, isRelaySaved: false);
         WireRelayDialog(editDialog);
+        editDialog.ResolveTunnelProfileFromCurrentHost();
         if (editDialog.ShowDialog() != true)
         {
-            return Task.CompletedTask;
+            return;
         }
-
-        return Task.CompletedTask;
     }
 
     [RelayCommand(CanExecute = nameof(HasSelected))]
@@ -266,6 +266,7 @@ public partial class RelaysViewModel : ObservableObject
         RefreshAdapterCatalog();
         var editDialog = new RelayEditDialog(Clone(source), Adapters, status, isRelaySaved: true);
         WireRelayDialog(editDialog);
+        editDialog.ResolveTunnelProfileFromCurrentHost();
         if (editDialog.ShowDialog() != true)
         {
             return;
@@ -604,7 +605,15 @@ public partial class RelaysViewModel : ObservableObject
         };
     }
 
-    private RelayEditDialog.FrpHostProfileResolution? ResolveFrpProfileForHostFromDialog(string host)
+    private RelayEditDialog.FrpHostProfileResolution? ResolveFrpProfileForHostFromDialog(string host, string currentRelayId)
+    {
+        return BuildFrpProfileResolutionForHost(_state.Relays, host, currentRelayId);
+    }
+
+    private static RelayEditDialog.FrpHostProfileResolution? BuildFrpProfileResolutionForHost(
+        IEnumerable<RelayConfig> relays,
+        string host,
+        string? currentRelayId = null)
     {
         var normalizedHost = (host ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(normalizedHost))
@@ -612,9 +621,12 @@ public partial class RelaysViewModel : ObservableObject
             return null;
         }
 
-        var hostRelays = _state.Relays
+        var currentId = (currentRelayId ?? string.Empty).Trim();
+        var hostRelays = relays
             .Where(x =>
+                x is not null &&
                 string.Equals(GatewayTypes.Normalize(x.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals((x.Id ?? string.Empty).Trim(), currentId, StringComparison.Ordinal) &&
                 string.Equals((x.RemoteGateway?.TunnelHost ?? string.Empty).Trim(), normalizedHost, StringComparison.OrdinalIgnoreCase))
             .ToList();
 

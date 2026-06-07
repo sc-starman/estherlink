@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/omnirelay/connector-core/internal/accounting"
@@ -74,6 +75,68 @@ VALUES(?,?,?,?,1,0,0)`, "dbe0861d-2aa1-4b49-bcaa-56c9c8570d9c", "vless_tls_singb
 	}
 	if !containsString(string(content), "dbe0861d-2aa1-4b49-bcaa-56c9c8570d9c") {
 		t.Fatalf("synced config does not contain active VLESS client: %s", content)
+	}
+}
+
+func TestSeedInitialClientCreatesVLESSClientOnce(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := accounting.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedInitialClient(db, "vless_tls_singbox"); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedInitialClient(db, "vless_tls_singbox"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	var clientID, email, username, authUsername, authSecret string
+	if err := db.QueryRow(`SELECT COUNT(1), client_id, email, username, auth_username, auth_secret FROM clients WHERE protocol_id='vless_tls_singbox'`).Scan(&count, &clientID, &email, &username, &authUsername, &authSecret); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one seeded VLESS client, got %d", count)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(clientID) {
+		t.Fatalf("seeded VLESS client id is not a UUIDv4: %q", clientID)
+	}
+	if email != "omni-client@local" || username != "omni-client@local" || authUsername != "" || authSecret == "" {
+		t.Fatalf("unexpected VLESS seed values: email=%q username=%q authUsername=%q authSecret=%q", email, username, authUsername, authSecret)
+	}
+}
+
+func TestSeedInitialClientUsesOpenVPNDefaultsAndSkipsSharedProtocols(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := accounting.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedInitialClient(db, "mixed_singbox"); err != nil {
+		t.Fatal(err)
+	}
+	var sharedCount int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM clients WHERE protocol_id='mixed_singbox'`).Scan(&sharedCount); err != nil {
+		t.Fatal(err)
+	}
+	if sharedCount != 0 {
+		t.Fatalf("shared protocol should not seed per-client rows, got %d", sharedCount)
+	}
+	if err := seedInitialClient(db, "openvpn_tcp_singbox"); err != nil {
+		t.Fatal(err)
+	}
+	var username, authUsername, authSecret string
+	if err := db.QueryRow(`SELECT username, auth_username, auth_secret FROM clients WHERE protocol_id='openvpn_tcp_singbox'`).Scan(&username, &authUsername, &authSecret); err != nil {
+		t.Fatal(err)
+	}
+	if username != "ovpn_client" || authUsername != "ovpn_client" || len(authSecret) < 20 {
+		t.Fatalf("unexpected OpenVPN seed values: username=%q authUsername=%q authSecret=%q", username, authUsername, authSecret)
 	}
 }
 

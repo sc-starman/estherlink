@@ -2,10 +2,13 @@ package status
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"time"
 
 	dnsapi "github.com/omnirelay/connector-core/internal/dns"
 	"github.com/omnirelay/connector-core/internal/host"
+	panelapi "github.com/omnirelay/connector-core/internal/panel"
 	"github.com/omnirelay/connector-core/internal/probe"
 	"github.com/omnirelay/connector-core/internal/spec"
 )
@@ -24,6 +27,8 @@ type Gateway struct {
 	XL2TPDState          string               `json:"xl2tpdState,omitempty"`
 	PanelState           string               `json:"panelState,omitempty"`
 	NginxState           string               `json:"nginxState,omitempty"`
+	PanelInternalPort    int                  `json:"panelInternalPort,omitempty"`
+	PanelListener        bool                 `json:"panelListener,omitempty"`
 	DNSMasqState         string               `json:"dnsmasqState,omitempty"`
 	FirewallState        string               `json:"firewallState,omitempty"`
 	Backend              *probe.BackendResult `json:"backend,omitempty"`
@@ -32,8 +37,9 @@ type Gateway struct {
 }
 
 type Options struct {
-	Systemd      host.Systemd
-	IncludeProbe bool
+	Systemd              host.Systemd
+	IncludeProbe         bool
+	PanelListenerChecker func(context.Context, string, int) bool
 }
 
 func Collect(ctx context.Context, gatewaySpec spec.GatewaySpec, options Options) Gateway {
@@ -93,9 +99,15 @@ func Collect(ctx context.Context, gatewaySpec spec.GatewaySpec, options Options)
 	if gatewaySpec.Panel.Port > 0 {
 		result.PanelState = activeState(ctx, options.Systemd, "omnirelay-omnipanel-"+gatewaySpec.RelayID+".service")
 		result.NginxState = activeState(ctx, options.Systemd, "nginx.service")
+		result.PanelInternalPort = panelapi.InternalPort(gatewaySpec.RelayID)
+		result.PanelListener = panelListener(ctx, options.PanelListenerChecker, "127.0.0.1", result.PanelInternalPort)
 		if result.PanelState != "active" || result.NginxState != "active" {
 			result.Healthy = false
 			result.ReasonCode = "panel_not_active"
+		}
+		if result.PanelState == "active" && result.NginxState == "active" && !result.PanelListener {
+			result.Healthy = false
+			result.ReasonCode = "panel_upstream_unreachable"
 		}
 	}
 	if options.IncludeProbe {
@@ -116,6 +128,19 @@ func Collect(ctx context.Context, gatewaySpec spec.GatewaySpec, options Options)
 		}
 	}
 	return result
+}
+
+func panelListener(ctx context.Context, checker func(context.Context, string, int) bool, host string, port int) bool {
+	if checker != nil {
+		return checker(ctx, host, port)
+	}
+	dialer := net.Dialer{Timeout: time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func activeState(ctx context.Context, manager host.Systemd, unit string) string {

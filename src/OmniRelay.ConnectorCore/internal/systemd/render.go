@@ -200,16 +200,14 @@ Type=simple
 User=omnigateway
 Group=omnigateway
 EnvironmentFile=%s
-ExecStartPre=+%s panel activate --relay-id %s --json
 WorkingDirectory=%s/current
 ExecStart=/usr/bin/node %s/current/server.js
 Restart=always
 RestartSec=3
-NoNewPrivileges=true
 
 [Install]
 WantedBy=omnirelay-gateway-%s.target
-`, relayID, relayID, environmentPath, options.ConnectorBinary, relayID, appRoot, appRoot, relayID)
+`, relayID, relayID, environmentPath, appRoot, appRoot, relayID)
 }
 
 func defaults(options Options) Options {

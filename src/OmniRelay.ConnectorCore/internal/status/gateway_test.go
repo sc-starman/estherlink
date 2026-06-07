@@ -51,13 +51,48 @@ func TestCollectRequiresOpenVPNAndPanelServicesWhenConfigured(t *testing.T) {
 	gatewaySpec := spec.GatewaySpec{
 		RelayID: relayID, Gateway: spec.Gateway{Protocol: "openvpn_tcp_singbox"}, Panel: spec.PanelSpec{Port: 3054},
 	}
-	result := Collect(context.Background(), gatewaySpec, Options{Systemd: states})
+	result := Collect(context.Background(), gatewaySpec, Options{
+		Systemd: states,
+		PanelListenerChecker: func(context.Context, string, int) bool {
+			return true
+		},
+	})
 	if !result.Healthy || result.OpenVPNState != "active" || result.PanelState != "active" {
 		t.Fatalf("unexpected healthy result: %+v", result)
 	}
 	states["omnirelay-openvpn-"+relayID+".service"] = "failed"
-	result = Collect(context.Background(), gatewaySpec, Options{Systemd: states})
+	result = Collect(context.Background(), gatewaySpec, Options{
+		Systemd: states,
+		PanelListenerChecker: func(context.Context, string, int) bool {
+			return true
+		},
+	})
 	if result.Healthy || result.ReasonCode != "openvpn_not_active" {
 		t.Fatalf("unexpected OpenVPN failure result: %+v", result)
+	}
+}
+
+func TestCollectReportsPanelUpstreamFailure(t *testing.T) {
+	relayID := "e4ccc282a1004b62ad2cda5770d6e32d"
+	result := Collect(context.Background(), spec.GatewaySpec{
+		RelayID: relayID,
+		Gateway: spec.Gateway{Protocol: "vless_tls_singbox"},
+		Panel:   spec.PanelSpec{Port: 3054},
+	}, Options{
+		Systemd: fakeSystemd{
+			"omnirelay-gateway-" + relayID + ".target":    "active",
+			"omnirelay-connector-" + relayID + ".service": "active",
+			"omnirelay-omnipanel-" + relayID + ".service": "active",
+			"nginx.service": "active",
+		},
+		PanelListenerChecker: func(context.Context, string, int) bool {
+			return false
+		},
+	})
+	if result.Healthy || result.ReasonCode != "panel_upstream_unreachable" || result.PanelListener {
+		t.Fatalf("unexpected panel upstream result: %+v", result)
+	}
+	if result.PanelInternalPort == 0 {
+		t.Fatalf("expected panel internal port in status: %+v", result)
 	}
 }

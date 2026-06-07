@@ -12,7 +12,7 @@ Key decisions:
 ## Protocol Definition
 - Protocol ID: `openvpn_tcp_singbox`
 - Display name: `OpenVPN (TCP, sing-box connector)`
-- Script: `setup_omnirelay_vps_openvpn_singbox.sh`
+- Deployment path: connector-core gateway spec and reconciler.
 
 ## Data Plane
 1. Client connects to OpenVPN TCP listener (public port).
@@ -22,8 +22,7 @@ Key decisions:
 5. Reverse SSH tunnel carries egress to Windows proxy.
 
 ## Runtime Contract
-Gateway script exposes standard commands:
-- `install|uninstall|start|stop|status|health|dns-apply|dns-status|dns-repair|sync-clients`
+connector-core exposes standard gateway and DNS commands for the relay.
 
 Health/status expectations:
 - `.activeProtocol == "openvpn_tcp_singbox"`
@@ -32,8 +31,8 @@ Health/status expectations:
 - tunnel probe fields included in output
 
 ## Deployment Wiring
-- UI and backend map `openvpn_tcp_singbox` to `setup_omnirelay_vps_openvpn_singbox.sh`.
-- Shared connector layer is loaded from `setup_omnirelay_gateway_singbox_connector_common.sh`.
+- UI maps `openvpn_tcp_singbox` into the connector-core gateway spec.
+- connector-core renders and reconciles the OpenVPN and sing-box runtime.
 - OmniPanel provider remains OpenVPN-native for client/auth lifecycle.
 
 ## Removed Dependencies

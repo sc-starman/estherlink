@@ -2,14 +2,13 @@
 
 ## Provisioning
 1. Ubuntu 22.04+ with static public IP.
-2. Bundle or upload gateway scripts to VPS.
-3. Run command-mode installer with new script names, for example:
-   - `sudo bash scripts/setup_omnirelay_vps_singbox_vless_reality.sh install --bundle-dir <bundle-dir> ...`
+2. Install through the Windows UI so it uploads the signed connector-core bootstrap and gateway spec.
+3. Confirm connector-core is installed on the VPS.
 4. Tunnel user must have shell access and sudo permission.
 
 ## Required Services
 1. `sshd` active.
-2. `omnirelay-singbox` active.
+2. `connector-core` installed at `/usr/local/bin/connector-core`.
 3. `omnirelay-omnipanel` active.
 4. `nginx` active.
 5. `fail2ban` active.
@@ -20,25 +19,24 @@
 2. `systemctl status omnirelay-singbox --no-pager`
 3. `systemctl status omnirelay-omnipanel --no-pager`
 4. `fail2ban-client status sshd`
-5. `sudo /usr/local/sbin/omnirelay-gatewayctl get-protocol`
-6. `sudo /usr/local/sbin/omnirelay-gatewayctl status --json | jq`
-7. `sudo /usr/local/sbin/omnirelay-gatewayctl health --json | jq`
+5. `sudo /usr/local/bin/connector-core gateway status --relay-id <relay-id> --json | jq`
+6. `sudo /usr/local/bin/connector-core dns status --relay-id <relay-id> --json | jq`
 
 ## Runtime Checks (All Protocol Families)
-1. `activeProtocol` is one of:
+1. `protocol` is one of:
    - `vless_reality_singbox`
    - `vless_plain_singbox`
    - `shadowsocks_singbox`
    - `shadowtls_v3_shadowsocks_singbox`
    - `openvpn_tcp_singbox`
    - `ipsec_l2tp_singbox`
-2. `singBoxState == "active"`.
+2. Gateway backend state is active.
 3. Tunnel probe fields exist and are meaningful:
    - `tunnelHealthy`
    - `tunnelReason`
    - `tunnelBackendProtocol`
    - `tunnelEgressReachable`
-4. No runtime dependency on `x-ui` or `redsocks`.
+4. No runtime dependency on legacy gateway setup scripts, `x-ui`, or `redsocks`.
 
 ## Tunnel Validation
 1. Start Windows reverse SSH tunnel:

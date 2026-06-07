@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"net"
@@ -392,6 +394,7 @@ func runPanelActivate(args []string) error {
 	nginxAvailableRoot := flags.String("nginx-available-root", "/etc/nginx/sites-available", "nginx sites-available root")
 	nginxEnabledRoot := flags.String("nginx-enabled-root", "/etc/nginx/sites-enabled", "nginx sites-enabled root")
 	artifactCacheRoot := flags.String("artifact-cache-root", "/var/cache/omnirelay/omnipanel", "OmniPanel artifact cache root")
+	restartServices := flags.Bool("restart-services", true, "restart nginx and OmniPanel services after activation")
 	_ = flags.Bool("json", false, "emit JSON result")
 	if err := flags.Parse(args); err != nil {
 		return &commandapi.Error{Code: "usage", Message: err.Error(), ExitCode: commandapi.ExitUsage}
@@ -441,6 +444,9 @@ func runPanelActivate(args []string) error {
 	} else if err := panelapi.ValidateCurrent(*appRoot); err != nil {
 		return &commandapi.Error{Code: "panel_artifact_missing", Message: err.Error(), ExitCode: commandapi.ExitValidation}
 	}
+	if err := repairPanelAppPermissions(*appRoot, "omnigateway", "omnigateway"); err != nil {
+		return &commandapi.Error{Code: "panel_permissions_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
+	}
 	siteName := "omnirelay-omnipanel-" + *relayID + ".conf"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -454,11 +460,13 @@ func runPanelActivate(args []string) error {
 		return &commandapi.Error{Code: "panel_nginx_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
 	}
 	manager := host.OSSystemd{}
-	if err := manager.DaemonReload(ctx); err != nil {
-		return &commandapi.Error{Code: "panel_service_reload_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
-	}
-	if err := manager.Restart(ctx, "nginx.service", "omnirelay-omnipanel-"+*relayID+".service"); err != nil {
-		return &commandapi.Error{Code: "panel_service_restart_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
+	if *restartServices {
+		if err := manager.DaemonReload(ctx); err != nil {
+			return &commandapi.Error{Code: "panel_service_reload_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
+		}
+		if err := manager.Restart(ctx, "nginx.service", "omnirelay-omnipanel-"+*relayID+".service"); err != nil {
+			return &commandapi.Error{Code: "panel_service_restart_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
+		}
 	}
 	return commandapi.WriteJSON(os.Stdout, commandapi.Result{
 		OK: true, Command: "panel activate",
@@ -1183,8 +1191,91 @@ func prepareProtocolClients(gatewaySpec spec.GatewaySpec, configRoot string) err
 	if err := accounting.Migrate(db); err != nil {
 		return err
 	}
+	if err := seedInitialClient(db, gatewaySpec.Gateway.Protocol); err != nil {
+		return err
+	}
 	_, _, err = syncProtocolClients(gatewaySpec, paths, db, paths.connectorConfig)
 	return err
+}
+
+func seedInitialClient(db *sql.DB, protocolID string) error {
+	definition, ok := protocol.Lookup(protocolID)
+	if !ok {
+		return fmt.Errorf("unsupported protocol %q", protocolID)
+	}
+	if !definition.PerClient && definition.Runtime != "openvpn" && definition.Runtime != "ipsec_l2tp" {
+		return nil
+	}
+	var existing int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM clients WHERE protocol_id=?`, protocolID).Scan(&existing); err != nil {
+		return err
+	}
+	if existing > 0 {
+		return nil
+	}
+	clientID, err := randomUUID()
+	if err != nil {
+		return err
+	}
+	secret, err := randomSecret(18)
+	if err != nil {
+		return err
+	}
+	email := "omni-client@local"
+	username := email
+	authUsername := ""
+	switch definition.Runtime {
+	case "openvpn":
+		username = "ovpn_client"
+		authUsername = "ovpn_client"
+	case "ipsec_l2tp":
+		username = "l2tp_client"
+		authUsername = "l2tp_client"
+	}
+	now := time.Now().Unix()
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`
+INSERT INTO clients(client_id,protocol_id,email,username,auth_username,auth_secret,enabled,total_bytes_limit,speed_limit_kbps,expiry_unix_ms,created_at,updated_at)
+VALUES(?,?,?,?,?,?,1,0,0,0,?,?)`,
+		clientID, protocolID, email, username, authUsername, secret, now, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO usage_totals(client_id,used_bytes,updated_at) VALUES(?,0,?)`, clientID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO connection_counters(client_id,active_connections,last_seen_at) VALUES(?,0,0)`, clientID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO enforcement_state(client_id,disabled_reason,disabled_at,updated_at) VALUES(?,'',0,0)`, clientID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func randomUUID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+func randomSecret(byteCount int) (string, error) {
+	if byteCount <= 0 {
+		byteCount = 18
+	}
+	value := make([]byte, byteCount)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
 func runGatewayStatus(kind string, args []string) error {

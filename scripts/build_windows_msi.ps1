@@ -4,7 +4,6 @@ param(
     [ValidateSet("stable", "beta")]
     [string]$Channel = "stable",
     [string]$ConnectorCoreReleasePublicKeyPath,
-    [switch]$IncludeLegacyGatewayScripts,
     [switch]$RebuildOmniPanel
 )
 
@@ -22,9 +21,6 @@ $connectorCoreProjectDir = Join-Path $root "src\OmniRelay.ConnectorCore"
 $uiProject = Join-Path $root "src\OmniRelay.UI\OmniRelay.UI.csproj"
 $serviceProject = Join-Path $root "src\OmniRelay.Service\OmniRelay.Service.csproj"
 
-if ($Configuration -eq "Release" -and $IncludeLegacyGatewayScripts) {
-    throw "Release MSI builds cannot include legacy gateway management scripts."
-}
 if ([string]::IsNullOrWhiteSpace($ConnectorCoreReleasePublicKeyPath)) {
     $ConnectorCoreReleasePublicKeyPath = (Ensure-ConnectorCoreSigningKeys -RepoRootPath $root).PublicKeyPath
 }
@@ -218,10 +214,7 @@ Clean-ProjectArtifacts -ProjectPath $uiProject
 Clean-ProjectArtifacts -ProjectPath $serviceProject
 
 Write-Host "Building OmniRelay MSI ($Configuration)..." -ForegroundColor Cyan
-$includeLegacyGatewayScripts =
-    $Configuration -ne "Release" -and
-    ([bool]$IncludeLegacyGatewayScripts -or [string]::IsNullOrWhiteSpace($ConnectorCoreReleasePublicKeyPath))
-dotnet build $installerProject -c $Configuration -p:IncludeLegacyGatewayScripts=$($includeLegacyGatewayScripts.ToString().ToLowerInvariant())
+dotnet build $installerProject -c $Configuration
 if ($LASTEXITCODE -ne 0) {
     throw "MSI build failed with exit code $LASTEXITCODE."
 }

@@ -8,10 +8,12 @@ namespace OmniRelay.Backend.Security;
 public sealed class AdminAuditEndpointFilter : IEndpointFilter
 {
     private readonly AppDbContext _dbContext;
+    private readonly ILogger<AdminAuditEndpointFilter> _logger;
 
-    public AdminAuditEndpointFilter(AppDbContext dbContext)
+    public AdminAuditEndpointFilter(AppDbContext dbContext, ILogger<AdminAuditEndpointFilter> logger)
     {
         _dbContext = dbContext;
+        _logger = logger;
     }
 
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
@@ -22,11 +24,32 @@ public sealed class AdminAuditEndpointFilter : IEndpointFilter
         var payloadHash = ComputePayloadHash(context.Arguments);
         var now = DateTimeOffset.UtcNow;
 
+        object? result;
         try
         {
-            var result = await next(context);
-            var statusCode = result is IStatusCodeHttpResult status ? status.StatusCode ?? 200 : 200;
+            result = await next(context);
+        }
+        catch
+        {
+            await TryWriteAuditAsync(http, actor, payloadHash, 500, requestId, now);
+            throw;
+        }
 
+        var statusCode = result is IStatusCodeHttpResult status ? status.StatusCode ?? 200 : 200;
+        await TryWriteAuditAsync(http, actor, payloadHash, statusCode, requestId, now);
+        return result;
+    }
+
+    private async Task TryWriteAuditAsync(
+        HttpContext http,
+        string actor,
+        string payloadHash,
+        int statusCode,
+        string requestId,
+        DateTimeOffset createdAt)
+    {
+        try
+        {
             _dbContext.AuditEvents.Add(new AuditEventEntity
             {
                 Id = Guid.NewGuid(),
@@ -36,27 +59,17 @@ public sealed class AdminAuditEndpointFilter : IEndpointFilter
                 PayloadHash = payloadHash,
                 StatusCode = statusCode,
                 RequestId = requestId,
-                CreatedAt = now
+                CreatedAt = createdAt
             });
             await _dbContext.SaveChangesAsync(http.RequestAborted);
-
-            return result;
         }
-        catch
+        catch (Exception ex)
         {
-            _dbContext.AuditEvents.Add(new AuditEventEntity
-            {
-                Id = Guid.NewGuid(),
-                Actor = actor,
-                Method = http.Request.Method,
-                Path = http.Request.Path.ToString(),
-                PayloadHash = payloadHash,
-                StatusCode = 500,
-                RequestId = requestId,
-                CreatedAt = now
-            });
-            await _dbContext.SaveChangesAsync(http.RequestAborted);
-            throw;
+            _logger.LogWarning(
+                ex,
+                "Admin audit write failed for {Method} {Path}; endpoint response is preserved.",
+                http.Request.Method,
+                http.Request.Path);
         }
     }
 

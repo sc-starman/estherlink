@@ -104,7 +104,29 @@ func TestRenderGatewayUnitsAddsPanelServiceWhenEnabled(t *testing.T) {
 	}
 	if !strings.Contains(combined, "omnirelay-omnipanel-e4ccc282a1004b62ad2cda5770d6e32d.service") ||
 		!strings.Contains(combined, "EnvironmentFile=/etc/omnirelay/relays/e4ccc282a1004b62ad2cda5770d6e32d/gateway/panel/panel.env") ||
-		!strings.Contains(combined, "connector-core panel activate --relay-id e4ccc282a1004b62ad2cda5770d6e32d") {
+		!strings.Contains(combined, "ExecStart=/usr/bin/node /opt/omnirelay/relays/e4ccc282a1004b62ad2cda5770d6e32d/omnipanel/current/server.js") {
 		t.Fatalf("panel service is incomplete: %s", combined)
 	}
+	if strings.Contains(combined, "ExecStartPre=") || strings.Contains(combined, "panel activate") {
+		t.Fatalf("panel service must not self-activate during every restart: %s", combined)
+	}
+	panelUnit := unitContent(t, units, "omnirelay-omnipanel-e4ccc282a1004b62ad2cda5770d6e32d.service")
+	if strings.Contains(panelUnit, "NoNewPrivileges=true") {
+		t.Fatalf("panel service must allow its restricted sudoers command: %s", panelUnit)
+	}
+	connectorUnit := unitContent(t, units, "omnirelay-connector-e4ccc282a1004b62ad2cda5770d6e32d.service")
+	if !strings.Contains(connectorUnit, "NoNewPrivileges=true") {
+		t.Fatalf("connector service should keep NoNewPrivileges: %s", connectorUnit)
+	}
+}
+
+func unitContent(t *testing.T, units []Unit, name string) string {
+	t.Helper()
+	for _, unit := range units {
+		if unit.Name == name {
+			return unit.Content
+		}
+	}
+	t.Fatalf("unit %s not rendered", name)
+	return ""
 }

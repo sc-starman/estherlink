@@ -26,7 +26,7 @@ func BuildPlan(gatewaySpec spec.GatewaySpec) Plan {
 	definition, _ := protocol.Lookup(gatewaySpec.Gateway.Protocol)
 	packages := append([]string{"ca-certificates", "curl", "iptables"}, definition.RequiredPackages...)
 	if gatewaySpec.Panel.Port > 0 {
-		packages = append(packages, "nginx", "nodejs", "sudo")
+		packages = append(packages, "nginx", "nodejs", "sqlite3", "sudo")
 		if gatewaySpec.Panel.TLSEnabled && gatewaySpec.Panel.TLSMode == "certbot" {
 			packages = append(packages, "certbot")
 		}

@@ -78,7 +78,7 @@ public partial class RelayEditDialog : Window
     public event Func<string, string, IReadOnlyList<string>, Task<PolicyCommitSummary>>? ReplacePolicyEntriesRequested;
     public event Func<string, string, Task<OperationResult>>? DeletePolicyListRequested;
     public event Func<string, Task<RelayStatus?>>? RefreshRelayStatusRequested;
-    public event Func<string, FrpHostProfileResolution?>? ResolveFrpProfileForHostRequested;
+    public event Func<string, string, FrpHostProfileResolution?>? ResolveFrpProfileForHostRequested;
 
     private bool IsRemote => string.Equals(GatewayTypes.Normalize(Relay.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase);
 
@@ -165,6 +165,11 @@ public partial class RelayEditDialog : Window
         ResolveTunnelProfileFromHost(force: false);
     }
 
+    public void ResolveTunnelProfileFromCurrentHost()
+    {
+        ResolveTunnelProfileFromHost(force: true);
+    }
+
     private void ResolveTunnelProfileFromHost(bool force)
     {
         var host = TunnelHostTextBox.Text.Trim();
@@ -174,13 +179,21 @@ public partial class RelayEditDialog : Window
             return;
         }
 
-        _lastResolvedTunnelHostKey = hostKey;
         if (string.IsNullOrWhiteSpace(host))
         {
+            _lastResolvedTunnelHostKey = string.Empty;
             return;
         }
 
-        var profile = ResolveFrpProfileForHostRequested?.Invoke(host);
+        var resolver = ResolveFrpProfileForHostRequested;
+        if (resolver is null)
+        {
+            EnsureFrpDefaults();
+            return;
+        }
+
+        _lastResolvedTunnelHostKey = hostKey;
+        var profile = resolver(host, Relay.Id);
         if (profile?.Found == true)
         {
             FrpServerPortTextBox.Text = (profile.FrpServerPort is > 0 and <= 65535 ? profile.FrpServerPort : 7000).ToString();
@@ -207,6 +220,11 @@ public partial class RelayEditDialog : Window
             return;
         }
 
+        EnsureFrpDefaults();
+    }
+
+    private void EnsureFrpDefaults()
+    {
         if (!int.TryParse(FrpServerPortTextBox.Text, out var frpsPort) || frpsPort <= 0 || frpsPort > 65535)
         {
             FrpServerPortTextBox.Text = "7000";

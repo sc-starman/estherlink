@@ -40,6 +40,29 @@ func TestMigrateSnapshotsLegacyStateBeforeApply(t *testing.T) {
 	}
 }
 
+func TestMigrateCreatesSnapshotDirectoryWhenNoLegacyStateExists(t *testing.T) {
+	root := t.TempDir()
+	gatewaySpec := testSpec()
+	options := MigrateOptions{ApplyOptions: ApplyOptions{
+		ConfigRoot: filepath.Join(root, "etc"), TransactionRoot: filepath.Join(root, "transactions"),
+		SystemdRoot: filepath.Join(root, "systemd"), NginxRoot: filepath.Join(root, "nginx"), DNSMasqRoot: filepath.Join(root, "dnsmasq"),
+	}, LegacyBinaryRoot: filepath.Join(root, "sbin")}
+	result, err := Migrate(gatewaySpec, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SnapshotFiles != 0 {
+		t.Fatalf("expected no legacy files, got %d", result.SnapshotFiles)
+	}
+	info, err := os.Stat(result.LegacySnapshotPath)
+	if err != nil {
+		t.Fatalf("migration snapshot marker is missing: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("migration snapshot marker is not a directory: %s", result.LegacySnapshotPath)
+	}
+}
+
 func TestPruneMigrationBackupsKeepsRetentionWindow(t *testing.T) {
 	root := t.TempDir()
 	relayID := testSpec().RelayID

@@ -346,27 +346,10 @@ Runs:
 VPS must forward incoming client TCP streams to the Windows proxy listener endpoint over the reverse tunnel.
 
 Primary ingress path (current):
-- sing-box is the canonical gateway runtime on VPS for all protocols.
-- Protocol-native ingress (VLESS/SS/ShadowTLS inbound or OpenVPN/IPSec native ingress) detours through sing-box.
-- sing-box outbound is forced to `127.0.0.1:15000` (loopback tunnel endpoint).
-- Windows reverse SSH tunnel maps VPS `127.0.0.1:15000` to Windows `127.0.0.1:<proxy-listen-port>`.
-- Fail mode is fail-closed for client traffic (no direct VPS fallback).
-
-Helper setup scripts:
-- VLESS Reality: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_vless_reality.sh`
-- VLESS Plain: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_vless_plain.sh`
-- Shadowsocks: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_shadowsocks.sh`
-- ShadowTLS+SS: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_shadowtls.sh`
-- OpenVPN connector mode: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_openvpn_singbox.sh`
-- IPSec/L2TP connector mode: `src/OmniRelay.UI/scripts/setup_omnirelay_vps_ipsec_l2tp_singbox.sh`
-- Shared connector layer: `src/OmniRelay.UI/scripts/setup_omnirelay_gateway_singbox_connector_common.sh`
-- Rollback/legacy: `scripts/setup_OmniRelay_vps.sh`
-
-Example (manual online install using SOCKS bootstrap):
-
-```bash
-sudo bash src/OmniRelay.UI/scripts/setup_omnirelay_vps_singbox_vless_reality.sh install --public-port 443 --panel-port 2054 --backend-port 15000 --ssh-port 22 --tunnel-user OmniRelay --tunnel-auth host_key --bootstrap-socks-port 16080 --dns-mode hybrid --doh-endpoints "https://1.1.1.1/dns-query,https://8.8.8.8/dns-query" --dns-udp-only true
-```
+- `connector-core` is the canonical gateway runtime and reconciler on VPS.
+- Protocol-native ingress is rendered from a signed gateway spec during install.
+- FRP handles runtime data tunneling back to the Windows proxy listener.
+- Fail mode is fail-closed for client traffic.
 
 DNS-through-tunnel commands:
 

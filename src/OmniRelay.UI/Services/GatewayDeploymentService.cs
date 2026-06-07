@@ -17,11 +17,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
 {
     private const string GatewayCtlPath = "/usr/local/sbin/omnirelay-gatewayctl";
     private const string TunnelCtlPath = "/usr/local/sbin/omnirelay-tunnelctl";
-    private const string RemoteInstallScriptPath = "/tmp/omnirelay-gatewayctl.sh";
-    private const string RemoteOmniPanelCommonScriptPath = "/tmp/omnirelay-omnipanel-common.sh";
-    private const string RemoteBootstrapCommonScriptPath = "/tmp/omnirelay-bootstrap-common.sh";
-    private const string RemoteSingBoxConnectorCommonScriptPath = "/tmp/omnirelay-singbox-connector-common.sh";
-    private const string RemoteTunnelModuleScriptPath = "/tmp/omnirelay-tunnel-module.sh";
     private const string RemoteUploadedPanelCertPath = "/tmp/omnirelay-omnipanel-upload.crt";
     private const string RemoteUploadedPanelKeyPath = "/tmp/omnirelay-omnipanel-upload.key";
     private const string RemoteOpenVpnSharedCaCertPath = "/tmp/omnirelay-openvpn-shared-ca.crt";
@@ -318,216 +313,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        if (IsConnectorCoreGatewayCutoverEnabled())
-        {
-            return await InstallGatewayWithConnectorCoreAsync(request, sudoPassword, progress, cancellationToken);
-        }
-
-        Process? bootstrapTunnelProcess = null;
-        int? bootstrapSocksRemotePortOverride = null;
-        try
-        {
-            ValidateRequest(request);
-            EnsureSudoPassword(sudoPassword);
-
-            if (IsTunnelBootstrapMode(request))
-            {
-                var bootstrapSession = await StartTemporaryBootstrapTunnelAsync(request, progress, cancellationToken);
-                if (!bootstrapSession.Success || bootstrapSession.Process is null)
-                {
-                    return new GatewayOperationResult(false, bootstrapSession.Message);
-                }
-
-                bootstrapTunnelProcess = bootstrapSession.Process;
-                bootstrapSocksRemotePortOverride = bootstrapSession.RemotePort;
-
-                if (bootstrapSession.RemotePort <= 0)
-                {
-                    return new GatewayOperationResult(false, "Temporary bootstrap tunnel started without a valid VPS remote port.");
-                }
-
-                var bootstrap = await CheckGatewayBootstrapInternalAsync(
-                    request,
-                    sudoPassword,
-                    progress,
-                    cancellationToken,
-                    bootstrapTunnelAlreadyEstablished: true,
-                    bootstrapSocksRemotePortOverride: bootstrapSocksRemotePortOverride);
-                if (!bootstrap.Success)
-                {
-                    return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrap.Message}");
-                }
-            }
-            else
-            {
-                var bootstrap = await CheckGatewayBootstrapInternalAsync(
-                    request,
-                    sudoPassword,
-                    progress,
-                    cancellationToken,
-                    bootstrapTunnelAlreadyEstablished: true);
-                if (!bootstrap.Success)
-                {
-                    return new GatewayOperationResult(false, $"Gateway bootstrap preflight failed: {bootstrap.Message}");
-                }
-            }
-
-            await EnsureTunnelModuleInstalledAsync(request, sudoPassword, DeploymentPhases.GatewayInstall, progress, cancellationToken);
-            await EnsureCleanProtocolSwitchAsync(request, sudoPassword, progress, cancellationToken);
-            if (!string.Equals(GatewayTypes.Normalize(request.Config.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
-            {
-                await EnsureRuntimeSocksBackendReadyForInstallAsync(request, sudoPassword, progress, cancellationToken);
-            }
-            else
-            {
-                progress?.Report(new DeploymentProgressSnapshot
-                {
-                    Phase = DeploymentPhases.GatewayInstall,
-                    Percent = 4,
-                    Message = "Skipping pre-install backend probe for remote FRP runtime"
-                });
-            }
-
-            progress?.Report(new DeploymentProgressSnapshot
-            {
-                Phase = DeploymentPhases.GatewayInstall,
-                Percent = 5,
-                Message = "Uploading gateway installer script"
-            });
-
-            await UploadInstallerScriptAsync(request, progress, cancellationToken);
-            await UploadBootstrapCommonScriptAsync(request, progress, cancellationToken);
-            await UploadOmniPanelCommonScriptAsync(request, progress, cancellationToken);
-            await UploadSingBoxConnectorCommonScriptAsync(request, progress, cancellationToken);
-
-            var uploadedPanelCertRemotePath = string.Empty;
-            var uploadedPanelKeyRemotePath = string.Empty;
-            var uploadedOpenVpnSharedCaCertRemotePath = string.Empty;
-            var uploadedOpenVpnSharedClientCertRemotePath = string.Empty;
-            var uploadedOpenVpnSharedClientKeyRemotePath = string.Empty;
-            var uploadedOpenVpnSharedTlsCryptKeyRemotePath = string.Empty;
-            if (request.GatewayPanelSslEnabled &&
-                string.Equals(request.GatewayPanelSslMode, "uploaded", StringComparison.OrdinalIgnoreCase))
-            {
-                progress?.Report(new DeploymentProgressSnapshot
-                {
-                    Phase = DeploymentPhases.GatewayInstall,
-                    Percent = 9,
-                    Message = "Uploading OmniPanel TLS certificate and private key"
-                });
-
-                uploadedPanelCertRemotePath = GetRemoteUploadedPanelCertPath(request);
-                uploadedPanelKeyRemotePath = GetRemoteUploadedPanelKeyPath(request);
-                await UploadFileAsync(request, request.GatewayPanelCertLocalPath, uploadedPanelCertRemotePath, progress, cancellationToken);
-                await UploadFileAsync(request, request.GatewayPanelKeyLocalPath, uploadedPanelKeyRemotePath, progress, cancellationToken);
-            }
-
-            if (string.Equals(GatewayProtocols.Normalize(request.SelectedGatewayProtocol), GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase))
-            {
-                progress?.Report(new DeploymentProgressSnapshot
-                {
-                    Phase = DeploymentPhases.GatewayInstall,
-                    Percent = 9,
-                    Message = "Uploading OpenVPN shared bundle files"
-                });
-                uploadedOpenVpnSharedCaCertRemotePath = RemoteOpenVpnSharedCaCertPath;
-                uploadedOpenVpnSharedClientCertRemotePath = RemoteOpenVpnSharedClientCertPath;
-                uploadedOpenVpnSharedClientKeyRemotePath = RemoteOpenVpnSharedClientKeyPath;
-                uploadedOpenVpnSharedTlsCryptKeyRemotePath = RemoteOpenVpnSharedTlsCryptKeyPath;
-                await UploadFileAsync(request, request.OpenVpnSharedCaCertLocalPath, uploadedOpenVpnSharedCaCertRemotePath, progress, cancellationToken);
-                await UploadFileAsync(request, request.OpenVpnSharedClientCertLocalPath, uploadedOpenVpnSharedClientCertRemotePath, progress, cancellationToken);
-                await UploadFileAsync(request, request.OpenVpnSharedClientKeyLocalPath, uploadedOpenVpnSharedClientKeyRemotePath, progress, cancellationToken);
-                await UploadFileAsync(request, request.OpenVpnSharedTlsCryptKeyLocalPath, uploadedOpenVpnSharedTlsCryptKeyRemotePath, progress, cancellationToken);
-            }
-
-            var panelUser = string.IsNullOrWhiteSpace(request.GatewayPanelUser)
-                ? $"omniadmin_{RandomAlphaNum(6)}"
-                : request.GatewayPanelUser.Trim();
-            var panelPassword = string.IsNullOrWhiteSpace(request.GatewayPanelPassword)
-                ? RandomAlphaNum(24)
-                : request.GatewayPanelPassword.Trim();
-            var panelBasePath = $"omni{RandomAlphaNum(14).ToLowerInvariant()}";
-            var installArgs = BuildInstallArgs(
-                request,
-                panelUser,
-                panelPassword,
-                panelBasePath,
-                uploadedPanelCertRemotePath,
-                uploadedPanelKeyRemotePath,
-                uploadedOpenVpnSharedCaCertRemotePath,
-                uploadedOpenVpnSharedClientCertRemotePath,
-                uploadedOpenVpnSharedClientKeyRemotePath,
-                uploadedOpenVpnSharedTlsCryptKeyRemotePath,
-                bootstrapSocksRemotePortOverride);
-            var remoteInstallScriptPath = GetRemoteInstallScriptPath(request);
-            var command =
-                "set -euo pipefail; " +
-                $"chmod +x {ShellQuote(remoteInstallScriptPath)}; " +
-                $"sed -i 's/\\r$//' {ShellQuote(remoteInstallScriptPath)} || true; " +
-                $"bash -n {ShellQuote(remoteInstallScriptPath)} >/tmp/omnirelay-gatewayctl.syntax.log 2>&1 || {{ cat /tmp/omnirelay-gatewayctl.syntax.log; exit 43; }}; " +
-                $"bash {ShellQuote(remoteInstallScriptPath)} {installArgs}";
-
-            using var installTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            installTimeoutCts.CancelAfter(TimeSpan.FromMinutes(20));
-
-            var result = await ExecuteCommandAsync(
-                request.Config,
-                command,
-                sudoPassword,
-                line =>
-                {
-                    var clean = SanitizeTerminalLine(line);
-                    if (TryParseProgressLine(clean, out var pct, out var message))
-                    {
-                        progress?.Report(new DeploymentProgressSnapshot
-                        {
-                            Phase = DeploymentPhases.GatewayInstall,
-                            Percent = pct,
-                            Message = message
-                        });
-                    }
-                    else if (!string.IsNullOrWhiteSpace(clean))
-                    {
-                        progress?.Report(new DeploymentProgressSnapshot
-                        {
-                            Phase = DeploymentPhases.GatewayInstall,
-                            Percent = 0,
-                            Message = $"[vps] {clean}"
-                        });
-                    }
-                },
-                installTimeoutCts.Token);
-
-            if (!result.Success)
-            {
-                return new GatewayOperationResult(false, result.ErrorMessage);
-            }
-
-            if (string.Equals(GatewayTypes.Normalize(request.Config.GatewayType), GatewayTypes.Remote, StringComparison.OrdinalIgnoreCase))
-            {
-                await WaitForFrpBackendListenerAfterInstallAsync(request, sudoPassword, progress, cancellationToken);
-            }
-
-            var panelHost = string.IsNullOrWhiteSpace(request.GatewayPanelDomain)
-                ? request.Config.TunnelHost
-                : request.GatewayPanelDomain.Trim();
-            var panelScheme = request.GatewayPanelSslEnabled ? "https" : "http";
-            var panelUrl = $"{panelScheme}://{panelHost}:{request.GatewayPanelPort}/";
-            return new GatewayOperationResult(
-                true,
-                $"Gateway install completed. Panel URL: {panelUrl} | Username: {panelUser} | Password: {panelPassword}",
-                panelUrl,
-                panelUser,
-                panelPassword);
-        }
-        catch (Exception ex)
-        {
-            return new GatewayOperationResult(false, $"Gateway install failed: {ex.Message}");
-        }
-        finally
-        {
-            await StopTemporaryBootstrapTunnelAsync(bootstrapTunnelProcess, progress);
-        }
+        return await InstallGatewayWithConnectorCoreAsync(request, sudoPassword, progress, cancellationToken);
     }
 
     private async Task<GatewayOperationResult> InstallGatewayWithConnectorCoreAsync(
@@ -1846,51 +1632,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return false;
     }
 
-    private async Task UploadInstallerScriptAsync(
-        GatewayDeploymentRequest request,
-        IProgress<DeploymentProgressSnapshot>? progress,
-        CancellationToken cancellationToken)
-    {
-        var localScript = ResolveInstallerScriptPath(request.SelectedGatewayProtocol);
-        await UploadFileAsync(request, localScript, GetRemoteInstallScriptPath(request), progress, cancellationToken);
-    }
-
-    private async Task UploadOmniPanelCommonScriptAsync(
-        GatewayDeploymentRequest request,
-        IProgress<DeploymentProgressSnapshot>? progress,
-        CancellationToken cancellationToken)
-    {
-        var localScript = ResolveOmniPanelCommonScriptPath();
-        await UploadFileAsync(request, localScript, RemoteOmniPanelCommonScriptPath, progress, cancellationToken);
-    }
-
-    private async Task UploadBootstrapCommonScriptAsync(
-        GatewayDeploymentRequest request,
-        IProgress<DeploymentProgressSnapshot>? progress,
-        CancellationToken cancellationToken)
-    {
-        var localScript = ResolveBootstrapCommonScriptPath();
-        await UploadFileAsync(request, localScript, RemoteBootstrapCommonScriptPath, progress, cancellationToken);
-    }
-
-    private async Task UploadTunnelModuleScriptAsync(
-        GatewayDeploymentRequest request,
-        IProgress<DeploymentProgressSnapshot>? progress,
-        CancellationToken cancellationToken)
-    {
-        var localScript = ResolveTunnelModuleScriptPath();
-        await UploadFileAsync(request, localScript, RemoteTunnelModuleScriptPath, progress, cancellationToken);
-    }
-
-    private async Task UploadSingBoxConnectorCommonScriptAsync(
-        GatewayDeploymentRequest request,
-        IProgress<DeploymentProgressSnapshot>? progress,
-        CancellationToken cancellationToken)
-    {
-        var localScript = ResolveSingBoxConnectorCommonScriptPath();
-        await UploadFileAsync(request, localScript, RemoteSingBoxConnectorCommonScriptPath, progress, cancellationToken);
-    }
-
     private async Task EnsureTunnelModuleInstalledAsync(
         GatewayDeploymentRequest request,
         string sudoPassword,
@@ -1898,61 +1639,7 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         IProgress<DeploymentProgressSnapshot>? progress,
         CancellationToken cancellationToken)
     {
-        progress?.Report(new DeploymentProgressSnapshot
-        {
-            Phase = phase,
-            Percent = 4,
-            Message = "Ensuring tunnel watchdog module"
-        });
-
-        await UploadTunnelModuleScriptAsync(request, progress, cancellationToken);
-
-        var probeUrl = string.IsNullOrWhiteSpace(request.TunnelProbeUrl)
-            ? "https://1.1.1.1/cdn-cgi/trace"
-            : request.TunnelProbeUrl.Trim();
-        var tunnelCtlPath = GetTunnelCtlPath(request);
-        var tunnelCtlConfigDir = GetTunnelCtlConfigDir(request);
-        var relayId = NormalizeRelayId(request.RelayId);
-        var command =
-            "set -euo pipefail; " +
-            $"chmod +x {ShellQuote(RemoteTunnelModuleScriptPath)}; " +
-            $"sed -i 's/\\r$//' {ShellQuote(RemoteTunnelModuleScriptPath)} || true; " +
-            $"bash -n {ShellQuote(RemoteTunnelModuleScriptPath)} >/tmp/omnirelay-tunnelctl.syntax.log 2>&1 || {{ cat /tmp/omnirelay-tunnelctl.syntax.log; exit 43; }}; " +
-            $"bash {ShellQuote(RemoteTunnelModuleScriptPath)} install " +
-            $"--install-path {ShellQuote(tunnelCtlPath)} " +
-            $"--config-dir {ShellQuote(tunnelCtlConfigDir)} " +
-            (string.IsNullOrWhiteSpace(relayId) ? string.Empty : $"--relay-id {ShellQuote(relayId)} ") +
-            $"--backend-host '127.0.0.1' " +
-            $"--backend-port {request.Config.TunnelRemotePort} " +
-            $"--probe-url {ShellQuote(probeUrl)} " +
-            $"--timeout 12 --json; " +
-            $"[ -x {ShellQuote(tunnelCtlPath)} ] || {{ echo 'Tunnel module did not install correctly.'; exit 44; }}; " +
-            $"sed -i 's/\\r$//' {ShellQuote(tunnelCtlPath)} || true; " +
-            $"TUNNELCTL_CONFIG_DIR={ShellQuote(tunnelCtlConfigDir)} /usr/bin/env bash {ShellQuote(tunnelCtlPath)} status --json >/tmp/omnirelay-tunnelctl.status.log 2>&1 || {{ cat /tmp/omnirelay-tunnelctl.status.log; exit 45; }}";
-
-        var result = await ExecuteCommandAsync(
-            request.Config,
-            command,
-            sudoPassword,
-            line =>
-            {
-                var clean = SanitizeTerminalLine(line);
-                if (!string.IsNullOrWhiteSpace(clean))
-                {
-                    progress?.Report(new DeploymentProgressSnapshot
-                    {
-                        Phase = phase,
-                        Percent = 0,
-                        Message = $"[vps] {clean}"
-                    });
-                }
-            },
-            cancellationToken);
-
-        if (!result.Success)
-        {
-            throw new InvalidOperationException($"Failed to install tunnel module: {result.ErrorMessage}");
-        }
+        await Task.CompletedTask;
     }
 
     private async Task UploadFileAsync(
@@ -2056,115 +1743,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return tempPath;
     }
 
-    private static string ResolveInstallerScriptPath(string selectedGatewayProtocol)
-    {
-        var baseDir = AppContext.BaseDirectory;
-        var normalizedProtocol = GatewayProtocols.Normalize(selectedGatewayProtocol);
-        var scriptFileName = normalizedProtocol switch
-        {
-            var protocol when string.Equals(protocol, GatewayProtocols.VlessPlainSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_singbox.sh",
-            var protocol when string.Equals(protocol, GatewayProtocols.ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_singbox.sh",
-            var protocol when string.Equals(protocol, GatewayProtocols.ShadowTlsV3ShadowsocksSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_singbox.sh",
-            var protocol when string.Equals(protocol, GatewayProtocols.OpenVpnTcpSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_openvpn_singbox.sh",
-            var protocol when string.Equals(protocol, GatewayProtocols.IpsecL2tpSingbox, StringComparison.OrdinalIgnoreCase) => "setup_omnirelay_vps_ipsec_l2tp_singbox.sh",
-            _ => "setup_omnirelay_vps_singbox.sh"
-        };
-        var candidates = new[]
-        {
-            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
-            Path.Combine(baseDir, scriptFileName),
-            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
-        };
-
-        var path = candidates.FirstOrDefault(File.Exists);
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new InvalidOperationException($"Gateway installer script not found. Expected {scriptFileName} in app GatewayScripts content.");
-        }
-
-        return path;
-    }
-
-    private static string ResolveOmniPanelCommonScriptPath()
-    {
-        var baseDir = AppContext.BaseDirectory;
-        const string scriptFileName = "setup_omnirelay_omnipanel_common.sh";
-        var candidates = new[]
-        {
-            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
-            Path.Combine(baseDir, scriptFileName),
-            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
-        };
-
-        var path = candidates.FirstOrDefault(File.Exists);
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new InvalidOperationException($"Shared OmniPanel script not found. Expected {scriptFileName} in app GatewayScripts content.");
-        }
-
-        return path;
-    }
-
-    private static string ResolveTunnelModuleScriptPath()
-    {
-        var baseDir = AppContext.BaseDirectory;
-        const string scriptFileName = "setup_omnirelay_gateway_tunnel_module.sh";
-        var candidates = new[]
-        {
-            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
-            Path.Combine(baseDir, scriptFileName),
-            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
-        };
-
-        var path = candidates.FirstOrDefault(File.Exists);
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new InvalidOperationException($"Tunnel module script not found. Expected {scriptFileName} in app GatewayScripts content.");
-        }
-
-        return path;
-    }
-
-    private static string ResolveBootstrapCommonScriptPath()
-    {
-        var baseDir = AppContext.BaseDirectory;
-        const string scriptFileName = "setup_omnirelay_gateway_bootstrap_common.sh";
-        var candidates = new[]
-        {
-            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
-            Path.Combine(baseDir, scriptFileName),
-            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
-        };
-
-        var path = candidates.FirstOrDefault(File.Exists);
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new InvalidOperationException($"Bootstrap helper script not found. Expected {scriptFileName} in app GatewayScripts content.");
-        }
-
-        return path;
-    }
-
-    private static string ResolveSingBoxConnectorCommonScriptPath()
-    {
-        var baseDir = AppContext.BaseDirectory;
-        const string scriptFileName = "setup_omnirelay_gateway_singbox_connector_common.sh";
-        var candidates = new[]
-        {
-            Path.Combine(baseDir, "GatewayScripts", scriptFileName),
-            Path.Combine(baseDir, scriptFileName),
-            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "scripts", scriptFileName))
-        };
-
-        var path = candidates.FirstOrDefault(File.Exists);
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new InvalidOperationException($"Sing-box connector helper script not found. Expected {scriptFileName} in app GatewayScripts content.");
-        }
-
-        return path;
-    }
-
     private static string ResolveConnectorCoreBootstrapScriptPath()
     {
         var baseDir = AppContext.BaseDirectory;
@@ -2206,14 +1784,6 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
         return string.IsNullOrWhiteSpace(relayId)
             ? "/etc/omnirelay/tunnelctl"
             : $"/etc/omnirelay/relays/{relayId}/tunnelctl";
-    }
-
-    private static string GetRemoteInstallScriptPath(GatewayDeploymentRequest request)
-    {
-        var relayId = NormalizeRelayId(request.RelayId);
-        return string.IsNullOrWhiteSpace(relayId)
-            ? RemoteInstallScriptPath
-            : $"/tmp/omnirelay-gatewayctl-{relayId}.sh";
     }
 
     private static string GetRemoteUploadedPanelCertPath(GatewayDeploymentRequest request)
@@ -2485,7 +2055,9 @@ public sealed class GatewayDeploymentService : IGatewayDeploymentService, IGatew
             DnsPathHealthy = dns?.Healthy == true,
             DohEndpoints = request.GatewayDohEndpoints,
             TunnelHealthy = backend?.Healthy ?? targetActive,
-            TunnelReason = backend?.ReasonCode ?? data.ReasonCode,
+            TunnelReason = data.Healthy
+                ? (backend?.ReasonCode ?? data.ReasonCode)
+                : FirstNonEmpty(data.ReasonCode, backend?.ReasonCode, "gateway is not healthy") ?? "gateway is not healthy",
             TunnelBackendProtocol = backend?.BackendProtocol ?? "unknown",
             TunnelEgressReachable = backend?.EgressReachable == true
         };

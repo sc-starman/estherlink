@@ -88,6 +88,38 @@ func TestRollbackMigrationRestoresLatestSnapshot(t *testing.T) {
 	}
 }
 
+func TestRollbackMigrationRestoresClockUnitsToSystemdRoot(t *testing.T) {
+	root := t.TempDir()
+	gatewaySpec := testSpec()
+	options := MigrateOptions{ApplyOptions: ApplyOptions{
+		ConfigRoot: filepath.Join(root, "etc"), TransactionRoot: filepath.Join(root, "transactions"),
+		SystemdRoot: filepath.Join(root, "systemd"), NginxRoot: filepath.Join(root, "nginx"), DNSMasqRoot: filepath.Join(root, "dnsmasq"),
+	}, LegacyBinaryRoot: filepath.Join(root, "sbin"), PanelAppRoot: filepath.Join(root, "apps"), NginxEnabledRoot: filepath.Join(root, "nginx-enabled")}
+	clockUnit := filepath.Join(options.SystemdRoot, "omnirelay-clock-sync-"+gatewaySpec.RelayID+".service")
+	if err := os.MkdirAll(filepath.Dir(clockUnit), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clockUnit, []byte("legacy-clock-unit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Migrate(gatewaySpec, options); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(clockUnit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RollbackMigration(gatewaySpec.RelayID, options); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(clockUnit); err != nil || string(content) != "legacy-clock-unit" {
+		t.Fatalf("clock unit was not restored to systemd root: %q %v", content, err)
+	}
+	wrongPath := filepath.Join(options.LegacyBinaryRoot, filepath.Base(clockUnit))
+	if _, err := os.Stat(wrongPath); !os.IsNotExist(err) {
+		t.Fatalf("clock unit was incorrectly restored under legacy binary root: %s", wrongPath)
+	}
+}
+
 func TestRollbackMigrationRestoresEnabledSiteSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows symlink creation requires developer mode or elevated privileges")
