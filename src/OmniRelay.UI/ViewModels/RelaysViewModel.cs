@@ -12,6 +12,7 @@ using Microsoft.Win32;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Security.Cryptography;
 using System.Windows;
 
 namespace OmniRelay.UI.ViewModels;
@@ -635,16 +636,6 @@ public partial class RelaysViewModel : ObservableObject
             return new RelayEditDialog.FrpHostProfileResolution { Found = false };
         }
 
-        var nextTunnelRemotePort = hostRelays
-            .Select(x => x.RemoteGateway?.TunnelRemotePort is > 0 and <= 65535 ? x.RemoteGateway.TunnelRemotePort : 0)
-            .Where(x => x > 0)
-            .DefaultIfEmpty(14999)
-            .Max() + 1;
-        if (nextTunnelRemotePort <= 0 || nextTunnelRemotePort > 65535)
-        {
-            nextTunnelRemotePort = 15000;
-        }
-
         var ports = hostRelays
             .Select(x => x.FrpProfilePortOverride is > 0 and <= 65535 ? x.FrpProfilePortOverride : 7000)
             .Distinct()
@@ -672,7 +663,6 @@ public partial class RelaysViewModel : ObservableObject
                 HasConflict = true,
                 FrpServerPort = selectedPort,
                 AuthToken = selectedToken,
-                SuggestedTunnelRemotePort = nextTunnelRemotePort,
                 ConflictMessage = $"FRP profile conflict for host '{normalizedHost}': multiple FRPS ports are configured. Using the most common profile in UI; save/apply must resolve conflict."
             };
         }
@@ -697,7 +687,6 @@ public partial class RelaysViewModel : ObservableObject
                 HasConflict = true,
                 FrpServerPort = selectedPort,
                 AuthToken = selectedToken,
-                SuggestedTunnelRemotePort = nextTunnelRemotePort,
                 ConflictMessage = $"FRP profile conflict for host '{normalizedHost}': multiple FRP tokens are configured. Using the most common profile in UI; save/apply must resolve conflict."
             };
         }
@@ -706,8 +695,7 @@ public partial class RelaysViewModel : ObservableObject
         {
             Found = true,
             FrpServerPort = ports[0],
-            AuthToken = tokens.Count == 0 ? string.Empty : tokens[0],
-            SuggestedTunnelRemotePort = nextTunnelRemotePort
+            AuthToken = tokens.Count == 0 ? string.Empty : tokens[0]
         };
     }
 
@@ -788,6 +776,20 @@ public partial class RelaysViewModel : ObservableObject
 
             var effectiveRelay = relayFetch.Relay;
             OverwriteRelay(relay, effectiveRelay);
+
+            // Shadowsocks requires a server password in the deployed spec. Auto-generate one
+            // and persist it now if none is stored, so it stays consistent with what gets
+            // written into the VPS gateway spec during this deploy operation.
+            var effectiveProtocol = GatewayProtocols.Normalize(effectiveRelay.RemoteGateway?.Protocol ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(effectiveRelay.RemoteGateway?.ProxyPassword) &&
+                (effectiveProtocol == GatewayProtocols.ShadowsocksSingbox ||
+                 effectiveProtocol == GatewayProtocols.ShadowTlsV3ShadowsocksSingbox))
+            {
+                // 2022-blake3-aes-128-gcm requires a base64-encoded 16-byte PSK.
+                effectiveRelay.RemoteGateway!.ProxyPassword =
+                    Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+                await _orchestrator.UpsertRelayAsync(effectiveRelay);
+            }
 
             GatewayDeploymentRequest EnsureRequest()
             {

@@ -23,6 +23,7 @@ public sealed class RelayRuntimeWorker : BackgroundService
     private static readonly TimeSpan LocalProbeInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan EndToEndProbeInterval = TimeSpan.FromSeconds(20);
         private static readonly TimeSpan UnestablishedGracePeriod = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan StaleFrpSessionRestartThreshold = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan RemoteProbeTimeout = TimeSpan.FromSeconds(35);
     private static readonly TimeSpan TunnelFlapWindow = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan TunnelRecentExitPenalty = TimeSpan.FromSeconds(25);
@@ -485,6 +486,18 @@ public sealed class RelayRuntimeWorker : BackgroundService
             {
                 _lastTunnelError = "FRP session not established; waiting for FRP reconnect.";
                 RecordEvent("warn", _lastTunnelError);
+
+                // The FRP client process can be left running with a dead control connection
+                // (e.g. after the VPS-side FRPS service restarts) and never reconnect on its
+                // own. If the session has been down for too long, force a restart of the
+                // tunnel process so it re-logs in and re-registers its proxy.
+                var staleSince = _lastConnectedAtUtc ?? _processStartedAtUtc.Value;
+                if (DateTimeOffset.UtcNow - staleSince >= StaleFrpSessionRestartThreshold &&
+                    !IsFatalFrpReason(_healthReasonCode))
+                {
+                    RecordEvent("warn", $"relay '{_relay.Name}' FRP session stale for over {StaleFrpSessionRestartThreshold.TotalMinutes:0} minute(s); restarting FRP tunnel process");
+                    await StopTunnelProcessAsync();
+                }
             }
 
             var backendProbe = await ProbeBackendEndpointAsync(config.LocalProxyListenPort, cancellationToken);

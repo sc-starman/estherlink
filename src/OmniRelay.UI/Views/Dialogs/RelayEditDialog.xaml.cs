@@ -43,7 +43,6 @@ public partial class RelayEditDialog : Window
         public bool HasConflict { get; init; }
         public int FrpServerPort { get; init; } = 7000;
         public string AuthToken { get; init; } = string.Empty;
-        public int SuggestedTunnelRemotePort { get; init; } = 15000;
         public string ConflictMessage { get; init; } = string.Empty;
     }
 
@@ -200,17 +199,9 @@ public partial class RelayEditDialog : Window
             FrpAuthTokenTextBox.Text = string.IsNullOrWhiteSpace(profile.AuthToken)
                 ? GenerateFrpToken()
                 : profile.AuthToken.Trim();
-            var currentTunnelRemotePort = ParsePort(TunnelRemotePortTextBox.Text, 15000);
-            var shouldApplySuggestedPort =
-                Relay.RemoteGateway.TunnelRemotePort <= 0 ||
-                currentTunnelRemotePort == 15000 ||
-                currentTunnelRemotePort == ParsePort(Relay.RemoteGateway.TunnelRemotePort.ToString(), 15000);
-            if (shouldApplySuggestedPort)
-            {
-                TunnelRemotePortTextBox.Text = (profile.SuggestedTunnelRemotePort is > 0 and <= 65535
-                    ? profile.SuggestedTunnelRemotePort
-                    : 15000).ToString();
-            }
+            // The tunnel remote port is never auto-filled or auto-replaced here - it stays
+            // exactly what the user typed/saved. Silently rewriting it caused it to drift away
+            // from the port actually deployed on the VPS gateway spec, breaking the FRP tunnel.
             if (profile.HasConflict)
             {
                 FeedbackTextBlock.Text = string.IsNullOrWhiteSpace(profile.ConflictMessage)
@@ -281,7 +272,12 @@ public partial class RelayEditDialog : Window
                 SelectOption(ProtocolTlsModeCombo, string.IsNullOrWhiteSpace(Relay.RemoteGateway.ProtocolTlsMode) ? "uploaded" : Relay.RemoteGateway.ProtocolTlsMode);
                 ApplyTlsAlpnSelection(Relay.RemoteGateway.ProtocolAlpnCsv);
                 GatewayProxyUsernameTextBox.Text = Relay.RemoteGateway.ProxyUsername;
-                GatewayProxyPasswordBox.Password = Relay.RemoteGateway.ProxyPassword;
+                var loadedProtocol = GatewayProtocols.Normalize(Relay.RemoteGateway.Protocol);
+                var isShadowsocksProtocol = loadedProtocol == GatewayProtocols.ShadowsocksSingbox ||
+                                            loadedProtocol == GatewayProtocols.ShadowTlsV3ShadowsocksSingbox;
+                GatewayProxyPasswordBox.Password = string.IsNullOrWhiteSpace(Relay.RemoteGateway.ProxyPassword) && isShadowsocksProtocol
+                    ? GenerateShadowsocksPsk()
+                    : Relay.RemoteGateway.ProxyPassword;
                 SelectOption(VlessFlowCombo, Relay.RemoteGateway.VlessTlsFlow);
                 Hysteria2UpMbpsTextBox.Text = Relay.RemoteGateway.Hysteria2UpMbps.ToString();
                 Hysteria2DownMbpsTextBox.Text = Relay.RemoteGateway.Hysteria2DownMbps.ToString();
@@ -1481,6 +1477,10 @@ public partial class RelayEditDialog : Window
             protocol == GatewayProtocols.Hysteria2Singbox ||
             protocol == GatewayProtocols.TrojanSingbox ||
             protocol == GatewayProtocols.NaiveSingbox);
+        // Shadowsocks uses a server password (mapped via ProxyPassword) but has no username.
+        var showsShadowsocksPassword = IsRemote && (
+            protocol == GatewayProtocols.ShadowsocksSingbox ||
+            protocol == GatewayProtocols.ShadowTlsV3ShadowsocksSingbox);
 
         SetGridRowVisibility(ClientProtocolGrid, 1, true);
         SetGridRowVisibility(ClientProtocolGrid, 2, showsTlsProtocol);
@@ -1490,7 +1490,8 @@ public partial class RelayEditDialog : Window
         SetGridRowVisibility(ClientProtocolGrid, 6, showsTlsCertAndKey);
         SetGridRowVisibility(ClientProtocolGrid, 7, showsTlsFields);
         SetGridRowVisibility(ClientProtocolGrid, 8, showsProxyCreds);
-        SetGridRowVisibility(ClientProtocolGrid, 9, showsProxyCreds);
+        SetGridRowVisibility(ClientProtocolGrid, 9, showsProxyCreds || showsShadowsocksPassword);
+        ProxyPasswordLabel.Text = showsShadowsocksPassword ? "Server Password" : "Proxy Password";
         SetGridRowVisibility(ClientProtocolGrid, 10, IsRemote && protocol == GatewayProtocols.VlessTlsSingbox && tlsEnabled);
         SetGridRowVisibility(ClientProtocolGrid, 11, IsRemote && protocol == GatewayProtocols.Hysteria2Singbox);
         SetGridRowVisibility(ClientProtocolGrid, 12, IsRemote && protocol == GatewayProtocols.Hysteria2Singbox);
@@ -1599,6 +1600,12 @@ public partial class RelayEditDialog : Window
     private static string GenerateFrpToken()
     {
         return Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+    }
+
+    // Shadowsocks 2022 (2022-blake3-aes-128-gcm) requires a base64-encoded 16-byte PSK.
+    private static string GenerateShadowsocksPsk()
+    {
+        return Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
     }
 
     private void CopyRelayIdSummary_Click(object sender, RoutedEventArgs e)

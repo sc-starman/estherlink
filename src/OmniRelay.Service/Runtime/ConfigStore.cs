@@ -108,8 +108,6 @@ public sealed class ConfigStore
     internal static void EnsureRelayPorts(IReadOnlyList<RelayConfig> relays)
     {
         var used = new HashSet<int>();
-        var usedRemotePortsByHost = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
-        var nextRemoteByHost = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var usedLocalGatewayPorts = new HashSet<int>();
         var usedLocalOmniPanelPorts = new HashSet<int>();
         var usedRelayIds = new HashSet<string>(StringComparer.Ordinal);
@@ -192,30 +190,16 @@ public sealed class ConfigStore
                     ? relay.FrpProfilePortOverride
                     : 7000;
 
-                var hostKey = BuildFrpServerProfileKey(relay.RemoteGateway.TunnelHost, relay.FrpProfilePortOverride);
-                if (!usedRemotePortsByHost.TryGetValue(hostKey, out var usedRemotePorts))
+                // The tunnel remote port is whatever the user configured (or the relay's
+                // existing deployed value) - it is never auto-reassigned. Auto-incrementing it
+                // on a perceived collision caused it to silently drift away from the port the
+                // VPS gateway spec was actually deployed with, breaking the FRP data tunnel.
+                // Only fix it up when it is missing/out of range; collisions are the user's to
+                // resolve (the edit dialog already warns and suggests a free port).
+                if (relay.RemoteGateway.TunnelRemotePort <= 0 || relay.RemoteGateway.TunnelRemotePort > 65535)
                 {
-                    usedRemotePorts = new HashSet<int>();
-                    usedRemotePortsByHost[hostKey] = usedRemotePorts;
-                    nextRemoteByHost[hostKey] = 15000;
+                    relay.RemoteGateway.TunnelRemotePort = 15000;
                 }
-
-                var requestedRemotePort = relay.RemoteGateway.TunnelRemotePort;
-                if (requestedRemotePort > 0 && requestedRemotePort <= 65535 && usedRemotePorts.Add(requestedRemotePort))
-                {
-                    if (requestedRemotePort >= nextRemoteByHost[hostKey])
-                    {
-                        nextRemoteByHost[hostKey] = requestedRemotePort + 1;
-                    }
-                }
-                else
-                {
-                    var nextRemote = nextRemoteByHost[hostKey];
-                    relay.RemoteGateway.TunnelRemotePort = AllocatePort(usedRemotePorts, ref nextRemote);
-                    nextRemoteByHost[hostKey] = nextRemote;
-                }
-
-                // FRP runtime uses a single data remote port on RemoteGateway.
             }
         }
     }

@@ -263,7 +263,7 @@
                         <ListBox x:Name="ProtocolTlsAlpnListBox" Grid.Row="7" Grid.Column="1" SelectionMode="Multiple" Height="90" HorizontalAlignment="Left" Width="260"/>
                         <TextBlock Grid.Row="8" Text="Proxy Username" Style="{StaticResource FormLabelStyle}"/>
                         <TextBox x:Name="GatewayProxyUsernameTextBox" Grid.Row="8" Grid.Column="1" Style="{StaticResource FormTextBoxStyle}"/>
-                        <TextBlock Grid.Row="9" Text="Proxy Password" Style="{StaticResource FormLabelStyle}"/>
+                        <TextBlock x:Name="ProxyPasswordLabel" Grid.Row="9" Text="Proxy Password" Style="{StaticResource FormLabelStyle}"/>
                         <PasswordBox x:Name="GatewayProxyPasswordBox" Grid.Row="9" Grid.Column="1" Style="{StaticResource FormPasswordBoxStyle}"/>
                         <TextBlock Grid.Row="10" Text="VLESS Flow" Style="{StaticResource FormLabelStyle}"/>
                         <ComboBox x:Name="VlessFlowCombo" Grid.Row="10" Grid.Column="1" Width="260" HorizontalAlignment="Left" Style="{StaticResource FormComboBoxStyle}"/>

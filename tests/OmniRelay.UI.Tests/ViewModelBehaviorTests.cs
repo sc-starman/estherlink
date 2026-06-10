@@ -81,7 +81,7 @@ public class ViewModelBehaviorTests
     }
 
     [Fact]
-    public void RelaysViewModel_BuildFrpProfileResolutionForHost_ExcludesCurrentRelayWhenSuggestingPort()
+    public void RelaysViewModel_BuildFrpProfileResolutionForHost_ExcludesCurrentRelayWhenResolvingProfile()
     {
         var relays = new List<RelayConfig>
         {
@@ -117,7 +117,6 @@ public class ViewModelBehaviorTests
         Assert.True(result!.Found);
         Assert.Equal(7000, result.FrpServerPort);
         Assert.Equal("shared-token", result.AuthToken);
-        Assert.Equal(15001, result.SuggestedTunnelRemotePort);
     }
 
     private static GatewayDeploymentRequest BuildValidGatewayRequest()
