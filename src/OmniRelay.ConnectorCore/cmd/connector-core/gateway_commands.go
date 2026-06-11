@@ -1223,7 +1223,7 @@ func seedInitialClient(db *sql.DB, protocolID string) error {
 		// Shadowsocks 2022 (2022-blake3-aes-128-gcm) requires each user PSK to
 		// decode to exactly 16 bytes, matching the cipher key size and the
 		// format produced by the panel's random2022Key() helper.
-		secret, err = randomShadowsocks2022Secret()
+		secret, err = singboxconfig.RandomShadowsocks2022PSK()
 	default:
 		secret, err = randomSecret(18)
 	}
@@ -1285,17 +1285,6 @@ func randomSecret(byteCount int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(value), nil
-}
-
-// randomShadowsocks2022Secret returns a 16-byte key encoded with standard
-// (padded) base64, matching the PSK format required by sing-box for
-// 2022-blake3-aes-128-gcm users and produced by the panel's random2022Key().
-func randomShadowsocks2022Secret() (string, error) {
-	value := make([]byte, 16)
-	if _, err := rand.Read(value); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(value), nil
 }
 
 func runGatewayStatus(kind string, args []string) error {

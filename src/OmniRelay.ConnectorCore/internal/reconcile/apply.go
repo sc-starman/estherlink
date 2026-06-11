@@ -72,6 +72,16 @@ type managedFile struct {
 
 func Apply(gatewaySpec spec.GatewaySpec, options ApplyOptions) (ApplyResult, error) {
 	gatewaySpec.ApplyDefaults()
+	switch gatewaySpec.Gateway.Protocol {
+	case "shadowsocks_singbox", "shadowtls_v3_shadowsocks_singbox":
+		if !singboxconfig.IsValidShadowsocks2022PSK(gatewaySpec.SingBox.ShadowsocksServerPassword) {
+			generated, err := singboxconfig.RandomShadowsocks2022PSK()
+			if err != nil {
+				return ApplyResult{}, err
+			}
+			gatewaySpec.SingBox.ShadowsocksServerPassword = generated
+		}
+	}
 	if err := gatewaySpec.Validate(); err != nil {
 		return ApplyResult{}, err
 	}

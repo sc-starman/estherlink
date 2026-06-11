@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -456,24 +457,39 @@ func renderShadowsocks(listen listenOptions, spec RenderSpec) shadowsocksInbound
 	}
 }
 
-// shadowsocks2022UserKeySize is the required decoded PSK length for
-// 2022-blake3-aes-128-gcm user passwords (must match the cipher's key size).
-const shadowsocks2022UserKeySize = 16
+// Shadowsocks2022PSKSize is the required decoded PSK length for
+// 2022-blake3-aes-128-gcm passwords (must match the cipher's key size).
+const Shadowsocks2022PSKSize = 16
+
+// IsValidShadowsocks2022PSK reports whether value is a standard base64
+// string that decodes to exactly Shadowsocks2022PSKSize bytes, as required
+// by sing-box for 2022-blake3-aes-128-gcm passwords.
+func IsValidShadowsocks2022PSK(value string) bool {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	return err == nil && len(decoded) == Shadowsocks2022PSKSize
+}
+
+// RandomShadowsocks2022PSK returns a freshly generated Shadowsocks2022PSKSize-byte
+// key encoded with standard (padded) base64, suitable for use as a
+// 2022-blake3-aes-128-gcm password.
+func RandomShadowsocks2022PSK() (string, error) {
+	value := make([]byte, Shadowsocks2022PSKSize)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(value), nil
+}
 
 // shadowsocks2022Users filters spec users to those whose Secret is a valid
-// standard base64 string that decodes to exactly shadowsocks2022UserKeySize
-// bytes. Shadowsocks 2022 (2022-blake3-aes-128-gcm) decodes each user PSK
-// with base64.StdEncoding and requires it to match the cipher's key size;
-// secrets in other formats or lengths (e.g. UUIDs from a previous VLESS
-// configuration, or mis-sized PSKs) cause sing-box to refuse the user's
-// connections with "invalid request" errors. Invalid users are silently
-// dropped — they can be re-provisioned with a proper 16-byte base64 PSK via
-// the panel.
+// 2022-blake3-aes-128-gcm PSK. Secrets in other formats or lengths (e.g.
+// UUIDs from a previous VLESS configuration, or mis-sized PSKs) cause
+// sing-box to refuse the user's connections with "invalid request" errors.
+// Invalid users are silently dropped — they can be re-provisioned with a
+// proper 16-byte base64 PSK via the panel.
 func shadowsocks2022Users(users []User) []passwordUser {
 	result := make([]passwordUser, 0, len(users))
 	for _, item := range users {
-		decoded, err := base64.StdEncoding.DecodeString(item.Secret)
-		if err != nil || len(decoded) != shadowsocks2022UserKeySize {
+		if !IsValidShadowsocks2022PSK(item.Secret) {
 			continue
 		}
 		result = append(result, passwordUser{Name: item.ID, Password: item.Secret})

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	panelconfig "github.com/omnirelay/connector-core/internal/panel"
+	singboxconfig "github.com/omnirelay/connector-core/internal/singbox"
 	"github.com/omnirelay/connector-core/internal/spec"
 )
 
@@ -130,6 +131,48 @@ func TestApplyRollsBackAllManagedFilesWhenPostWriteValidationFails(t *testing.T)
 	}
 	if string(restored) != string(original) {
 		t.Fatalf("systemd unit was not restored after failed apply; first transaction=%s", first.TransactionID)
+	}
+}
+
+func TestApplyRegeneratesInvalidShadowsocksServerPassword(t *testing.T) {
+	root := t.TempDir()
+	gatewaySpec := testSpec()
+	gatewaySpec.Gateway.Protocol = "shadowsocks_singbox"
+	gatewaySpec.Gateway.PublicPort = 8443
+	gatewaySpec.SingBox.ShadowsocksServerPassword = "not-a-valid-base64-psk!!"
+	options := ApplyOptions{
+		ConfigRoot: filepath.Join(root, "etc"), TransactionRoot: filepath.Join(root, "transactions"),
+		SystemdRoot: filepath.Join(root, "systemd"), DNSMasqRoot: filepath.Join(root, "dnsmasq"),
+	}
+	if _, err := Apply(gatewaySpec, options); err != nil {
+		t.Fatalf("Apply() with invalid shadowsocks server password: %v", err)
+	}
+	specPath := filepath.Join(options.ConfigRoot, "relays", gatewaySpec.RelayID, "gateway", "spec.json")
+	persisted, err := spec.LoadFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.SingBox.ShadowsocksServerPassword == gatewaySpec.SingBox.ShadowsocksServerPassword {
+		t.Fatal("invalid shadowsocks server password was not regenerated")
+	}
+	if !singboxconfig.IsValidShadowsocks2022PSK(persisted.SingBox.ShadowsocksServerPassword) {
+		t.Fatalf("regenerated shadowsocks server password is not a valid PSK: %q", persisted.SingBox.ShadowsocksServerPassword)
+	}
+	configPath := filepath.Join(options.ConfigRoot, "relays", gatewaySpec.RelayID, "gateway", "connector", "config.json")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(config), persisted.SingBox.ShadowsocksServerPassword) {
+		t.Fatalf("rendered config does not use regenerated shadowsocks server password: %s", config)
+	}
+
+	second, err := Apply(persisted, options)
+	if err != nil {
+		t.Fatalf("second Apply() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("apply with already-valid shadowsocks server password should be idempotent: %+v", second.ChangedFiles)
 	}
 }
 
