@@ -148,8 +148,8 @@ func TestApplyOpenVPNRendersNativeManagedStateIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.ChangedFiles) != 18 {
-		t.Fatalf("expected 18 OpenVPN managed files, got %d: %+v", len(first.ChangedFiles), first.ChangedFiles)
+	if len(first.ChangedFiles) != 19 {
+		t.Fatalf("expected 19 OpenVPN managed files, got %d: %+v", len(first.ChangedFiles), first.ChangedFiles)
 	}
 	gatewayRoot := filepath.Join(options.ConfigRoot, "relays", gatewaySpec.RelayID, "gateway")
 	for _, path := range []string{
@@ -198,8 +198,8 @@ func TestApplyIPSecRendersRelayOwnedDesiredStateWithoutGlobalMutation(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.ChangedFiles) != 22 {
-		t.Fatalf("expected 22 IPsec/L2TP managed files, got %d: %+v", len(result.ChangedFiles), result.ChangedFiles)
+	if len(result.ChangedFiles) != 23 {
+		t.Fatalf("expected 23 IPsec/L2TP managed files, got %d: %+v", len(result.ChangedFiles), result.ChangedFiles)
 	}
 	ipsecRoot := filepath.Join(options.ConfigRoot, "relays", gatewaySpec.RelayID, "gateway", "ipsec-l2tp")
 	for _, name := range []string{"ipsec.conf", "ipsec.secrets", "xl2tpd.conf", "ppp-options", "runtime.json"} {
@@ -328,8 +328,8 @@ func TestApplyProtocolChangeRemovesOnlyStaleManagedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.DeletedFiles) != 8 {
-		t.Fatalf("expected OpenVPN server/runtime, dnsmasq config, and five units to be deleted, got %+v", result.DeletedFiles)
+	if len(result.DeletedFiles) != 9 {
+		t.Fatalf("expected OpenVPN server/runtime, dnsmasq config, dnsmasq restart-policy drop-in, and five units to be deleted, got %+v", result.DeletedFiles)
 	}
 	for _, path := range result.DeletedFiles {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {

@@ -42,7 +42,7 @@ func TestRenderGatewayUnitsAddsOpenVPNDaemonAndNativeEnforcer(t *testing.T) {
 		Gateway: spec.Gateway{Protocol: "openvpn_tcp_singbox"},
 	}
 	units := RenderGatewayUnits(gatewaySpec, Options{})
-	if len(units) != 11 {
+	if len(units) != 12 {
 		t.Fatalf("unexpected OpenVPN unit count: %d", len(units))
 	}
 	combined := ""
@@ -54,6 +54,7 @@ func TestRenderGatewayUnitsAddsOpenVPNDaemonAndNativeEnforcer(t *testing.T) {
 		"connector-core openvpn enforce --relay-id e4ccc282a1004b62ad2cda5770d6e32d",
 		"connector-core openvpn limits --relay-id e4ccc282a1004b62ad2cda5770d6e32d --action apply",
 		"connector-core firewall apply --relay-id e4ccc282a1004b62ad2cda5770d6e32d",
+		"Restart=on-failure",
 	} {
 		if !strings.Contains(combined, expected) {
 			t.Fatalf("rendered OpenVPN units missing %q", expected)
@@ -70,7 +71,7 @@ func TestRenderGatewayUnitsAddsTransactionalIPSecActivation(t *testing.T) {
 		Gateway: spec.Gateway{Protocol: "ipsec_l2tp_singbox"},
 	}
 	units := RenderGatewayUnits(gatewaySpec, Options{})
-	if len(units) != 10 {
+	if len(units) != 11 {
 		t.Fatalf("unexpected IPsec/L2TP unit count: %d", len(units))
 	}
 	combined := ""
@@ -82,6 +83,7 @@ func TestRenderGatewayUnitsAddsTransactionalIPSecActivation(t *testing.T) {
 		"connector-core ipsec deactivate --relay-id e4ccc282a1004b62ad2cda5770d6e32d",
 		"connector-core ipsec enforce --relay-id e4ccc282a1004b62ad2cda5770d6e32d",
 		"connector-core firewall apply --relay-id e4ccc282a1004b62ad2cda5770d6e32d",
+		"Restart=on-failure",
 	} {
 		if !strings.Contains(combined, expected) {
 			t.Fatalf("rendered IPsec/L2TP units missing %q", expected)

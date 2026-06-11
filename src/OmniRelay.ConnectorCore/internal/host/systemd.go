@@ -10,6 +10,7 @@ type Systemd interface {
 	Stop(context.Context, ...string) error
 	DisableNow(context.Context, ...string) error
 	IsActive(context.Context, string) (string, error)
+	Kill(ctx context.Context, signal string, unit string) error
 }
 
 func GatewayTarget(relayID string) string {

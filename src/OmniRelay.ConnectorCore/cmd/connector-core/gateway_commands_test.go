@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -137,6 +138,31 @@ func TestSeedInitialClientUsesOpenVPNDefaultsAndSkipsSharedProtocols(t *testing.
 	}
 	if username != "ovpn_client" || authUsername != "ovpn_client" || len(authSecret) < 20 {
 		t.Fatalf("unexpected OpenVPN seed values: username=%q authUsername=%q authSecret=%q", username, authUsername, authSecret)
+	}
+}
+
+func TestSeedInitialClientUsesValidLengthShadowsocks2022Secret(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := accounting.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedInitialClient(db, "shadowsocks_singbox"); err != nil {
+		t.Fatal(err)
+	}
+	var authSecret string
+	if err := db.QueryRow(`SELECT auth_secret FROM clients WHERE protocol_id='shadowsocks_singbox'`).Scan(&authSecret); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(authSecret)
+	if err != nil {
+		t.Fatalf("seeded shadowsocks secret %q is not standard base64: %v", authSecret, err)
+	}
+	if len(decoded) != 16 {
+		t.Fatalf("seeded shadowsocks secret decodes to %d bytes, want 16 (required for 2022-blake3-aes-128-gcm)", len(decoded))
 	}
 }
 

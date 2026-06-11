@@ -1425,18 +1425,27 @@ func runAccountingSync(args []string) error {
 	if err != nil {
 		return &commandapi.Error{Code: "accounting_sync_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
 	}
+	var runtimeReloaded bool
+	var reloadErr error
+	if clientChanged && protocolRuntime(gatewaySpec.Gateway.Protocol) == "singbox" {
+		runtimeReloaded, reloadErr = reloadConnectorRuntime(context.Background(), gatewaySpec.RelayID)
+	}
+	data := map[string]any{
+		"relayId":            gatewaySpec.RelayID,
+		"protocol":           gatewaySpec.Gateway.Protocol,
+		"updatedClients":     accountingResult.UpdatedClients,
+		"clientStateChanged": clientChanged,
+		"activeUsers":        activeUsers,
+		"observedSessions":   collectResult.ObservedSessions,
+		"attributedSessions": collectResult.AttributedSessions,
+		"runtimeReloaded":    runtimeReloaded,
+	}
+	if reloadErr != nil {
+		data["runtimeReloadError"] = reloadErr.Error()
+	}
 	return commandapi.WriteJSON(os.Stdout, commandapi.Result{
 		OK: true, Command: "accounting sync",
-		Data: map[string]any{
-			"relayId":               gatewaySpec.RelayID,
-			"protocol":              gatewaySpec.Gateway.Protocol,
-			"updatedClients":        accountingResult.UpdatedClients,
-			"clientStateChanged":    clientChanged,
-			"activeUsers":           activeUsers,
-			"observedSessions":      collectResult.ObservedSessions,
-			"attributedSessions":    collectResult.AttributedSessions,
-			"runtimeReloadRequired": clientChanged && protocolRuntime(gatewaySpec.Gateway.Protocol) == "singbox",
-		},
+		Data: data,
 	})
 }
 
@@ -1482,14 +1491,24 @@ func runClientsSync(args []string) error {
 	if err != nil {
 		return &commandapi.Error{Code: "client_sync_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
 	}
+	var runtimeReloaded bool
+	var reloadErr error
+	if changed && protocolRuntime(gatewaySpec.Gateway.Protocol) == "singbox" {
+		runtimeReloaded, reloadErr = reloadConnectorRuntime(context.Background(), gatewaySpec.RelayID)
+	}
+	data := map[string]any{
+		"relayId":         gatewaySpec.RelayID,
+		"protocol":        gatewaySpec.Gateway.Protocol,
+		"changed":         changed,
+		"activeUsers":     activeUsers,
+		"runtimeReloaded": runtimeReloaded,
+	}
+	if reloadErr != nil {
+		data["runtimeReloadError"] = reloadErr.Error()
+	}
 	return commandapi.WriteJSON(os.Stdout, commandapi.Result{
 		OK: true, Command: "clients sync",
-		Data: map[string]any{
-			"relayId":     gatewaySpec.RelayID,
-			"protocol":    gatewaySpec.Gateway.Protocol,
-			"changed":     changed,
-			"activeUsers": activeUsers,
-		},
+		Data: data,
 	})
 }
 
@@ -1636,6 +1655,27 @@ func syncProtocolClients(gatewaySpec spec.GatewaySpec, paths gatewayPaths, db *s
 func protocolRuntime(protocolID string) string {
 	definition, _ := protocol.Lookup(protocolID)
 	return definition.Runtime
+}
+
+// reloadConnectorRuntime asks the long-running connector-core run daemon for
+// a relay to reload its in-memory sing-box instance from the on-disk config.
+// clients.Sync only rewrites config.json/the accounting database; without
+// this signal the running daemon keeps serving its stale in-memory user
+// list until its own accounting cycle detects an enable/disable change or
+// the service is restarted, so newly added clients are rejected as unknown.
+// If the connector service isn't active there is nothing to reload — it
+// will pick up the new config on its next start.
+func reloadConnectorRuntime(ctx context.Context, relayID string) (bool, error) {
+	systemd := host.OSSystemd{}
+	unit := "omnirelay-connector-" + relayID + ".service"
+	state, err := systemd.IsActive(ctx, unit)
+	if err != nil || state != "active" {
+		return false, nil
+	}
+	if err := systemd.Kill(ctx, "HUP", unit); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func loadPersistedRelaySpec(configRoot string, relayID string) (spec.GatewaySpec, error) {

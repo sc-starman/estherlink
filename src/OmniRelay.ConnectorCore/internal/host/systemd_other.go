@@ -22,3 +22,4 @@ func (OSSystemd) DisableNow(context.Context, ...string) error { return unsupport
 func (OSSystemd) IsActive(context.Context, string) (string, error) {
 	return "unsupported", unsupportedSystemd()
 }
+func (OSSystemd) Kill(context.Context, string, string) error { return unsupportedSystemd() }

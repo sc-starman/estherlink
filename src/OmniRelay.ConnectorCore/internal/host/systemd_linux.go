@@ -35,6 +35,10 @@ func (OSSystemd) DisableNow(ctx context.Context, units ...string) error {
 	return runSystemctl(ctx, append([]string{"disable", "--now"}, units...)...)
 }
 
+func (OSSystemd) Kill(ctx context.Context, signal string, unit string) error {
+	return runSystemctl(ctx, "kill", "-s", signal, unit)
+}
+
 func (OSSystemd) IsActive(ctx context.Context, unit string) (string, error) {
 	command := exec.CommandContext(ctx, "systemctl", "is-active", unit)
 	output, err := command.CombinedOutput()

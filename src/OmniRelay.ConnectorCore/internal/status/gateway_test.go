@@ -21,6 +21,7 @@ func (f fakeSystemd) IsActive(_ context.Context, unit string) (string, error) {
 	}
 	return "inactive", nil
 }
+func (fakeSystemd) Kill(context.Context, string, string) error { return nil }
 
 func TestCollectReportsUnitFailureWithoutProbe(t *testing.T) {
 	relayID := "e4ccc282a1004b62ad2cda5770d6e32d"

@@ -116,6 +116,10 @@ func RenderGatewayUnits(gatewaySpec spec.GatewaySpec, options Options) []Unit {
 			Name: firewallService, Enable: true, Start: true,
 			Content: renderFirewallService(relayID, options),
 		})
+		units = append(units, Unit{
+			Name:    "dnsmasq.service.d/omnirelay-restart-policy.conf",
+			Content: renderDNSMasqRestartPolicy(),
+		})
 	}
 	if gatewaySpec.Panel.Port > 0 {
 		panelService := "omnirelay-omnipanel-" + relayID + ".service"
@@ -185,6 +189,19 @@ ExecStop=%s firewall cleanup --relay-id %s --json
 [Install]
 WantedBy=omnirelay-gateway-%s.target
 `, relayID, relayID, relayID, relayID, options.ConnectorBinary, relayID, options.ConnectorBinary, relayID, relayID)
+}
+
+// renderDNSMasqRestartPolicy returns a drop-in for the shared dnsmasq.service
+// that makes it self-heal if it starts before an OpenVPN/IPsec interface has
+// brought up the IP address its per-relay listen-address config refers to.
+func renderDNSMasqRestartPolicy() string {
+	return `[Unit]
+StartLimitIntervalSec=0
+
+[Service]
+Restart=on-failure
+RestartSec=2
+`
 }
 
 func renderPanelService(relayID string, environmentPath string, options Options) string {
