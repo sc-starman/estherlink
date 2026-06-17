@@ -22,6 +22,8 @@ type exportClient struct {
 	Secret   string
 }
 
+const exportProfileMode os.FileMode = 0o640
+
 func SyncExports(db *sql.DB, protocolID string, publicHost string, publicPort int, openVPNRoot string) (ExportSyncResult, error) {
 	if db == nil {
 		return ExportSyncResult{}, sql.ErrConnDone
@@ -53,8 +55,11 @@ func SyncExports(db *sql.DB, protocolID string, publicHost string, publicPort in
 		}
 		path := filepath.Join(exportRoot, client.ID+".ovpn")
 		desired[path] = struct{}{}
-		written, err := host.WriteFileAtomic(path, RenderClientProfile(publicHost, publicPort, client.Identity, client.Secret, assets), 0o600)
+		written, err := host.WriteFileAtomic(path, RenderClientProfile(publicHost, publicPort, client.Identity, client.Secret, assets), exportProfileMode)
 		if err != nil {
+			return ExportSyncResult{}, err
+		}
+		if err := repairExportProfileAccess(path); err != nil {
 			return ExportSyncResult{}, err
 		}
 		changed = changed || written

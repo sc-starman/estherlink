@@ -65,9 +65,10 @@ type managedManifest struct {
 }
 
 type managedFile struct {
-	Path    string
-	Content []byte
-	Mode    os.FileMode
+	Path          string
+	Content       []byte
+	Mode          os.FileMode
+	PanelReadable bool
 }
 
 func Apply(gatewaySpec spec.GatewaySpec, options ApplyOptions) (ApplyResult, error) {
@@ -145,6 +146,11 @@ func Apply(gatewaySpec spec.GatewaySpec, options ApplyOptions) (ApplyResult, err
 		changed, writeErr := host.WriteFileAtomic(file.Path, file.Content, file.Mode)
 		if writeErr != nil {
 			return ApplyResult{}, failAndRollback(journalPath, &journal, writeErr, options.AfterRollback)
+		}
+		if file.PanelReadable {
+			if err := repairPanelReadableFile(file.Path, file.Mode); err != nil {
+				return ApplyResult{}, failAndRollback(journalPath, &journal, err, options.AfterRollback)
+			}
 		}
 		if changed {
 			changedFiles = append(changedFiles, file.Path)
@@ -490,10 +496,10 @@ func renderIPSecFiles(gatewaySpec spec.GatewaySpec, options ApplyOptions, gatewa
 	}
 	return []managedFile{
 		{Path: filepath.Join(ipsecRoot, "ipsec.conf"), Content: ipsecConfig, Mode: 0o644},
-		{Path: filepath.Join(ipsecRoot, "ipsec.secrets"), Content: secrets, Mode: 0o600},
+		{Path: filepath.Join(ipsecRoot, "ipsec.secrets"), Content: secrets, Mode: 0o640, PanelReadable: true},
 		{Path: filepath.Join(ipsecRoot, "xl2tpd.conf"), Content: xl2tpdConfig, Mode: 0o644},
 		{Path: pppOptionsPath, Content: ipsecconfig.RenderPPPOptions(localIP.String()), Mode: 0o644},
-		{Path: filepath.Join(ipsecRoot, "runtime.json"), Content: append(runtime, '\n'), Mode: 0o600},
+		{Path: filepath.Join(ipsecRoot, "runtime.json"), Content: append(runtime, '\n'), Mode: 0o640, PanelReadable: true},
 		{Path: filepath.Join(options.DNSMasqRoot, "omnirelay-ipsec-l2tp-"+gatewaySpec.RelayID+".conf"), Content: dnsmasq, Mode: 0o644},
 		{Path: filepath.Join(options.PPPHookRoot, "ip-up.d", "99-omnirelay-"+gatewaySpec.RelayID+"-accounting"), Content: upHook, Mode: 0o755},
 		{Path: filepath.Join(options.PPPHookRoot, "ip-down.d", "99-omnirelay-"+gatewaySpec.RelayID+"-accounting"), Content: downHook, Mode: 0o755},
@@ -543,7 +549,7 @@ func renderOpenVPNFiles(gatewaySpec spec.GatewaySpec, options ApplyOptions, gate
 	}
 	files := []managedFile{
 		{Path: filepath.Join(openVPNRoot, "server.conf"), Content: serverConfig, Mode: 0o600},
-		{Path: filepath.Join(openVPNRoot, "runtime.json"), Content: append(runtime, '\n'), Mode: 0o600},
+		{Path: filepath.Join(openVPNRoot, "runtime.json"), Content: append(runtime, '\n'), Mode: 0o640, PanelReadable: true},
 		{Path: filepath.Join(options.DNSMasqRoot, "omnirelay-openvpn-"+relayID+".conf"), Content: dnsmasq, Mode: 0o644},
 	}
 	if assetsAvailable {

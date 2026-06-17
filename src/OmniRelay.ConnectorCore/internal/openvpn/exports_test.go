@@ -47,7 +47,7 @@ VALUES('client-1','openvpn_tcp_singbox','user','user','user','secret',1,0,0)`); 
 	}
 	if runtime.GOOS != "windows" {
 		info, _ := os.Stat(profilePath)
-		if info.Mode().Perm() != 0o600 {
+		if info.Mode().Perm() != 0o640 {
 			t.Fatalf("profile mode is %o", info.Mode().Perm())
 		}
 	}

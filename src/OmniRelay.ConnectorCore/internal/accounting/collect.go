@@ -6,7 +6,6 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -155,61 +154,211 @@ type openVPNSample struct {
 }
 
 func parseOpenVPNStatus(path string) ([]openVPNSample, error) {
-	file, err := os.Open(path)
+	content, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	reader := csv.NewReader(file)
-	reader.FieldsPerRecord = -1
-	headers := map[string]int{}
 	result := make([]openVPNSample, 0)
-	for {
-		row, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			return result, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if len(row) == 0 {
+	inClientTable := false
+	tableHeaders := []string{}
+	for _, rawLine := range strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
 			continue
 		}
-		if row[0] == "HEADER" && len(row) > 2 && row[1] == "CLIENT_LIST" {
-			headers = headerIndex(row[2:])
+		upperLine := strings.ToUpper(line)
+
+		if strings.HasPrefix(upperLine, "CLIENT_LIST") {
+			fields := splitOpenVPNStatusFields(line)
+			if len(fields) == 0 || strings.ToUpper(fields[0]) != "CLIENT_LIST" {
+				continue
+			}
+			payload := fields[1:]
+			if len(payload) == 0 {
+				continue
+			}
+			commonName := payload[0]
+			username := firstNonEmpty(payloadValue(payload, 8), payloadValue(payload, 9), payloadValue(payload, 7))
+			rxRaw, txRaw := openVPNCounterPair(payload)
+			sample := buildOpenVPNSample(commonName, username, rxRaw, txRaw)
+			if sample.TotalBytes > 0 {
+				result = append(result, sample)
+			}
 			continue
 		}
-		if row[0] != "CLIENT_LIST" || len(headers) == 0 {
+
+		if strings.HasPrefix(upperLine, "OPENVPN CLIENT LIST") {
+			inClientTable = true
+			tableHeaders = nil
 			continue
 		}
-		values := row[1:]
-		received := parseInt64(field(values, headers, "Bytes Received"))
-		sent := parseInt64(field(values, headers, "Bytes Sent"))
-		result = append(result, openVPNSample{
-			CommonName: field(values, headers, "Common Name"),
-			Username:   field(values, headers, "Username"),
-			TotalBytes: max64(0, received) + max64(0, sent),
-		})
+
+		if strings.HasPrefix(upperLine, "ROUTING TABLE") ||
+			strings.HasPrefix(upperLine, "ROUTING_TABLE") ||
+			strings.HasPrefix(upperLine, "GLOBAL STATS") ||
+			strings.HasPrefix(upperLine, "GLOBAL_STATS") ||
+			upperLine == "END" {
+			inClientTable = false
+			tableHeaders = nil
+			continue
+		}
+
+		fields := splitOpenVPNStatusFields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		if strings.EqualFold(fields[0], "HEADER") {
+			headerKind := strings.ToUpper(strings.TrimSpace(fields[1]))
+			if headerKind == "CLIENT_LIST" {
+				inClientTable = true
+				tableHeaders = lowerOpenVPNHeaders(fields[2:])
+				continue
+			}
+			if headerKind == "ROUTING_TABLE" || headerKind == "GLOBAL_STATS" {
+				inClientTable = false
+				tableHeaders = nil
+				continue
+			}
+		}
+
+		normalized := lowerOpenVPNHeaders(fields)
+		if containsOpenVPNHeader(normalized, "common name") &&
+			containsOpenVPNHeader(normalized, "bytes received") &&
+			containsOpenVPNHeader(normalized, "bytes sent") {
+			inClientTable = true
+			tableHeaders = normalized
+			continue
+		}
+
+		if !inClientTable {
+			continue
+		}
+
+		row := make(map[string]string, len(tableHeaders))
+		for index := 0; index < len(tableHeaders) && index < len(fields); index++ {
+			row[tableHeaders[index]] = fields[index]
+		}
+		commonName := firstNonEmpty(strings.TrimSpace(row["common name"]), payloadValue(fields, 0))
+		username := strings.TrimSpace(row["username"])
+		rxRaw := strings.TrimSpace(row["bytes received"])
+		txRaw := strings.TrimSpace(row["bytes sent"])
+		if rxRaw == "" && txRaw == "" {
+			if len(fields) > 5 {
+				rxRaw = payloadValue(fields, 4)
+				txRaw = payloadValue(fields, 5)
+			} else {
+				rxRaw = payloadValue(fields, 2)
+				txRaw = payloadValue(fields, 3)
+			}
+		}
+		sample := buildOpenVPNSample(commonName, username, rxRaw, txRaw)
+		if sample.TotalBytes > 0 {
+			result = append(result, sample)
+		}
 	}
+	return result, nil
 }
 
-func headerIndex(values []string) map[string]int {
-	result := make(map[string]int, len(values))
-	for index, value := range values {
-		result[strings.TrimSpace(value)] = index
+func splitOpenVPNStatusFields(line string) []string {
+	if strings.Contains(line, ",") {
+		reader := csv.NewReader(strings.NewReader(line))
+		reader.FieldsPerRecord = -1
+		fields, err := reader.Read()
+		if err == nil {
+			for index := range fields {
+				fields[index] = strings.TrimSpace(fields[index])
+			}
+			return fields
+		}
+	}
+	if strings.Contains(line, "\t") {
+		parts := strings.Split(line, "\t")
+		for index := range parts {
+			parts[index] = strings.TrimSpace(parts[index])
+		}
+		return parts
+	}
+	parts := strings.Split(strings.TrimSpace(line), "  ")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
 	}
 	return result
 }
 
-func field(values []string, headers map[string]int, key string) string {
-	index, ok := headers[key]
-	if !ok || index < 0 || index >= len(values) {
+func lowerOpenVPNHeaders(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, strings.ToLower(strings.TrimSpace(value)))
+	}
+	return result
+}
+
+func containsOpenVPNHeader(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func openVPNCounterPair(payload []string) (string, string) {
+	for _, pair := range [][2]int{{4, 5}, {2, 3}, {5, 6}, {3, 4}} {
+		if len(payload) <= pair[1] {
+			continue
+		}
+		rxRaw := payloadValue(payload, pair[0])
+		txRaw := payloadValue(payload, pair[1])
+		if isUnsignedCounter(rxRaw) && isUnsignedCounter(txRaw) {
+			return rxRaw, txRaw
+		}
+	}
+	return "0", "0"
+}
+
+func isUnsignedCounter(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func payloadValue(values []string, index int) string {
+	if index < 0 || index >= len(values) {
 		return ""
 	}
 	return strings.TrimSpace(values[index])
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" && trimmed != "UNDEF" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func buildOpenVPNSample(commonName string, username string, rxRaw string, txRaw string) openVPNSample {
+	identity := firstNonEmpty(username, commonName)
+	return openVPNSample{
+		CommonName: strings.TrimSpace(commonName),
+		Username:   identity,
+		TotalBytes: max64(0, parseInt64(rxRaw)) + max64(0, parseInt64(txRaw)),
+	}
 }
 
 func firstIdentityKey(username string, commonName string, identities map[string]clientIdentity) string {

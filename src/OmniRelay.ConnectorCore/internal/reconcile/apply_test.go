@@ -216,6 +216,22 @@ func TestApplyOpenVPNRendersNativeManagedStateIdempotently(t *testing.T) {
 	if !strings.Contains(string(serverConfig), "connector-core openvpn authenticate --relay-id "+gatewaySpec.RelayID) {
 		t.Fatalf("OpenVPN config does not use native authentication: %s", serverConfig)
 	}
+	if runtime.GOOS != "windows" {
+		runtimeInfo, err := os.Stat(filepath.Join(gatewayRoot, "openvpn", "runtime.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtimeInfo.Mode().Perm() != 0o640 {
+			t.Fatalf("OpenVPN runtime mode = %o", runtimeInfo.Mode().Perm())
+		}
+		serverInfo, err := os.Stat(filepath.Join(gatewayRoot, "openvpn", "server.conf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if serverInfo.Mode().Perm() != 0o600 {
+			t.Fatalf("OpenVPN server config mode = %o", serverInfo.Mode().Perm())
+		}
+	}
 	second, err := Apply(gatewaySpec, options)
 	if err != nil {
 		t.Fatal(err)
@@ -259,6 +275,23 @@ func TestApplyIPSecRendersRelayOwnedDesiredStateWithoutGlobalMutation(t *testing
 	}
 	if !strings.Contains(string(secrets), "a-strong-test-pre-shared-key") {
 		t.Fatal("relay-owned IPsec secrets file was not rendered")
+	}
+	if runtime.GOOS != "windows" {
+		for _, item := range []struct {
+			name string
+			mode os.FileMode
+		}{
+			{name: "ipsec.secrets", mode: 0o640},
+			{name: "runtime.json", mode: 0o640},
+		} {
+			info, err := os.Stat(filepath.Join(ipsecRoot, item.name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != item.mode {
+				t.Fatalf("%s mode = %o", item.name, info.Mode().Perm())
+			}
+		}
 	}
 }
 

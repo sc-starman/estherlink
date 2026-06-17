@@ -922,7 +922,8 @@ func runOpenVPNAuthenticate(args []string) error {
 	if gatewaySpec.Gateway.Protocol != "openvpn_tcp_singbox" {
 		return commandapi.ValidationError(fmt.Errorf("persisted gateway protocol is not OpenVPN"))
 	}
-	dbPath := valueOrDefault(*databasePath, relayGatewayPaths(*configRoot, *relayID).accountingDB)
+	paths := relayGatewayPaths(*configRoot, *relayID)
+	dbPath := valueOrDefault(*databasePath, paths.accountingDB)
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return &commandapi.Error{Code: "openvpn_auth_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
@@ -952,6 +953,7 @@ func runOpenVPNEnforce(args []string) error {
 	relayID := flags.String("relay-id", "", "relay identifier")
 	configRoot := flags.String("config-root", "/etc/omnirelay", "managed configuration root")
 	databasePath := flags.String("database", "", "accounting database path override")
+	openVPNStatusPath := flags.String("openvpn-status", "", "OpenVPN status file override")
 	_ = flags.Bool("json", false, "emit JSON result")
 	if err := flags.Parse(args); err != nil {
 		return &commandapi.Error{Code: "usage", Message: err.Error(), ExitCode: commandapi.ExitUsage}
@@ -966,7 +968,9 @@ func runOpenVPNEnforce(args []string) error {
 	if gatewaySpec.Gateway.Protocol != "openvpn_tcp_singbox" {
 		return commandapi.ValidationError(fmt.Errorf("persisted gateway protocol is not OpenVPN"))
 	}
-	dbPath := valueOrDefault(*databasePath, relayGatewayPaths(*configRoot, *relayID).accountingDB)
+	paths := relayGatewayPaths(*configRoot, *relayID)
+	dbPath := valueOrDefault(*databasePath, paths.accountingDB)
+	statusPath := valueOrDefault(*openVPNStatusPath, filepath.Join("/var/log/openvpn", "omnirelay-status-"+*relayID+".log"))
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return &commandapi.Error{Code: "openvpn_enforce_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
@@ -977,7 +981,7 @@ func runOpenVPNEnforce(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	result, err := openvpnapi.Enforce(ctx, db, gatewaySpec.Gateway.Protocol, openvpnapi.ManagementPort(*relayID))
+	result, err := openvpnapi.Enforce(ctx, db, gatewaySpec.Gateway.Protocol, openvpnapi.ManagementPort(*relayID), statusPath)
 	if err != nil {
 		return &commandapi.Error{Code: "openvpn_enforce_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
 	}
@@ -1387,6 +1391,8 @@ func runAccountingSync(args []string) error {
 	var collectResult accounting.CollectResult
 	var clientChanged bool
 	var activeUsers int
+	var openVPNEnforceResult openvpnapi.EnforceResult
+	var openVPNDisabledClients []openVPNDisabledClient
 	err = withFileLock(operationLockPath, func() error {
 		db, openErr := sql.Open("sqlite", dbPath)
 		if openErr != nil {
@@ -1405,11 +1411,26 @@ func runAccountingSync(args []string) error {
 			Database: db, ProtocolID: gatewaySpec.Gateway.Protocol, Now: time.Now(),
 			UsageDeltas: collectResult.UsageDeltas, ActiveConnections: collectResult.ActiveConnections,
 		})
-		if syncErr != nil || len(accountingResult.EnableChanges) == 0 {
+		if syncErr != nil {
 			return syncErr
 		}
-		clientChanged, activeUsers, syncErr = syncProtocolClients(gatewaySpec, paths, db, configPath)
-		return syncErr
+		if len(accountingResult.EnableChanges) > 0 {
+			clientChanged, activeUsers, syncErr = syncProtocolClients(gatewaySpec, paths, db, configPath)
+			if syncErr != nil {
+				return syncErr
+			}
+		}
+		if gatewaySpec.Gateway.Protocol == "openvpn_tcp_singbox" && (len(collectResult.ActiveConnections) > 0 || len(accountingResult.DisableClients) > 0) {
+			openVPNDisabledClients, syncErr = loadDisabledOpenVPNClients(db, accountingResult.DisableClients)
+			if syncErr != nil {
+				return syncErr
+			}
+			openVPNEnforceResult, syncErr = openvpnapi.Enforce(context.Background(), db, gatewaySpec.Gateway.Protocol, openvpnapi.ManagementPort(*relayID), statusPath)
+			if syncErr != nil {
+				return syncErr
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return &commandapi.Error{Code: "accounting_sync_failed", Message: err.Error(), ExitCode: commandapi.ExitApply}
@@ -1429,6 +1450,21 @@ func runAccountingSync(args []string) error {
 		"attributedSessions": collectResult.AttributedSessions,
 		"runtimeReloaded":    runtimeReloaded,
 	}
+	if gatewaySpec.Gateway.Protocol == "openvpn_tcp_singbox" {
+		data["enforcementDisconnects"] = len(openVPNEnforceResult.Disconnected)
+		if len(openVPNDisabledClients) > 0 {
+			summaries := make([]string, 0, len(openVPNDisabledClients))
+			for _, client := range openVPNDisabledClients {
+				summaries = append(summaries, client.Identity+"("+client.Reason+")")
+			}
+			data["disabledClients"] = summaries
+			fmt.Fprintf(os.Stderr, "INFO: openvpn enforcement relay=%s disconnected=%d disabled=%s\n",
+				gatewaySpec.RelayID,
+				len(openVPNEnforceResult.Disconnected),
+				strings.Join(summaries, ","),
+			)
+		}
+	}
 	if reloadErr != nil {
 		data["runtimeReloadError"] = reloadErr.Error()
 	}
@@ -1436,6 +1472,51 @@ func runAccountingSync(args []string) error {
 		OK: true, Command: "accounting sync",
 		Data: data,
 	})
+}
+
+type openVPNDisabledClient struct {
+	Identity string
+	Reason   string
+}
+
+func loadDisabledOpenVPNClients(db *sql.DB, clientIDs []string) ([]openVPNDisabledClient, error) {
+	if db == nil || len(clientIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(clientIDs))
+	args := make([]any, 0, len(clientIDs))
+	for index, clientID := range clientIDs {
+		placeholders[index] = "?"
+		args = append(args, clientID)
+	}
+	rows, err := db.Query(`
+SELECT COALESCE(NULLIF(c.auth_username,''), c.username), COALESCE(e.disabled_reason, '')
+FROM clients c
+LEFT JOIN enforcement_state e ON e.client_id = c.client_id
+WHERE c.client_id IN (`+strings.Join(placeholders, ",")+`)
+ORDER BY c.client_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]openVPNDisabledClient, 0, len(clientIDs))
+	for rows.Next() {
+		var identity string
+		var reason string
+		if err := rows.Scan(&identity, &reason); err != nil {
+			return nil, err
+		}
+		identity = strings.TrimSpace(identity)
+		reason = strings.TrimSpace(reason)
+		if identity == "" {
+			continue
+		}
+		if reason == "" {
+			reason = "disabled"
+		}
+		result = append(result, openVPNDisabledClient{Identity: identity, Reason: reason})
+	}
+	return result, rows.Err()
 }
 
 func runClientsSync(args []string) error {

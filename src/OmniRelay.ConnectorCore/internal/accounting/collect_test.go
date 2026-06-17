@@ -41,6 +41,44 @@ func TestCollectOpenVPNStatusUsesUsernameAndCounterDeltas(t *testing.T) {
 	}
 }
 
+func TestCollectOpenVPNStatusSupportsTextTableFormat(t *testing.T) {
+	db := testCollectorDatabase(t)
+	insertCollectorClient(t, db, "client-1", "openvpn_tcp_singbox", "shared-cn", "alice", true)
+	statusPath := filepath.Join(t.TempDir(), "status.log")
+	content := "" +
+		"OpenVPN CLIENT LIST\n" +
+		"Common Name,Real Address,Virtual Address,Bytes Received,Bytes Sent,Connected Since,Username\n" +
+		"shared-cn,198.51.100.1:1234,10.29.0.2,160,260,2026-01-01 00:00:00,alice\n" +
+		"ROUTING TABLE\n"
+	if err := os.WriteFile(statusPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Collect(CollectInput{
+		Database: db, ProtocolID: "openvpn_tcp_singbox", Source: "openvpn_status",
+		OpenVPNStatusPath: statusPath, Now: time.Unix(100, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	content = "" +
+		"OpenVPN CLIENT LIST\n" +
+		"Common Name\tReal Address\tVirtual Address\tBytes Received\tBytes Sent\tConnected Since\tUsername\n" +
+		"shared-cn\t198.51.100.1:1234\t10.29.0.2\t210\t310\t2026-01-01 00:00:00\talice\n" +
+		"GLOBAL STATS\n"
+	if err := os.WriteFile(statusPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Collect(CollectInput{
+		Database: db, ProtocolID: "openvpn_tcp_singbox", Source: "openvpn_status",
+		OpenVPNStatusPath: statusPath, Now: time.Unix(110, 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.UsageDeltas["client-1"] != 100 || result.ActiveConnections["client-1"] != 1 {
+		t.Fatalf("unexpected text-table sample: %+v", result)
+	}
+}
+
 func TestCollectPPPFallsBackForSingleEnabledUnknownUser(t *testing.T) {
 	db := testCollectorDatabase(t)
 	insertCollectorClient(t, db, "client-1", "ipsec_l2tp_singbox", "alice", "alice", true)
